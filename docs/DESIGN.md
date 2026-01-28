@@ -1,0 +1,915 @@
+# Codebase Embedding System Design
+
+**Status:** Final
+**Companion Document:** [IMPLEMENTATION.md](./IMPLEMENTATION.md)
+
+---
+
+## 1. Overview
+
+### Goal
+
+Build a semantic code search system for developer productivity:
+- Natural language code search ("how do we handle expired prescriptions")
+- AI agent context feeding (provide relevant code to Claude Code)
+- Onboarding acceleration (understand codebase through queries)
+
+### Architecture: Generic Tool + Project Config
+
+The system consists of two parts:
+
+1. **`code-search`** — Generic, reusable tool (separate repository)
+2. **Project configuration** — Evvy-specific settings (in evvy repo)
+
+This separation allows the tool to be used across any codebase.
+
+### Tech Stack
+
+| Component | Choice | Rationale |
+|-----------|--------|-----------|
+| Vector Database | Qdrant (self-hosted, Docker) | Open source, hybrid search, no vendor lock-in |
+| Embedding Model | Voyage AI voyage-code-3 (1024 dims) | Best-in-class for code, 14.6% better than OpenAI |
+| Re-ranking | Voyage AI rerank-2.5 | Pairs with voyage-code-3 |
+| AST Parsing | tree-sitter | Industry standard, multi-language |
+| CLI Framework | typer + rich | Modern Python CLI |
+| MCP Integration | Custom server | Claude Code integration |
+
+---
+
+## 2. Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Query Layer                               │
+│  Claude Code ←── MCP Server ←── Context Assembler ←── CLI       │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────────┐
+│                       Search Layer                               │
+│  Query Enhancement → Hybrid Search (RRF) → Re-ranking → Format  │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────────┐
+│                    Qdrant Collections                            │
+│  ┌─────────────────────────┬─────────────────────────────────┐  │
+│  │ code                    │ docs                             │  │
+│  │ (Python, TypeScript)    │ (Markdown, ADRs, README)         │  │
+│  └─────────────────────────┴─────────────────────────────────┘  │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────────┐
+│                   Indexing Pipeline                              │
+│  Git Diff → AST Parser → Chunker → Voyage AI → Upsert           │
+│                     ↓                            ↓               │
+│              Chunk Cache                  Embedding Cache        │
+│              (SQLite)                     (SQLite)               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Two Collections (V1)
+
+| Collection | Contents | Rationale |
+|------------|----------|-----------|
+| `code` | Python, TypeScript, JSX/TSX | Primary search target |
+| `docs` | Markdown files (README, ADRs, CLAUDE.md) | Context and documentation |
+
+**Deferred to V2:** `schema` (DB tables), `git` (commits, PRs)
+
+---
+
+## 3. Chunking Strategy
+
+### Research-Backed Parameters
+
+Based on Voyage AI documentation and industry best practices:
+
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Token counting | Voyage HuggingFace tokenizer | Voyage docs |
+| Target chunk size | 1,000-4,000 tokens | Sourcegraph, Pinecone research |
+| Embedding dimensions | 1024 (Matryoshka truncation) | Voyage docs |
+| Input type | "document" for indexing, "query" for search | Voyage docs |
+
+### Token Counting Implementation
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("voyageai/voyage-code-3")
+
+def count_tokens(text: str) -> int:
+    return len(tokenizer.encode(text))
+
+def chunk_fits(chunk: str, max_tokens: int = 4000) -> bool:
+    return count_tokens(chunk) <= max_tokens
+```
+
+### AST-Based Chunking by File Type
+
+| File Pattern | Strategy | Target Tokens |
+|--------------|----------|---------------|
+| `models.py` | Class + fields as unit; large methods split | 1,500-3,000 |
+| `views.py`, `viewsets.py` | Class as unit; actions split if large | 2,000-4,000 |
+| `serializers.py` | Class-level | 1,000-2,000 |
+| `tasks.py` | Function with decorators | 1,000-2,000 |
+| `service.py` | Function-level | 1,500-3,000 |
+| `enums.py`, `constants.py` | Entire file | 500-1,500 |
+| `migrations/*.py` | **Skip entirely** | — |
+| `tests/*.py` | Test class as unit | 2,000-4,000 |
+| `*.tsx`, `*.jsx` | Component boundaries | 1,500-3,000 |
+| `*.md` | Section-level by headers | 1,000-2,000 |
+
+### Chunk Identity (Two-Level Strategy)
+
+**Level 1: File-level change detection**
+```python
+def file_hash(content: str) -> str:
+    return hashlib.sha256(content.encode()).hexdigest()
+```
+If file hash matches cache, skip entirely.
+
+**Level 2: AST-based chunk identity**
+```python
+# Named entities (functions, classes, methods)
+chunk_id = f"{file_path}::{entity_type}::{qualified_name}"
+# Example: "backend/care/models.py::method::Prescription.is_expired"
+
+# Anonymous/top-level code
+chunk_id = f"{file_path}::toplevel::{content_hash[:12]}"
+```
+
+This ensures:
+- Renaming creates new chunk (correct—semantically different)
+- Adding functions doesn't invalidate existing chunks
+- Moving code within file doesn't trigger re-embedding
+- Content changes trigger re-embedding
+
+---
+
+## 4. Metadata Schema
+
+### V1 Schema
+
+```python
+{
+    # === IDENTITY ===
+    "id": "backend/care/models.py::method::Prescription.is_expired",
+    "content_hash": "a1b2c3d4...",
+    "file_path": "backend/care/models.py",
+    "line_start": 45,
+    "line_end": 52,
+    "language": "python",
+
+    # === CODE STRUCTURE ===
+    "chunk_type": "method",        # model | method | function | class | section
+    "class_name": "Prescription",
+    "function_name": "is_expired",
+    "signature": "def is_expired(self) -> bool",
+
+    # === PROJECT CONTEXT (from config) ===
+    "app_name": "care",            # Django app or directory
+    "layer": "model",              # model | view | serializer | task | service | component
+
+    # === FILTERING FLAGS ===
+    "is_test": false,
+    "source_type": "code",         # code | docs
+
+    # === VERSIONING ===
+    "embedding_model": "voyage-code-3",
+    "indexed_at": "2026-02-05T10:30:00Z",
+}
+```
+
+### V1.1 Addition: NL Descriptions (Deferred)
+
+```python
+{
+    "nl_description": "Check if prescription has passed expiration date",
+    "docstring": "Returns True if...",
+}
+```
+
+### V2 Additions (Deferred)
+
+```python
+{
+    # Cross-file analysis
+    "imports": ["django.utils.timezone"],
+    "references": ["PrescriptionFill"],
+    "referenced_by": ["PrescriptionView"],
+
+    # Git integration
+    "last_modified": "2026-01-15",
+    "last_author": "developer@evvy.com",
+}
+```
+
+---
+
+## 5. Incremental Update Pipeline
+
+### Git-Aware Change Detection
+
+```python
+def get_changes_since(last_indexed_commit: str) -> dict:
+    result = subprocess.run(
+        ["git", "diff", "--name-status", last_indexed_commit, "HEAD"],
+        capture_output=True, text=True
+    )
+
+    changes = {"added": [], "modified": [], "deleted": [], "renamed": []}
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        status, *paths = line.split("\t")
+        if status == "A":
+            changes["added"].append(paths[0])
+        elif status == "M":
+            changes["modified"].append(paths[0])
+        elif status == "D":
+            changes["deleted"].append(paths[0])
+        elif status.startswith("R"):
+            changes["renamed"].append({"from": paths[0], "to": paths[1]})
+
+    return changes
+```
+
+### Processing Strategy
+
+| Change Type | Action |
+|-------------|--------|
+| Added | Parse → Chunk → Embed → Insert |
+| Modified | File hash check → Chunk-level diff → Re-embed changed only |
+| Deleted | Delete all chunks with that file_path |
+| Renamed | Update file_path in chunk IDs (no re-embed if content unchanged) |
+
+### Caching
+
+- **Embedding Cache:** SQLite, keyed by `content_hash` + `embedding_model`
+- **Chunk Cache:** File path → file hash + chunk identities
+- **Checkpoint:** Save `last_indexed_commit` for incremental updates
+
+---
+
+## 6. Error Handling
+
+### Indexing Errors (Retry with Backoff)
+
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((RateLimitError, TimeoutError, ConnectionError))
+)
+async def embed_batch(chunks: list[str]) -> list[list[float]]:
+    return await voyage_client.embed(chunks, model="voyage-code-3")
+```
+
+**Failure handling:**
+- Log failed files to `indexer/failed_files.log`
+- Continue with remaining files
+- Checkpoint progress after each batch
+- Retry failed files on next run
+
+### Search Errors (Fail-Fast)
+
+```python
+async def search(query: str) -> SearchResult:
+    try:
+        results = await hybrid_search(query)
+        return results
+    except QdrantConnectionError:
+        raise SearchUnavailableError("Qdrant is not running. Start with: docker compose up -d qdrant")
+    except VoyageAPIError as e:
+        raise SearchUnavailableError(f"Voyage API error: {e.message}")
+```
+
+**Rationale:** Search is interactive—better to fail immediately with a clear message than hang waiting for retries.
+
+---
+
+## 7. Hybrid Search
+
+### Dense + Sparse Architecture
+
+```python
+client.create_collection(
+    collection_name="code",
+    vectors_config={
+        "dense": models.VectorParams(size=1024, distance=models.Distance.COSINE)
+    },
+    sparse_vectors_config={
+        "bm25": models.SparseVectorParams(modifier=models.Modifier.IDF)
+    }
+)
+```
+
+### Code-Specific BM25 Tokenization
+
+```python
+def tokenize_code_identifiers(text: str) -> list[str]:
+    """Split camelCase, snake_case, and dotted.paths for BM25."""
+    tokens = []
+    identifiers = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', text)
+
+    for ident in identifiers:
+        tokens.append(ident.lower())
+        # camelCase: "getUserById" -> ["get", "user", "by", "id"]
+        camel = re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)', ident)
+        tokens.extend([p.lower() for p in camel])
+        # snake_case
+        tokens.extend([p.lower() for p in ident.split('_') if p])
+
+    return list(set(tokens))
+```
+
+### Reciprocal Rank Fusion (RRF)
+
+```python
+results = client.query_points(
+    collection_name="code",
+    prefetch=[
+        models.Prefetch(query=dense_vector, using="dense", limit=30),
+        models.Prefetch(
+            query=models.SparseVector(indices=indices, values=values),
+            using="bm25",
+            limit=30
+        ),
+    ],
+    query=models.FusionQuery(fusion=models.Fusion.RRF),
+    limit=20,
+    with_payload=True
+)
+```
+
+---
+
+## 8. Query Enhancement
+
+### Enhancement Bypass Logic
+
+Skip enhancement when:
+1. Query is quoted (exact match requested)
+2. Contains specific code identifiers (PascalCase, snake_case)
+3. Is a file path query
+4. Very short with uppercase (likely class name)
+
+```python
+def should_skip_enhancement(query: str) -> bool:
+    if query.startswith('"') and query.endswith('"'):
+        return True
+    if re.match(r'^[A-Z][a-zA-Z]+$', query):  # PascalCase
+        return True
+    if re.match(r'^[a-z_]+$', query) and '_' in query:  # snake_case
+        return True
+    if '/' in query or query.endswith('.py'):  # File path
+        return True
+    return False
+```
+
+### Query Intent Classification (Simple Heuristics)
+
+```python
+class QueryIntent(Enum):
+    CODE = "code"
+    DOCS = "docs"
+    DEBUG = "debug"
+    LOCATION = "location"
+
+def classify_intent(query: str) -> QueryIntent:
+    query_lower = query.lower()
+
+    if any(kw in query_lower for kw in ["bug", "fix", "error", "fail", "broken", "why"]):
+        return QueryIntent.DEBUG
+    if any(kw in query_lower for kw in ["where is", "find", "locate", "defined"]):
+        return QueryIntent.LOCATION
+    if any(kw in query_lower for kw in ["what is", "explain", "how does", "documentation"]):
+        return QueryIntent.DOCS
+    return QueryIntent.CODE
+```
+
+**Future enhancement (V1.2+):** Optional Claude Max-based classification for higher accuracy.
+
+---
+
+## 9. Terminology Expansion
+
+### Static Terminology (V1)
+
+```yaml
+# indexer/terminology.yaml (Evvy-specific)
+abbreviations:
+  BV: "bacterial vaginosis"
+  STI: "sexually transmitted infection"
+  UTI: "urinary tract infection"
+  PCR: "polymerase chain reaction lab test"
+  OTC: "over the counter treatment"
+  Rx: "prescription"
+  vNGS: "vaginal next generation sequencing"
+
+synonyms:
+  consult: ["consultation", "telehealth", "wheel"]
+  sub: ["subscription", "recurring"]
+  fill: ["prescription fill", "medication order"]
+```
+
+### Terminology Discovery (Weekly Cron)
+
+```bash
+# Scheduled: weekly
+code-search extract-terms --output indexer/terminology_candidates.yaml
+```
+
+**Process:**
+1. Scan docstrings/comments for patterns: `TERM (expansion)`, `TERM - expansion`
+2. Output candidates to `terminology_candidates.yaml`
+3. Human reviews and moves approved terms to `terminology.yaml`
+4. Indexer loads `terminology.yaml` at startup
+
+---
+
+## 10. Re-ranking
+
+### Two-Stage Retrieval
+
+```python
+async def search_with_rerank(query: str, limit: int = 10) -> list[Chunk]:
+    # Stage 1: Hybrid search (50 candidates)
+    candidates = await hybrid_search(query, limit=50)
+
+    # Check skip conditions
+    if should_skip_rerank(query, candidates):
+        return candidates[:limit]
+
+    # Stage 2: Re-rank with Voyage
+    reranked = await voyage_client.rerank(
+        query=query,
+        documents=[c.content for c in candidates],
+        model="rerank-2.5",
+        top_k=limit
+    )
+
+    return [candidates[r.index] for r in reranked.results]
+```
+
+### Skip Conditions
+
+1. Few candidates (≤10)
+2. High-confidence top result (>0.92)
+3. Exact identifier query
+4. File path query
+5. Low score variance (<0.1)
+
+---
+
+## 11. Structural Boosting (Prefetch Weighting)
+
+Instead of post-hoc score manipulation, use Qdrant prefetch to gather more candidates from relevant sources:
+
+```python
+def build_prefetch(query: str, active_file: str | None, intent: QueryIntent) -> list[Prefetch]:
+    prefetches = [
+        # Base semantic search
+        Prefetch(query=dense_vector, using="dense", limit=30),
+        # Base keyword search
+        Prefetch(query=sparse_vector, using="bm25", limit=30),
+    ]
+
+    # Structural boost: same module gets extra candidates
+    if active_file:
+        module = get_module_from_path(active_file)
+        prefetches.append(
+            Prefetch(
+                query=dense_vector,
+                using="dense",
+                filter=Filter(must=[FieldCondition(key="app_name", match=MatchValue(value=module))]),
+                limit=15
+            )
+        )
+
+    # Intent-based boost: debug queries get more test files
+    if intent == QueryIntent.DEBUG:
+        prefetches.append(
+            Prefetch(
+                query=dense_vector,
+                using="dense",
+                filter=Filter(must=[FieldCondition(key="is_test", match=MatchValue(value=True))]),
+                limit=10
+            )
+        )
+
+    return prefetches
+```
+
+**Deferred to V2+:** Recency boosting (old code isn't necessarily less relevant)
+
+---
+
+## 12. MCP Tool Specifications
+
+### Tool 1: `search`
+
+```typescript
+// Input
+{
+  query: string,              // Natural language or code query
+  limit?: number,             // Default 10, max 50
+  filters?: {
+    app_name?: string,        // Django app / directory filter
+    layer?: "model" | "view" | "serializer" | "task" | "service" | "component",
+    is_test?: boolean,
+    language?: "python" | "typescript" | "markdown"
+  },
+  intent?: "code" | "docs" | "debug" | "location"  // Optional override
+}
+
+// Output
+{
+  results: Array<{
+    file_path: string,
+    line_start: number,
+    line_end: number,
+    content: string,
+    score: number,            // 0-1 relevance score
+    chunk_type: string,
+    app_name: string
+  }>,
+  query_enhanced: string,     // Show expansions applied
+  total_candidates: number
+}
+
+// Errors
+{ error: "search_unavailable", message: string }
+{ error: "invalid_filter", message: string }
+```
+
+### Tool 2: `get_context`
+
+```typescript
+// Input
+{
+  file_path: string,
+  line_start?: number,
+  line_end?: number,
+  include_related?: boolean   // Default true
+}
+
+// Output
+{
+  primary: {
+    file_path: string,
+    content: string,
+    language: string
+  },
+  related: Array<{            // Django-related files
+    file_path: string,
+    relationship: "serializer" | "view" | "model" | "test" | "url",
+    content: string
+  }>,
+  imports: Array<{
+    module: string,
+    file_path: string | null  // null if external package
+  }>
+}
+```
+
+### Tool 3: `explain`
+
+```typescript
+// Input
+{
+  file_path: string,
+  symbol?: string,            // Specific function/class name
+  question?: string           // Specific question about the code
+}
+
+// Output
+{
+  explanation: string,
+  related_chunks: Array<{
+    file_path: string,
+    chunk_type: string,
+    relevance: string
+  }>
+}
+```
+
+### Tool 4: `index_status`
+
+```typescript
+// Input
+{
+  action?: "status" | "trigger"  // Default "status"
+}
+
+// Output (status)
+{
+  healthy: boolean,
+  collections: {
+    code: { chunk_count: number, last_indexed: string },
+    docs: { chunk_count: number, last_indexed: string }
+  },
+  last_commit_indexed: string,
+  pending_files: number,
+  embedding_model: string
+}
+
+// Output (trigger)
+{
+  triggered: boolean,
+  message: string
+}
+```
+
+---
+
+## 13. Project Structure
+
+### Generic Tool: `ruminaider/code-search`
+
+Open source repository: `https://github.com/ruminaider/code-search`
+
+```
+code-search/
+├── code_search/
+│   ├── __init__.py
+│   ├── cli.py              # typer CLI (index, search, status, inspect)
+│   ├── mcp_server.py       # MCP server implementation
+│   ├── config.py           # Load project-specific config
+│   ├── chunker/
+│   │   ├── __init__.py
+│   │   ├── parser.py       # tree-sitter AST parsing
+│   │   ├── strategies.py   # File-type-specific chunking
+│   │   └── tokenizer.py    # Voyage tokenizer wrapper
+│   ├── search/
+│   │   ├── __init__.py
+│   │   ├── hybrid.py       # Dense + BM25 fusion
+│   │   ├── rerank.py       # Voyage reranker
+│   │   └── enhance.py      # Query enhancement
+│   ├── indexer/
+│   │   ├── __init__.py
+│   │   ├── pipeline.py     # Main indexing pipeline
+│   │   ├── cache.py        # SQLite caching
+│   │   └── git.py          # Git change detection
+│   └── voyage_client.py    # Voyage API wrapper with retry
+├── pyproject.toml
+├── README.md
+└── tests/
+```
+
+### Evvy Configuration: `evvy/indexer/`
+
+```
+evvy/
+├── backend/
+├── frontend/
+├── indexer/                  # Evvy-specific configuration
+│   ├── config.yaml           # Chunking rules, collections, patterns
+│   ├── terminology.yaml      # BV, UTI, STI expansions
+│   ├── terminology_candidates.yaml  # Auto-extracted, pending review
+│   └── .qdrant/              # Local Qdrant data (gitignored)
+├── docker-compose.yml        # Add Qdrant service
+└── .mcp.json                 # Add code-search server
+```
+
+### Evvy Config Example
+
+```yaml
+# indexer/config.yaml
+project:
+  name: "evvy"
+  root: "."
+
+collections:
+  code:
+    include:
+      - "backend/**/*.py"
+      - "frontend/**/*.tsx"
+      - "frontend/**/*.ts"
+    exclude:
+      - "**/migrations/*.py"
+      - "**/__pycache__/**"
+      - "**/node_modules/**"
+  docs:
+    include:
+      - "**/*.md"
+      - "docs/**/*"
+
+chunking:
+  default_max_tokens: 3000
+  overrides:
+    "backend/**/models.py":
+      strategy: "class_with_methods"
+      max_tokens: 3000
+    "backend/**/views.py":
+      strategy: "class_with_methods"
+      max_tokens: 4000
+    "backend/**/tasks.py":
+      strategy: "function"
+      max_tokens: 2000
+
+django:
+  app_detection: true
+  related_files:
+    models.py: ["serializers.py", "views.py", "admin.py", "tests/test_models.py"]
+    views.py: ["models.py", "serializers.py", "urls.py", "tests/test_views.py"]
+    tasks.py: ["models.py", "services.py", "tests/test_tasks.py"]
+
+security:
+  exclude_patterns:
+    - "**/.env*"
+    - "**/secrets/**"
+    - "**/*credential*"
+    - "**/*secret*"
+    - "**/*.pem"
+    - "**/*.key"
+```
+
+### MCP Configuration
+
+```json
+// .mcp.json addition
+{
+  "evvy-code-search": {
+    "command": "code-search",
+    "args": ["serve", "--config", "./indexer/config.yaml"],
+    "env": {
+      "VOYAGE_API_KEY": "${VOYAGE_API_KEY}",
+      "QDRANT_URL": "http://localhost:6333"
+    }
+  }
+}
+```
+
+---
+
+## 14. CLI Commands
+
+```bash
+# Indexing
+code-search index                      # Incremental (git-aware)
+code-search index --full               # Full reindex
+code-search index --files path/to.py   # Specific files
+
+# Search (debugging only - use Claude Code for normal queries)
+code-search search "query" --raw       # See scores, metadata
+
+# Status
+code-search status                     # Health, chunk counts, last indexed
+
+# Inspect
+code-search inspect --file care/models.py  # Show chunks for a file
+
+# Terminology
+code-search extract-terms              # Extract candidates for review
+
+# MCP Server
+code-search serve --config config.yaml # Start MCP server
+```
+
+---
+
+## 15. Evaluation Test Queries
+
+### Baseline Queries (30 total)
+
+Run these queries before and after implementation to measure quality.
+
+#### Exact Match (6)
+
+| Query | Expected Top Result |
+|-------|---------------------|
+| `PrescriptionFillOrder model` | `backend/care/models.py` |
+| `ConsultState enum` | `backend/consults/models.py` |
+| `WheelAPIClient` | `backend/consults/wheel/wheel.py` |
+| `RechargeAPIClient` | `backend/subscriptions/recharge.py` |
+| `send_wheel_consult task` | `backend/consults/wheel/tasks.py` |
+| `RuleSet model` | `backend/business_rules/models.py` |
+
+#### Natural Language - Domain (8)
+
+| Query | Expected Top Results |
+|-------|----------------------|
+| "how do we handle expired prescriptions" | `care/models.py` prescription logic |
+| "where is BV treatment recommendation logic" | `care/service.py`, `test_results/service.py` |
+| "UTI consultation flow" | `consults/wheel/`, UTI intake models |
+| "subscription renewal process" | `subscriptions/service.py`, `recharge.py` |
+| "how does checkout create an order" | `ecomm/models/order.py`, webhooks |
+| "what determines care eligibility" | `care/service.py` |
+| "how are lab results processed" | `test_results/service.py` |
+| "male partner treatment intake" | `consults/wheel/` male partner flow |
+
+#### Cross-File (6)
+
+| Query | Expected Top Results |
+|-------|----------------------|
+| "what calls create_order" | Order creation callers |
+| "prescription to fill order flow" | `care/models.py`, `shipping/precision/` |
+| "how does Shopify connect to our User model" | `ecomm/shopify/` |
+| "consult state machine transitions" | `consults/models.py`, `service.py` |
+| "what happens after lab results arrive" | `test_results/service.py` |
+| "discount stacking logic" | Discount calculation |
+
+#### Debugging (6)
+
+| Query | Expected Top Results |
+|-------|----------------------|
+| "why would subscription order fail to create fill" | Subscription → fill logic |
+| "lab order submission retry logic Junction" | `consults/wheel/tasks.py` |
+| "missing user ID across orders" | User matching logic |
+| "UTI test stuck in results received" | Lab order status handling |
+| "Wheel consult creation 400 error" | Wheel API validation |
+| "USPS tracking status updates" | `shipping/usps.py` |
+
+#### Integration (4)
+
+| Query | Expected Top Results |
+|-------|----------------------|
+| "Wheel API authentication" | `consults/wheel/wheel.py` |
+| "Shopify webhook handlers" | `ecomm/shopify/` |
+| "Precision Pharmacy integration" | `shipping/precision/` |
+| "Recharge subscription webhooks" | `subscriptions/recharge.py` |
+
+---
+
+## 16. Implementation Roadmap
+
+### Phase 1: Core Infrastructure
+
+| Task | Acceptance Criteria |
+|------|---------------------|
+| Qdrant Docker setup | `docker compose up` starts Qdrant; health endpoint returns 200; data persists across restarts |
+| Voyage tokenizer integration | Can count tokens for any Python/TS file; matches API token count |
+| Basic AST chunker | Parses Python file with tree-sitter; outputs chunks with identity, content, metadata |
+| Embedding pipeline | Embeds list of chunks; returns 1024-dim vectors; retries on rate limit |
+| SQLite caching | Stores file hashes, chunk identities, embeddings; lookup by content hash works |
+| Minimal CLI | `code-search index --file path.py` works; `code-search status` shows chunk count |
+
+### Phase 2: Search Pipeline
+
+| Task | Acceptance Criteria |
+|------|---------------------|
+| Hybrid search | Dense + BM25 fusion returns results; RRF ranking applied |
+| Code tokenization for BM25 | camelCase and snake_case properly split |
+| Re-ranking integration | Voyage rerank-2.5 improves result ordering |
+| Query enhancement | Terminology expansion works; bypass logic for exact queries |
+| Intent classification | Heuristics classify queries; debug intent includes test files |
+
+### Phase 3: MCP Integration
+
+| Task | Acceptance Criteria |
+|------|---------------------|
+| MCP server | All 4 tools implemented with specified schemas |
+| Claude Code config | `.mcp.json` configured; tools appear in Claude Code |
+| Error handling | Clear error messages for Qdrant/Voyage unavailable |
+| Structural boosting | Same-module prefetch working; debug queries include tests |
+
+### Phase 4: Polish & Evaluation
+
+| Task | Acceptance Criteria |
+|------|---------------------|
+| Incremental updates | Git-aware indexing only re-embeds changed chunks |
+| Full evaluation | All 30 test queries scored; results documented |
+| Documentation | README, config examples, troubleshooting guide |
+| Terminology extraction | Weekly cron extracts candidates to YAML |
+
+### V1.1: NL Descriptions (Deferred)
+
+| Task | Acceptance Criteria |
+|------|---------------------|
+| Description generation | LLM generates descriptions for chunks without docstrings |
+| Description caching | Generated descriptions cached by content hash |
+| Search integration | NL descriptions embedded alongside code |
+
+### V1.2: Multi-hop Expansion (Deferred)
+
+| Task | Acceptance Criteria |
+|------|---------------------|
+| Reference extraction | AST-based import/call extraction |
+| Reference resolution | Maps references to indexed chunks |
+| Expansion in search | 1-2 hop expansion available for context assembly |
+
+---
+
+## 17. Cost Estimates
+
+| Component | Usage | Cost |
+|-----------|-------|------|
+| Voyage voyage-code-3 embeddings | Full index (~5K chunks) | ~$0.18 one-time |
+| Voyage voyage-code-3 queries | 100/day | ~$0.006/month |
+| Voyage rerank-2.5 | 100 queries/day | ~$0.15/day |
+| Qdrant (self-hosted) | Docker | $0 |
+| **Monthly Total (est.)** | | **~$5-10** |
+
+---
+
+## 18. Feature Phasing Summary
+
+| Version | Features | Status |
+|---------|----------|--------|
+| **V1** | Core search, 2 collections, hybrid search, reranking, MCP tools, CLI | To implement |
+| **V1.1** | NL descriptions for better semantic matching | Deferred |
+| **V1.2** | Multi-hop reference expansion | Deferred |
+| **V2** | Schema collection, git history collection, recency boosting | Future |
