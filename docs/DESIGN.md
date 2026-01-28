@@ -30,6 +30,7 @@ This separation allows the tool to be used across any codebase.
 | Vector Database | Qdrant (self-hosted, Docker) | Open source, hybrid search, no vendor lock-in |
 | Embedding Model | Voyage AI voyage-code-3 (1024 dims) | Best-in-class for code, 14.6% better than OpenAI |
 | Re-ranking | Voyage AI rerank-2.5 | Pairs with voyage-code-3 |
+| Embedding Provider | Voyage AI (default) with provider ABC | Pluggable: OpenAI, Ollama optional |
 | AST Parsing | tree-sitter | Industry standard, multi-language |
 | CLI Framework | typer + rich | Modern Python CLI |
 | MCP Integration | Custom server | Claude Code integration |
@@ -59,10 +60,30 @@ This separation allows the tool to be used across any codebase.
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
 │                   Indexing Pipeline                              │
-│  Git Diff → AST Parser → Chunker → Voyage AI → Upsert           │
-│                     ↓                            ↓               │
-│              Chunk Cache                  Embedding Cache        │
-│              (SQLite)                     (SQLite)               │
+│                                                                  │
+│  ┌──────────────┐   ┌───────────────────────────┐               │
+│  │ Change        │   │ Splitter Fallback Chain    │               │
+│  │ Detection     │   │                           │               │
+│  │               │   │ tree-sitter (AST)         │               │
+│  │ PRIMARY:      │   │   ↓ (parse failure)       │               │
+│  │  git diff     │──▶│ Token-recursive splitter  │               │
+│  │               │   │   ↓ (oversized chunks)    │               │
+│  │ SECONDARY:    │   │ Line split                │               │
+│  │  file hash    │   └─────────────┬─────────────┘               │
+│  └──────────────┘                 │                              │
+│                                   ▼                              │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ Embedding Provider (ABC)                                 │    │
+│  │ ┌──────────┐  ┌──────────┐  ┌──────────┐               │    │
+│  │ │ Voyage   │  │ OpenAI   │  │ Ollama   │               │    │
+│  │ │ (default)│  │ (optional)│  │ (optional)│               │    │
+│  │ └──────────┘  └──────────┘  └──────────┘               │    │
+│  └───────────────────────────┬─────────────────────────────┘    │
+│                              ▼                                   │
+│              ┌──────────────────────────────┐                    │
+│              │ Caches (SQLite)              │                    │
+│              │ Chunk Cache │ Embedding Cache│                    │
+│              └──────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -119,7 +140,49 @@ def chunk_fits(chunk: str, max_tokens: int = 4000) -> bool:
 | `*.tsx`, `*.jsx` | Component boundaries | 1,500-3,000 |
 | `*.md` | Section-level by headers | 1,000-2,000 |
 
-### Chunk Identity (Two-Level Strategy)
+### Splitter Fallback Chain
+
+When tree-sitter parsing fails (unsupported language, malformed syntax), chunks are produced via a three-tier fallback. See [ADR-003](./adr/003-ported-features-from-claude-context.md) for provenance.
+
+| Tier | Splitter | When Used | Overlap |
+|------|----------|-----------|---------|
+| 1 | tree-sitter AST | Supported languages, valid syntax | None (semantic units) |
+| 2 | Token-recursive splitter | AST parse failure | 200 tokens |
+| 3 | Line split | Oversized chunks from Tier 2 | 200 tokens |
+
+```python
+def split_file(file_path: str, content: str, max_tokens: int) -> list[Chunk]:
+    # Tier 1: AST parsing
+    tree = ast_parser.parse_file(file_path, content)
+    if tree:
+        chunks = extract_ast_chunks(tree, content, max_tokens)
+        if chunks:
+            return chunks
+
+    # Tier 2: Token-recursive splitting
+    chunks = token_recursive_split(content, max_tokens, overlap_tokens=200)
+    if all(chunk_fits(c, max_tokens) for c in chunks):
+        return chunks
+
+    # Tier 3: Line splitting (guaranteed to terminate)
+    return line_split(content, max_tokens, overlap_tokens=200)
+```
+
+**Implementation:** `code_search/chunker/fallback.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
+
+### Chunk Overlap (Non-AST Only)
+
+Overlap is applied **only** to fallback-split chunks (Tiers 2 and 3). AST-parsed chunks are self-contained semantic units that should not bleed into adjacent chunks.
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Overlap size | 200 tokens | Balances context continuity with chunk independence |
+| Applied to | Non-AST fallback chunks only | AST entities are complete semantic units |
+| Configurable | Yes, via `IndexingConfig.overlap_tokens` | Projects may need more/less |
+
+Adapted from claude-context's 300-character overlap, converted to token-based measurement for accuracy with Voyage's tokenizer. See [ADR-003](./adr/003-ported-features-from-claude-context.md#5-chunk-overlap-non-ast-only).
+
+### Chunk Identity (Dual Strategy)
 
 **Level 1: File-level change detection**
 ```python
@@ -143,6 +206,17 @@ This ensures:
 - Adding functions doesn't invalidate existing chunks
 - Moving code within file doesn't trigger re-embedding
 - Content changes trigger re-embedding
+
+**Content-Hash IDs for Anonymous Chunks**
+
+For code without named entities (top-level statements, configuration blocks, module-level assignments), content-hash IDs provide stability:
+
+```python
+# Anonymous/top-level code (enhanced)
+chunk_id = f"{file_path}::toplevel::{hashlib.sha256(content.encode()).hexdigest()[:12]}"
+```
+
+This dual strategy improves on claude-context's approach of `SHA256(path:start_offset:end_offset:content)`, which invalidates chunk IDs when unrelated code shifts byte offsets. Our entity-based IDs are offset-independent. See [ADR-003](./adr/003-ported-features-from-claude-context.md#7-dual-chunk-id-strategy).
 
 ---
 
@@ -248,6 +322,49 @@ def get_changes_since(last_indexed_commit: str) -> dict:
 - **Embedding Cache:** SQLite, keyed by `content_hash` + `embedding_model`
 - **Chunk Cache:** File path → file hash + chunk identities
 - **Checkpoint:** Save `last_indexed_commit` for incremental updates
+
+### File-Hash Change Detection (Secondary)
+
+When git-diff is unavailable or unreliable (shallow clones, squashed merges, force pushes), file-hash change detection serves as a fallback. Adapted from claude-context's Merkle DAG approach — see [ADR-003](./adr/003-ported-features-from-claude-context.md#2-change-detection-hybrid-strategy).
+
+```python
+class FileHashTracker:
+    """Secondary change detection using file content hashes."""
+
+    def __init__(self, cache: CacheDB):
+        self.cache = cache
+
+    def detect_changes(self, file_paths: list[str]) -> dict:
+        changes = {"added": [], "modified": [], "unchanged": []}
+        for path in file_paths:
+            current_hash = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            cached_hash = self.cache.get_file_hash(path)
+            if cached_hash is None:
+                changes["added"].append(path)
+            elif cached_hash != current_hash:
+                changes["modified"].append(path)
+            else:
+                changes["unchanged"].append(path)
+        return changes
+```
+
+**When to use:** The indexing pipeline tries git-diff first. If git is unavailable or returns errors, it falls back to `FileHashTracker`. This hybrid approach is configured in the pipeline, not chosen by the user.
+
+### Ignore Pattern Hierarchy
+
+File exclusion follows a 5-source merge hierarchy, adapted from claude-context's 5-level pattern system. See [ADR-003](./adr/003-ported-features-from-claude-context.md#6-ignore-pattern-hierarchy).
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 (lowest) | Built-in defaults | `__pycache__/`, `node_modules/`, `.git/` |
+| 2 | `.gitignore` | Project-maintained patterns |
+| 3 | `.codesearchignore` | Code-search-specific overrides |
+| 4 | `config.yaml` exclude patterns | Per-collection exclusions |
+| 5 (highest) | `CODE_SEARCH_EXCLUDE` env var | Runtime overrides |
+
+Higher-priority sources override lower-priority ones. All patterns use `.gitignore` syntax via the `pathspec` library.
+
+**Implementation:** `code_search/indexer/ignore.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 
 ---
 
@@ -642,6 +759,7 @@ code-search/
 │   │   ├── __init__.py
 │   │   ├── parser.py       # tree-sitter AST parsing
 │   │   ├── strategies.py   # File-type-specific chunking
+│   │   ├── fallback.py     # Splitter fallback chain (tree-sitter → token → line)
 │   │   └── tokenizer.py    # Voyage tokenizer wrapper
 │   ├── search/
 │   │   ├── __init__.py
@@ -652,7 +770,13 @@ code-search/
 │   │   ├── __init__.py
 │   │   ├── pipeline.py     # Main indexing pipeline
 │   │   ├── cache.py        # SQLite caching
-│   │   └── git.py          # Git change detection
+│   │   ├── git.py          # Git change detection (primary)
+│   │   ├── file_hash.py    # File-hash change detection (secondary)
+│   │   └── ignore.py       # Ignore pattern hierarchy loading
+│   ├── clients/
+│   │   ├── __init__.py
+│   │   ├── base.py         # EmbeddingProvider ABC
+│   │   └── voyage.py       # Voyage API wrapper with retry
 │   └── voyage_client.py    # Voyage API wrapper with retry
 ├── pyproject.toml
 ├── README.md
@@ -846,6 +970,11 @@ Run these queries before and after implementation to measure quality.
 | Embedding pipeline | Embeds list of chunks; returns 1024-dim vectors; retries on rate limit |
 | SQLite caching | Stores file hashes, chunk identities, embeddings; lookup by content hash works |
 | Minimal CLI | `code-search index --file path.py` works; `code-search status` shows chunk count |
+| Splitter fallback chain | tree-sitter → token-recursive → line split; all three tiers produce valid chunks within token limits |
+| Embedding provider ABC | `EmbeddingProvider` ABC with Voyage implementation; `embed()` returns correct dimensions; provider switchable via config |
+| File-hash change detection | `FileHashTracker` detects added/modified/unchanged files; integrates as fallback when git-diff unavailable |
+| Ignore pattern loading | 5-source hierarchy loads and merges patterns; `.gitignore` syntax works via `pathspec`; env var overrides |
+| Safety limits | Configurable limits enforced: 500K total chunks, per-collection, 1MB file-size cap; clear error on breach |
 
 ### Phase 2: Search Pipeline
 
@@ -913,3 +1042,59 @@ Run these queries before and after implementation to measure quality.
 | **V1.1** | NL descriptions for better semantic matching | Deferred |
 | **V1.2** | Multi-hop reference expansion | Deferred |
 | **V2** | Schema collection, git history collection, recency boosting | Future |
+
+---
+
+## 19. Safety Limits
+
+Configurable limits prevent runaway indexing from consuming excessive API credits and storage. Adapted from claude-context's 450K hard limit — see [ADR-003](./adr/003-ported-features-from-claude-context.md#8-safety-limits).
+
+### Default Limits
+
+| Limit | Default | Configurable | Purpose |
+|-------|---------|-------------|---------|
+| Total chunks | 500,000 | `safety.max_total_chunks` | Prevent storage explosion |
+| Per-collection chunks | None (unlimited) | `safety.max_chunks_per_collection` | Balance between collections |
+| File size | 1 MB | `safety.max_file_size_bytes` | Skip minified/generated files |
+| Batch size | 100 | `safety.batch_size` | API call size limit |
+
+### Enforcement
+
+```python
+class SafetyChecker:
+    def __init__(self, config: SafetyConfig):
+        self.config = config
+
+    def check_file(self, file_path: str, file_size: int) -> bool:
+        """Return False if file should be skipped."""
+        if file_size > self.config.max_file_size_bytes:
+            logger.warning(f"Skipping {file_path}: {file_size} bytes > {self.config.max_file_size_bytes} limit")
+            return False
+        return True
+
+    def check_total_chunks(self, current_count: int, new_chunks: int) -> bool:
+        """Return False if adding chunks would exceed total limit."""
+        if current_count + new_chunks > self.config.max_total_chunks:
+            logger.error(
+                f"Safety limit: {current_count + new_chunks} chunks would exceed "
+                f"{self.config.max_total_chunks} limit"
+            )
+            return False
+        return True
+```
+
+### Configuration
+
+```yaml
+# In config.yaml
+safety:
+  max_total_chunks: 500000
+  max_file_size_bytes: 1048576  # 1 MB
+  batch_size: 100
+  # Optional per-collection limits
+  collection_limits:
+    code: 400000
+    docs: 100000
+```
+
+**Implementation:** `code_search/models.py` (`SafetyConfig`), `code_search/indexer/pipeline.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)

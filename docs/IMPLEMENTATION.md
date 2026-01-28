@@ -19,6 +19,11 @@ This guide provides the concrete specifications needed to implement the code-sea
 8. [Testing Strategy](#8-testing-strategy)
 9. [Phase Implementation Details](#9-phase-implementation-details)
 10. [Developer Workflow](#10-developer-workflow)
+11. [Embedding Provider Abstraction](#11-embedding-provider-abstraction)
+12. [Splitter Fallback Chain](#12-splitter-fallback-chain)
+13. [File-Hash Change Detection](#13-file-hash-change-detection)
+14. [Ignore Pattern Loading](#14-ignore-pattern-loading)
+15. [Batch Embedding with Progress](#15-batch-embedding-with-progress)
 
 ---
 
@@ -39,6 +44,7 @@ code-search/                          # https://github.com/ruminaider/code-searc
 │   │   ├── __init__.py
 │   │   ├── parser.py                 # tree-sitter AST parsing
 │   │   ├── strategies.py             # File-type chunking strategies
+│   │   ├── fallback.py               # Splitter fallback chain
 │   │   ├── tokenizer.py              # Voyage tokenizer wrapper
 │   │   └── identity.py               # Chunk identity generation
 │   ├── search/
@@ -51,10 +57,13 @@ code-search/                          # https://github.com/ruminaider/code-searc
 │   │   ├── __init__.py
 │   │   ├── pipeline.py               # Main indexing pipeline
 │   │   ├── cache.py                  # SQLite caching
-│   │   ├── git.py                    # Git change detection
+│   │   ├── git.py                    # Git change detection (primary)
+│   │   ├── file_hash.py              # File-hash change detection (secondary)
+│   │   ├── ignore.py                 # Ignore pattern hierarchy
 │   │   └── batch.py                  # Batch embedding with retry
 │   ├── clients/
 │   │   ├── __init__.py
+│   │   ├── base.py                   # EmbeddingProvider ABC
 │   │   ├── voyage.py                 # Voyage API wrapper
 │   │   └── qdrant.py                 # Qdrant client wrapper
 │   └── exceptions.py                 # Custom exception hierarchy
@@ -130,6 +139,9 @@ dependencies = [
     "pydantic>=2.7.0",
     "pyyaml>=6.0.1",
 
+    # Ignore patterns
+    "pathspec>=0.12.0",
+
     # Async & Retry
     "tenacity>=8.2.0",
     "httpx>=0.27.0",
@@ -181,6 +193,7 @@ strict = true
 | `tree-sitter` | >=0.22.0 | Latest stable with Python 3.10+ wheels |
 | `pydantic` | >=2.7.0 | V2 for config validation |
 | `mcp` | >=1.0.0 | Claude Code MCP protocol |
+| `pathspec` | >=0.12.0 | `.gitignore`-compatible pattern matching for ignore hierarchy |
 | `respx` | >=0.21.0 | Mock httpx calls in tests |
 
 ---
@@ -331,6 +344,14 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     files_processed TEXT NOT NULL,     -- JSON array
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Safety state: track chunk counts for limit enforcement
+CREATE TABLE IF NOT EXISTS safety_state (
+    collection_name TEXT PRIMARY KEY,
+    chunk_count INTEGER DEFAULT 0,
+    last_checked_at TEXT DEFAULT (datetime('now')),
+    limit_breached BOOLEAN DEFAULT FALSE
+);
 ```
 
 ### Cache Implementation
@@ -454,6 +475,20 @@ class SecurityConfig(BaseModel):
         "**/*.key",
     ])
 
+class SafetyConfig(BaseModel):
+    """Safety limits to prevent runaway indexing. See ADR-003."""
+    max_total_chunks: int = Field(default=500_000, ge=1000)
+    max_file_size_bytes: int = Field(default=1_048_576, ge=1024)  # 1 MB
+    batch_size: int = Field(default=100, ge=1, le=1000)
+    collection_limits: dict[str, int] = Field(default_factory=dict)
+
+class IndexingConfig(BaseModel):
+    """Indexing pipeline configuration."""
+    overlap_tokens: int = Field(default=200, ge=0, le=1000)
+    fallback_max_tokens: int = Field(default=3000, ge=500, le=8000)
+    embedding_provider: str = Field(default="voyage")  # voyage | openai | ollama
+    embedding_model: str = Field(default="voyage-code-3")
+
 class ProjectConfig(BaseModel):
     """Root configuration model."""
 
@@ -462,6 +497,8 @@ class ProjectConfig(BaseModel):
     chunking: dict = Field(default_factory=lambda: {"default_max_tokens": 3000})
     django: DjangoConfig = Field(default_factory=DjangoConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    indexing: IndexingConfig = Field(default_factory=IndexingConfig)
     terminology_file: str | None = None
 
     @field_validator("collections", mode="before")
@@ -1009,6 +1046,107 @@ if __name__ == "__main__":
     app()
 ```
 
+#### Task 1.6: Splitter Fallback Chain
+
+**Implementation:** See Section 12 for full specification.
+
+**Acceptance Test:**
+```python
+# Tier 1: Valid Python file → AST chunks
+chunks = split_file("models.py", valid_python, max_tokens=3000, ast_parser=parser)
+assert all(c.source == "ast" for c in chunks)
+
+# Tier 2: Invalid syntax → token-recursive chunks
+chunks = split_file("config.txt", plain_text, max_tokens=3000, ast_parser=parser)
+assert all(count_tokens(c.content) <= 3000 for c in chunks)
+
+# Tier 3: Verify overlap in fallback chunks
+assert chunks[1].content.startswith(chunks[0].content[-200:])  # approximate
+```
+
+#### Task 1.7: Embedding Provider ABC
+
+**Implementation:** See Section 11 for full specification.
+
+**Acceptance Test:**
+```python
+# Provider interface works
+provider = VoyageEmbeddingProvider(api_key=key)
+assert provider.dimensions == 1024
+assert provider.model_name == "voyage-code-3"
+
+# Embed returns correct shape
+embeddings = await provider.embed(["hello world"])
+assert len(embeddings) == 1
+assert len(embeddings[0]) == 1024
+
+# Provider is swappable
+provider = create_embedding_provider(config, env)
+assert isinstance(provider, EmbeddingProvider)
+```
+
+#### Task 1.8: File-Hash Change Detection
+
+**Implementation:** See Section 13 for full specification.
+
+**Acceptance Test:**
+```python
+# New file detected as added
+changes = tracker.detect_changes(["new_file.py"])
+assert "new_file.py" in changes["added"]
+
+# Modified file detected
+tracker.update_hash("file.py", "old_hash", ["chunk1"])
+# ... modify file ...
+changes = tracker.detect_changes(["file.py"])
+assert "file.py" in changes["modified"]
+
+# Unchanged file detected
+changes = tracker.detect_changes(["file.py"])
+assert "file.py" in changes["unchanged"]
+```
+
+#### Task 1.9: Ignore Pattern Loading
+
+**Implementation:** See Section 14 for full specification.
+
+**Acceptance Test:**
+```python
+# Built-in defaults work
+loader = IgnorePatternLoader(project_root)
+assert loader.should_ignore("__pycache__/module.pyc")
+assert loader.should_ignore("node_modules/pkg/index.js")
+
+# .gitignore patterns loaded
+assert loader.should_ignore("*.log")  # if in .gitignore
+
+# Config excludes work
+loader = IgnorePatternLoader(project_root, config_excludes=["**/migrations/**"])
+assert loader.should_ignore("backend/app/migrations/0001.py")
+
+# Env var override
+os.environ["CODE_SEARCH_EXCLUDE"] = "*.generated.py"
+loader = IgnorePatternLoader(project_root)
+loader.load()
+assert loader.should_ignore("output.generated.py")
+```
+
+#### Task 1.10: Safety Limits
+
+**Implementation:** See Section 19 of DESIGN.md and `SafetyConfig` model in Section 5.
+
+**Acceptance Test:**
+```python
+# File size limit enforced
+checker = SafetyChecker(SafetyConfig(max_file_size_bytes=1_048_576))
+assert checker.check_file("small.py", 1000) is True
+assert checker.check_file("huge.min.js", 5_000_000) is False
+
+# Total chunk limit enforced
+assert checker.check_total_chunks(499_990, 5) is True
+assert checker.check_total_chunks(499_990, 20) is False
+```
+
 ---
 
 ## 10. Developer Workflow
@@ -1096,4 +1234,496 @@ code-search inspect --file src/models.py
 
 # Start MCP server
 code-search serve --config config.yaml
+```
+
+---
+
+## 11. Embedding Provider Abstraction
+
+The embedding provider is abstracted behind a Python ABC, allowing the system to use different embedding backends. Adapted from claude-context's multi-provider interface — see [ADR-003](./adr/003-ported-features-from-claude-context.md#4-embedding-provider-abstraction).
+
+### EmbeddingProvider ABC
+
+```python
+# code_search/clients/base.py
+from abc import ABC, abstractmethod
+
+class EmbeddingProvider(ABC):
+    """Abstract base class for embedding providers."""
+
+    @property
+    @abstractmethod
+    def dimensions(self) -> int:
+        """Return the embedding dimensions."""
+        ...
+
+    @property
+    @abstractmethod
+    def model_name(self) -> str:
+        """Return the model identifier."""
+        ...
+
+    @abstractmethod
+    async def embed(self, texts: list[str], input_type: str = "document") -> list[list[float]]:
+        """Embed a batch of texts.
+
+        Args:
+            texts: List of text strings to embed.
+            input_type: "document" for indexing, "query" for search.
+
+        Returns:
+            List of embedding vectors.
+        """
+        ...
+
+    @abstractmethod
+    async def embed_query(self, query: str) -> list[float]:
+        """Embed a single query string.
+
+        Convenience method that calls embed() with input_type="query".
+        """
+        ...
+```
+
+### VoyageEmbeddingProvider
+
+```python
+# code_search/clients/voyage.py (updated)
+import voyageai
+
+class VoyageEmbeddingProvider(EmbeddingProvider):
+    """Voyage AI embedding provider (default)."""
+
+    def __init__(self, api_key: str, model: str = "voyage-code-3"):
+        self._client = voyageai.AsyncClient(api_key=api_key)
+        self._model = model
+        self._dimensions = 1024
+
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    async def embed(self, texts: list[str], input_type: str = "document") -> list[list[float]]:
+        result = await self._client.embed(
+            texts,
+            model=self._model,
+            input_type=input_type,
+            truncation=True,
+        )
+        return result.embeddings
+
+    async def embed_query(self, query: str) -> list[float]:
+        embeddings = await self.embed([query], input_type="query")
+        return embeddings[0]
+```
+
+### Provider Factory
+
+```python
+# code_search/clients/__init__.py
+def create_embedding_provider(config: IndexingConfig, env: Environment) -> EmbeddingProvider:
+    """Create embedding provider from configuration."""
+    if config.embedding_provider == "voyage":
+        from .voyage import VoyageEmbeddingProvider
+        return VoyageEmbeddingProvider(api_key=env.VOYAGE_API_KEY, model=config.embedding_model)
+    elif config.embedding_provider == "openai":
+        from .openai import OpenAIEmbeddingProvider
+        return OpenAIEmbeddingProvider(api_key=env.OPENAI_API_KEY, model=config.embedding_model)
+    elif config.embedding_provider == "ollama":
+        from .ollama import OllamaEmbeddingProvider
+        return OllamaEmbeddingProvider(model=config.embedding_model)
+    else:
+        raise ConfigError(f"Unknown embedding provider: {config.embedding_provider}")
+```
+
+---
+
+## 12. Splitter Fallback Chain
+
+Three-tier fallback for chunking files when AST parsing fails. No LangChain dependency — the token-recursive splitter is ~100 lines of Python. See [ADR-003](./adr/003-ported-features-from-claude-context.md#1-ast-fallback-chain).
+
+### Token-Recursive Splitter
+
+```python
+# code_search/chunker/fallback.py
+from .tokenizer import count_tokens
+
+# Split points ordered by preference (most semantic to least)
+SPLIT_SEPARATORS = [
+    "\n\nclass ",      # Class boundaries
+    "\n\ndef ",        # Function boundaries
+    "\n\n",            # Paragraph/block boundaries
+    "\n",              # Line boundaries
+    " ",               # Word boundaries
+]
+
+def token_recursive_split(
+    text: str,
+    max_tokens: int,
+    overlap_tokens: int = 200,
+    separators: list[str] | None = None,
+) -> list[str]:
+    """Split text recursively by token count using semantic separators.
+
+    Args:
+        text: Text to split.
+        max_tokens: Maximum tokens per chunk.
+        overlap_tokens: Tokens of overlap between chunks (non-AST only).
+        separators: Ordered list of split points to try.
+
+    Returns:
+        List of text chunks, each within max_tokens.
+    """
+    if count_tokens(text) <= max_tokens:
+        return [text]
+
+    separators = separators or SPLIT_SEPARATORS
+
+    for separator in separators:
+        parts = text.split(separator)
+        if len(parts) == 1:
+            continue
+
+        chunks = []
+        current = parts[0]
+
+        for part in parts[1:]:
+            candidate = current + separator + part
+            if count_tokens(candidate) <= max_tokens:
+                current = candidate
+            else:
+                if current.strip():
+                    chunks.append(current.strip())
+                current = _apply_overlap(chunks, part, overlap_tokens) if chunks else part
+
+        if current.strip():
+            chunks.append(current.strip())
+
+        # Verify all chunks fit; if not, recurse with next separator
+        if all(count_tokens(c) <= max_tokens for c in chunks):
+            return chunks
+
+    # Last resort: line split
+    return line_split(text, max_tokens, overlap_tokens)
+
+
+def line_split(text: str, max_tokens: int, overlap_tokens: int = 200) -> list[str]:
+    """Split text by lines, guaranteed to produce valid chunks."""
+    lines = text.split("\n")
+    chunks = []
+    current_lines = []
+    current_tokens = 0
+
+    for line in lines:
+        line_tokens = count_tokens(line)
+        if current_tokens + line_tokens > max_tokens and current_lines:
+            chunks.append("\n".join(current_lines))
+            # Apply overlap: keep last N tokens worth of lines
+            overlap_lines = _get_overlap_lines(current_lines, overlap_tokens)
+            current_lines = overlap_lines
+            current_tokens = sum(count_tokens(l) for l in current_lines)
+        current_lines.append(line)
+        current_tokens += line_tokens
+
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+
+    return chunks
+
+
+def _apply_overlap(chunks: list[str], next_part: str, overlap_tokens: int) -> str:
+    """Prepend overlap from the end of the last chunk."""
+    if not chunks or overlap_tokens == 0:
+        return next_part
+    last_chunk = chunks[-1]
+    # Take last N tokens worth of text from previous chunk
+    lines = last_chunk.split("\n")
+    overlap_lines = _get_overlap_lines(lines, overlap_tokens)
+    overlap_text = "\n".join(overlap_lines)
+    return overlap_text + "\n" + next_part if overlap_text else next_part
+
+
+def _get_overlap_lines(lines: list[str], overlap_tokens: int) -> list[str]:
+    """Get lines from the end that fit within overlap_tokens."""
+    result = []
+    total = 0
+    for line in reversed(lines):
+        line_tokens = count_tokens(line)
+        if total + line_tokens > overlap_tokens:
+            break
+        result.insert(0, line)
+        total += line_tokens
+    return result
+```
+
+### Fallback Chain Entry Point
+
+```python
+# code_search/chunker/fallback.py (continued)
+
+def split_file(
+    file_path: str,
+    content: str,
+    max_tokens: int,
+    ast_parser: "ASTParser",
+    overlap_tokens: int = 200,
+) -> list["Chunk"]:
+    """Split a file using the three-tier fallback chain.
+
+    Tier 1: tree-sitter AST parsing (no overlap)
+    Tier 2: Token-recursive splitting (with overlap)
+    Tier 3: Line splitting (with overlap, guaranteed)
+    """
+    # Tier 1: AST
+    tree = ast_parser.parse_file(file_path, content)
+    if tree:
+        chunks = extract_ast_chunks(tree, content, max_tokens)
+        if chunks:
+            return chunks
+
+    # Tier 2 + 3: Token-recursive with line-split fallback
+    text_chunks = token_recursive_split(content, max_tokens, overlap_tokens)
+    return [
+        Chunk(content=c, source="fallback", file_path=file_path)
+        for c in text_chunks
+    ]
+```
+
+---
+
+## 13. File-Hash Change Detection
+
+Secondary change detection when git-diff is unavailable. Uses the existing `chunk_cache` table in SQLite. See [ADR-003](./adr/003-ported-features-from-claude-context.md#2-change-detection-hybrid-strategy).
+
+```python
+# code_search/indexer/file_hash.py
+import hashlib
+from pathlib import Path
+from .cache import CacheDB
+
+class FileHashTracker:
+    """File-hash based change detection (secondary to git-diff)."""
+
+    def __init__(self, cache: CacheDB):
+        self.cache = cache
+
+    def compute_hash(self, file_path: str) -> str:
+        """Compute SHA256 hash of file contents."""
+        content = Path(file_path).read_bytes()
+        return hashlib.sha256(content).hexdigest()
+
+    def detect_changes(self, file_paths: list[str]) -> dict[str, list[str]]:
+        """Classify files as added, modified, or unchanged.
+
+        Args:
+            file_paths: List of file paths to check.
+
+        Returns:
+            Dict with keys "added", "modified", "unchanged".
+        """
+        changes: dict[str, list[str]] = {
+            "added": [],
+            "modified": [],
+            "unchanged": [],
+        }
+
+        for path in file_paths:
+            current_hash = self.compute_hash(path)
+            cached_hash = self.cache.get_file_hash(path)
+
+            if cached_hash is None:
+                changes["added"].append(path)
+            elif cached_hash != current_hash:
+                changes["modified"].append(path)
+            else:
+                changes["unchanged"].append(path)
+
+        return changes
+
+    def update_hash(self, file_path: str, file_hash: str, chunk_ids: list[str]):
+        """Update cached hash after successful indexing."""
+        self.cache.set_file_chunks(file_path, file_hash, chunk_ids)
+```
+
+### Integration with Pipeline
+
+```python
+# In code_search/indexer/pipeline.py
+def detect_changes(self, file_paths: list[str]) -> dict:
+    """Detect changes using git-diff (primary) or file-hash (secondary)."""
+    try:
+        return self.git_tracker.get_changes_since(self.last_commit)
+    except (GitError, subprocess.CalledProcessError):
+        logger.warning("Git change detection failed; falling back to file-hash")
+        return self.file_hash_tracker.detect_changes(file_paths)
+```
+
+---
+
+## 14. Ignore Pattern Loading
+
+Five-source hierarchy for file exclusion patterns, using `pathspec` for `.gitignore`-compatible matching. See [ADR-003](./adr/003-ported-features-from-claude-context.md#6-ignore-pattern-hierarchy).
+
+```python
+# code_search/indexer/ignore.py
+import os
+from pathlib import Path
+from pathspec import PathSpec
+
+# Built-in defaults (always excluded)
+DEFAULT_IGNORE_PATTERNS = [
+    "__pycache__/",
+    "*.pyc",
+    ".git/",
+    "node_modules/",
+    ".venv/",
+    "venv/",
+    ".tox/",
+    "*.egg-info/",
+    "dist/",
+    "build/",
+    ".mypy_cache/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+]
+
+class IgnorePatternLoader:
+    """Load and merge ignore patterns from 5 sources."""
+
+    def __init__(self, project_root: Path, config_excludes: list[str] | None = None):
+        self.project_root = project_root
+        self.config_excludes = config_excludes or []
+        self._spec: PathSpec | None = None
+
+    def load(self) -> PathSpec:
+        """Load and merge patterns from all sources."""
+        all_patterns: list[str] = []
+
+        # Source 1: Built-in defaults (lowest priority)
+        all_patterns.extend(DEFAULT_IGNORE_PATTERNS)
+
+        # Source 2: .gitignore
+        gitignore = self.project_root / ".gitignore"
+        if gitignore.exists():
+            all_patterns.extend(self._read_pattern_file(gitignore))
+
+        # Source 3: .codesearchignore
+        codesearchignore = self.project_root / ".codesearchignore"
+        if codesearchignore.exists():
+            all_patterns.extend(self._read_pattern_file(codesearchignore))
+
+        # Source 4: config.yaml exclude patterns
+        all_patterns.extend(self.config_excludes)
+
+        # Source 5: Environment variable (highest priority)
+        env_excludes = os.environ.get("CODE_SEARCH_EXCLUDE", "")
+        if env_excludes:
+            all_patterns.extend(env_excludes.split(","))
+
+        self._spec = PathSpec.from_lines("gitwildmatch", all_patterns)
+        return self._spec
+
+    def should_ignore(self, file_path: str) -> bool:
+        """Check if a file should be ignored."""
+        if self._spec is None:
+            self.load()
+        return self._spec.match_file(file_path)
+
+    @staticmethod
+    def _read_pattern_file(path: Path) -> list[str]:
+        """Read patterns from a file, skipping comments and blanks."""
+        patterns = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                patterns.append(line)
+        return patterns
+```
+
+---
+
+## 15. Batch Embedding with Progress
+
+Batch embedding with configurable batch size and `rich` progress bars. Adapted from claude-context's 100-chunk batching with callbacks. See [ADR-003](./adr/003-ported-features-from-claude-context.md#3-batch-embedding-with-progress).
+
+```python
+# code_search/indexer/batch.py (updated)
+from dataclasses import dataclass, field
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+from ..clients.base import EmbeddingProvider
+from ..chunker.tokenizer import count_tokens
+
+@dataclass
+class BatchProgress:
+    """Track batch embedding progress."""
+    total_chunks: int = 0
+    embedded_chunks: int = 0
+    total_tokens: int = 0
+    embedded_tokens: int = 0
+    failed_chunks: int = 0
+    current_batch: int = 0
+    total_batches: int = 0
+
+    @property
+    def progress_pct(self) -> float:
+        if self.total_chunks == 0:
+            return 0.0
+        return self.embedded_chunks / self.total_chunks * 100
+
+
+async def embed_in_batches(
+    chunks: list[str],
+    provider: EmbeddingProvider,
+    batch_size: int = 100,
+    show_progress: bool = True,
+) -> tuple[list[list[float]], BatchProgress]:
+    """Embed chunks in batches with progress tracking.
+
+    Args:
+        chunks: List of text chunks to embed.
+        provider: Embedding provider instance.
+        batch_size: Chunks per API call (default 100).
+        show_progress: Whether to show rich progress bar.
+
+    Returns:
+        Tuple of (embeddings list, progress stats).
+    """
+    progress_stats = BatchProgress(
+        total_chunks=len(chunks),
+        total_tokens=sum(count_tokens(c) for c in chunks),
+        total_batches=(len(chunks) + batch_size - 1) // batch_size,
+    )
+
+    all_embeddings: list[list[float]] = []
+    batches = [chunks[i:i + batch_size] for i in range(0, len(chunks), batch_size)]
+
+    with Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("({task.completed}/{task.total} chunks)"),
+        TimeRemainingColumn(),
+        disable=not show_progress,
+    ) as progress_bar:
+        task = progress_bar.add_task("Embedding", total=len(chunks))
+
+        for i, batch in enumerate(batches):
+            progress_stats.current_batch = i + 1
+            try:
+                embeddings = await provider.embed(batch, input_type="document")
+                all_embeddings.extend(embeddings)
+                progress_stats.embedded_chunks += len(batch)
+                progress_stats.embedded_tokens += sum(count_tokens(c) for c in batch)
+            except Exception as e:
+                logger.error(f"Batch {i+1} failed: {e}")
+                progress_stats.failed_chunks += len(batch)
+                all_embeddings.extend([[] for _ in batch])  # Placeholder
+
+            progress_bar.update(task, advance=len(batch))
+
+    return all_embeddings, progress_stats
 ```
