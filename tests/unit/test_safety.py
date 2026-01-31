@@ -52,16 +52,12 @@ class TestSafetyCheckerCollectionLimits:
         assert checker.check_collection_chunks("code", 999_999, 1) is True
 
     def test_collection_limit_enforced(self) -> None:
-        checker = SafetyChecker(
-            SafetyConfig(collection_limits={"code": 10_000})
-        )
+        checker = SafetyChecker(SafetyConfig(collection_limits={"code": 10_000}))
         assert checker.check_collection_chunks("code", 9_999, 1) is True
         assert checker.check_collection_chunks("code", 9_999, 2) is False
 
     def test_unlisted_collection_unlimited(self) -> None:
-        checker = SafetyChecker(
-            SafetyConfig(collection_limits={"code": 10_000})
-        )
+        checker = SafetyChecker(SafetyConfig(collection_limits={"code": 10_000}))
         assert checker.check_collection_chunks("docs", 999_999, 1) is True
 
 

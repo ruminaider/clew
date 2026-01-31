@@ -43,9 +43,7 @@ class TestIgnorePatternLoader:
         assert loader.should_ignore("output.generated.py")
 
     def test_config_excludes_applied(self, project_root: Path) -> None:
-        loader = IgnorePatternLoader(
-            project_root, config_excludes=["**/migrations/**"]
-        )
+        loader = IgnorePatternLoader(project_root, config_excludes=["**/migrations/**"])
         loader.load()
         assert loader.should_ignore("backend/app/migrations/0001.py")
 
@@ -62,9 +60,7 @@ class TestIgnorePatternLoader:
         assert not loader.should_ignore("src/models.py")
 
     def test_comments_and_blanks_skipped(self, project_root: Path) -> None:
-        (project_root / ".gitignore").write_text(
-            "# This is a comment\n\n*.log\n  \n"
-        )
+        (project_root / ".gitignore").write_text("# This is a comment\n\n*.log\n  \n")
         loader = IgnorePatternLoader(project_root)
         loader.load()
         assert loader.should_ignore("app.log")
