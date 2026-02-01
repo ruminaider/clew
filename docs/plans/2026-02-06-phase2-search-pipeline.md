@@ -211,7 +211,7 @@ Also update `code_search/search/__init__.py`:
 Write tests for SearchConfig first:
 
 ```python
-# Add to tests/unit/test_models.py (existing file)
+# tests/unit/test_models.py (CREATE — this file does not exist yet)
 
 from code_search.models import SearchConfig
 
@@ -1752,11 +1752,72 @@ git commit -m "feat(search): add Voyage rerank-2.5 provider with configurable sk
 **Files:**
 - Create: `code_search/indexer/git_tracker.py`
 - Create: `tests/unit/test_git_tracker.py`
+- Modify: `code_search/indexer/cache.py` (add state table accessor methods)
+- Modify: `tests/unit/test_cache.py` (add tests for state methods)
 
 **Key design spec (Tradeoff D):**
 - Tier 1: `git diff --name-status last_commit HEAD` for add/modify/delete/rename
 - Tier 2: Fallback to existing `FileHashTracker` for non-git repos
 - Track `last_indexed_commit` in SQLite via CacheDB
+- Expose CacheDB state table methods: `get_last_indexed_commit()` / `set_last_indexed_commit()`
+
+### Step 0: Add CacheDB state table accessor methods
+
+Add tests to `tests/unit/test_cache.py`:
+
+```python
+# Add to tests/unit/test_cache.py
+
+class TestIndexState:
+    def test_get_missing_commit_returns_none(self, cache: CacheDB) -> None:
+        assert cache.get_last_indexed_commit("code") is None
+
+    def test_set_and_get_commit(self, cache: CacheDB) -> None:
+        cache.set_last_indexed_commit("code", "abc123def")
+        assert cache.get_last_indexed_commit("code") == "abc123def"
+
+    def test_update_commit(self, cache: CacheDB) -> None:
+        cache.set_last_indexed_commit("code", "abc123")
+        cache.set_last_indexed_commit("code", "def456")
+        assert cache.get_last_indexed_commit("code") == "def456"
+
+    def test_different_collections_independent(self, cache: CacheDB) -> None:
+        cache.set_last_indexed_commit("code", "abc123")
+        cache.set_last_indexed_commit("docs", "def456")
+        assert cache.get_last_indexed_commit("code") == "abc123"
+        assert cache.get_last_indexed_commit("docs") == "def456"
+```
+
+Add methods to `code_search/indexer/cache.py`:
+
+```python
+    def get_last_indexed_commit(self, collection_name: str) -> str | None:
+        """Get the last indexed commit hash for a collection."""
+        with self._get_state_conn() as conn:
+            row = conn.execute(
+                "SELECT last_commit FROM index_state WHERE collection_name = ?",
+                (collection_name,),
+            ).fetchone()
+            return row[0] if row else None
+
+    def set_last_indexed_commit(self, collection_name: str, commit_hash: str) -> None:
+        """Set the last indexed commit hash for a collection."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                """INSERT INTO index_state (collection_name, last_commit, last_indexed_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(collection_name) DO UPDATE SET
+                    last_commit = excluded.last_commit,
+                    last_indexed_at = excluded.last_indexed_at""",
+                (collection_name, commit_hash),
+            )
+```
+
+Run tests to verify:
+
+```bash
+pytest tests/unit/test_cache.py -v
+```
 
 ### Step 1: Write the failing tests
 
@@ -1866,6 +1927,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -1898,7 +1960,7 @@ class GitChangeTracker:
             return result.stdout.strip()
         return None
 
-    def get_changes_since(self, last_commit: str) -> dict[str, list]:
+    def get_changes_since(self, last_commit: str) -> dict[str, list[Any]]:
         """Get file changes since last indexed commit.
 
         Returns dict with keys: added, modified, deleted, renamed.
@@ -1911,7 +1973,7 @@ class GitChangeTracker:
             cwd=self.project_root,
         )
 
-        changes: dict[str, list] = {
+        changes: dict[str, list[Any]] = {
             "added": [],
             "modified": [],
             "deleted": [],
@@ -1953,8 +2015,8 @@ mypy code_search/indexer/git_tracker.py
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/git_tracker.py tests/unit/test_git_tracker.py
-git commit -m "feat(indexer): add git-aware change detection with rename and delete handling"
+git add code_search/indexer/git_tracker.py code_search/indexer/cache.py tests/unit/test_git_tracker.py tests/unit/test_cache.py
+git commit -m "feat(indexer): add git-aware change detection and CacheDB state accessors"
 ```
 
 ---
@@ -2075,18 +2137,21 @@ class TestIndexingPipeline:
         await pipeline.index_files([f], collection="code")
         mock_embedder.embed.assert_called()
 
-    async def test_payload_has_structured_id(
+    async def test_point_id_is_deterministic_uuid(
         self, pipeline: IndexingPipeline, mock_qdrant: Mock, tmp_path: Path,
     ) -> None:
-        """Chunk IDs should be structured, not UUIDs."""
+        """Point IDs should be deterministic UUIDs (Qdrant requirement)."""
+        import uuid
+
         f = tmp_path / "models.py"
         f.write_text("x = 1\n")
         await pipeline.index_files([f], collection="code")
-        # Get the points that were upserted
         points = mock_qdrant.upsert_points.call_args[0][1]
         for point in points:
-            # ID should contain :: separator (structured format)
-            assert "::" in str(point.id)
+            # ID should be a valid UUID string
+            uuid.UUID(point.id)  # raises ValueError if not valid
+            # Structured chunk_id should be in the payload instead
+            assert "::" in point.payload["chunk_id"]
 
     async def test_payload_has_metadata_fields(
         self, pipeline: IndexingPipeline, mock_qdrant: Mock, tmp_path: Path,
@@ -2152,12 +2217,16 @@ with raw term counts.
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qdrant_client import models
+
+# Namespace for deterministic UUID generation from chunk IDs
+CHUNK_UUID_NAMESPACE = uuid.UUID("a3c0e7d2-b1f4-4c8a-9e6d-5f2a1b3c4d5e")
 
 from code_search.chunker.fallback import Chunk, split_file
 from code_search.chunker.parser import ASTParser
@@ -2315,9 +2384,12 @@ class IndexingPipeline:
                 "indexed_at": datetime.now(tz=timezone.utc).isoformat(),
             }
 
+            # Qdrant requires UUID or int IDs — generate deterministic UUID from chunk_id
+            point_id = str(uuid.uuid5(CHUNK_UUID_NAMESPACE, chunk_id))
+
             points.append(
                 models.PointStruct(
-                    id=chunk_id,
+                    id=point_id,
                     vector={
                         "dense": embedding,
                         "bm25": models.SparseVector(
