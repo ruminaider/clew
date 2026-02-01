@@ -2,7 +2,7 @@
 
 **Status:** Reference document
 **Date:** 2026-02-05
-**Related:** [ADR-001](./adr/001-qdrant-over-milvus.md), [ADR-002](./adr/002-build-vs-adopt-claude-context.md), [ADR-003](./adr/003-ported-features-from-claude-context.md)
+**Related:** [ADR-001](./adr/001-qdrant-as-vector-database.md), [ADR-002](./adr/002-build-vs-adopt-claude-context.md), [ADR-003](./adr/003-ported-features-from-claude-context.md)
 
 This document analyzes [claude-context](https://github.com/zilliztech/claude-context) by Zilliz and records what we adopted, what we rejected, and why. claude-context is **not** a runtime dependency — this is analysis-only.
 
@@ -187,7 +187,7 @@ claude-context exposes 8 MCP tools:
 
 ### 4.1 Milvus as Vector Database
 
-**Why rejected:** See [ADR-001](./adr/001-qdrant-over-milvus.md). Qdrant provides native hybrid search with RRF fusion, superior payload filtering, and a dramatically lighter deployment footprint (1 container vs 3).
+**Why rejected:** See [ADR-001](./adr/001-qdrant-as-vector-database.md). Qdrant provides native hybrid search with RRF fusion, superior payload filtering, and a dramatically lighter deployment footprint (1 container vs 3).
 
 ### 4.2 TypeScript as Implementation Language
 

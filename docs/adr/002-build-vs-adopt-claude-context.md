@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-02-05
 **Deciders:** Engineering team
-**Related:** [ADR-001](./001-qdrant-over-milvus.md), [ADR-003](./003-ported-features-from-claude-context.md), [CLAUDE_CONTEXT_ANALYSIS.md](../CLAUDE_CONTEXT_ANALYSIS.md)
+**Related:** [ADR-001](./001-qdrant-as-vector-database.md), [ADR-003](./003-ported-features-from-claude-context.md), [CLAUDE_CONTEXT_ANALYSIS.md](../CLAUDE_CONTEXT_ANALYSIS.md)
 
 ---
 
@@ -24,7 +24,7 @@ We evaluated three options:
 
 ### 1. Vector Database Mismatch
 
-claude-context uses Milvus (backed by Zilliz, its creator). We chose Qdrant for its native hybrid search, lighter footprint, and superior payload filtering (see [ADR-001](./001-qdrant-over-milvus.md)). The Milvus integration is deeply embedded in claude-context's storage layer — replacing it would require rewriting the entire persistence and query layer.
+claude-context uses Milvus (backed by Zilliz, its creator). We chose Qdrant for its native hybrid search, lighter footprint, and superior payload filtering (see [ADR-001](./001-qdrant-as-vector-database.md)). The Milvus integration is deeply embedded in claude-context's storage layer — replacing it would require rewriting the entire persistence and query layer.
 
 ### 2. Language Mismatch
 
