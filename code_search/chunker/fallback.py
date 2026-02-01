@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .tokenizer import count_tokens
@@ -27,6 +27,7 @@ class Chunk:
     content: str
     source: str  # "ast" or "fallback"
     file_path: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def token_recursive_split(
@@ -181,12 +182,23 @@ def _extract_ast_chunks(tree: Any, file_path: str, content: str, max_tokens: int
 
     chunks: list[Chunk] = []
     for entity in entities:
+        meta = {
+            "entity_type": entity.entity_type,
+            "name": entity.name,
+            "qualified_name": entity.qualified_name,
+            "line_start": entity.line_start,
+            "line_end": entity.line_end,
+            "parent_class": entity.parent_class or "",
+        }
         if count_tokens(entity.content) <= max_tokens:
-            chunks.append(Chunk(content=entity.content, source="ast", file_path=file_path))
+            chunks.append(
+                Chunk(content=entity.content, source="ast", file_path=file_path, metadata=meta)
+            )
         else:
             sub_chunks = token_recursive_split(entity.content, max_tokens, overlap_tokens=200)
             chunks.extend(
-                Chunk(content=c, source="fallback", file_path=file_path) for c in sub_chunks
+                Chunk(content=c, source="fallback", file_path=file_path, metadata=meta)
+                for c in sub_chunks
             )
 
     return chunks

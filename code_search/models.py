@@ -59,6 +59,17 @@ class IndexingConfig(BaseModel):
     embedding_model: str = Field(default="voyage-code-3")
 
 
+class SearchConfig(BaseModel):
+    """Search pipeline configuration. See Tradeoff B resolution."""
+
+    rerank_candidates: int = Field(default=30, ge=10, le=100)
+    rerank_top_k: int = Field(default=10, ge=1, le=50)
+    no_rerank_threshold: int = Field(default=10, ge=1)
+    rerank_model: str = "rerank-2.5"
+    high_confidence_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
+    low_variance_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+
+
 class ProjectConfig(BaseModel):
     """Root configuration model."""
 
@@ -69,6 +80,7 @@ class ProjectConfig(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     indexing: IndexingConfig = Field(default_factory=IndexingConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
     terminology_file: str | None = None
 
     @field_validator("collections", mode="before")
