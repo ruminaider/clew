@@ -227,15 +227,16 @@ This dual strategy improves on claude-context's approach of `SHA256(path:start_o
 ```python
 {
     # === IDENTITY ===
-    "id": "backend/care/models.py::method::Prescription.is_expired",
-    "content_hash": "a1b2c3d4...",
+    # Qdrant point id is a UUID5: uuid.uuid5(CHUNK_UUID_NAMESPACE, chunk_id)
+    # The structured chunk ID is stored in payload["chunk_id"]
+    "chunk_id": "backend/care/models.py::method::Prescription.is_expired",
     "file_path": "backend/care/models.py",
     "line_start": 45,
     "line_end": 52,
     "language": "python",
 
     # === CODE STRUCTURE ===
-    "chunk_type": "method",        # model | method | function | class | section
+    "chunk_type": "method",        # class | method | function | section
     "class_name": "Prescription",
     "function_name": "is_expired",
     "signature": "def is_expired(self) -> bool",
@@ -285,27 +286,29 @@ This dual strategy improves on claude-context's approach of `SHA256(path:start_o
 ### Git-Aware Change Detection
 
 ```python
-def get_changes_since(last_indexed_commit: str) -> dict:
-    result = subprocess.run(
-        ["git", "diff", "--name-status", last_indexed_commit, "HEAD"],
-        capture_output=True, text=True
-    )
+# In code_search/indexer/git_tracker.py
+class GitChangeTracker:
+    def get_changes_since(self, last_commit: str) -> dict[str, list[Any]]:
+        result = subprocess.run(
+            ["git", "diff", "--name-status", last_commit, "HEAD"],
+            capture_output=True, text=True
+        )
 
-    changes = {"added": [], "modified": [], "deleted": [], "renamed": []}
-    for line in result.stdout.strip().split("\n"):
-        if not line:
-            continue
-        status, *paths = line.split("\t")
-        if status == "A":
-            changes["added"].append(paths[0])
-        elif status == "M":
-            changes["modified"].append(paths[0])
-        elif status == "D":
-            changes["deleted"].append(paths[0])
-        elif status.startswith("R"):
-            changes["renamed"].append({"from": paths[0], "to": paths[1]})
+        changes = {"added": [], "modified": [], "deleted": [], "renamed": []}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            status, *paths = line.split("\t")
+            if status == "A":
+                changes["added"].append(paths[0])
+            elif status == "M":
+                changes["modified"].append(paths[0])
+            elif status == "D":
+                changes["deleted"].append(paths[0])
+            elif status.startswith("R"):
+                changes["renamed"].append({"from": paths[0], "to": paths[1]})
 
-    return changes
+        return changes
 ```
 
 ### Processing Strategy
@@ -426,8 +429,10 @@ client.create_collection(
 ### Code-Specific BM25 Tokenization
 
 ```python
-def tokenize_code_identifiers(text: str) -> list[str]:
-    """Split camelCase, snake_case, and dotted.paths for BM25."""
+def tokenize_code(text: str) -> list[str]:
+    """Split camelCase, snake_case, and dotted.paths for BM25.
+    Filters out single-char tokens (len(t) > 1).
+    Returns a SparseVector dataclass for Qdrant ingestion."""
     tokens = []
     identifiers = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', text)
 
@@ -439,7 +444,10 @@ def tokenize_code_identifiers(text: str) -> list[str]:
         # snake_case
         tokens.extend([p.lower() for p in ident.split('_') if p])
 
-    return list(set(tokens))
+    # Filter single-char tokens and deduplicate
+    tokens = [t for t in set(tokens) if len(t) > 1]
+    # Build raw term-count sparse vector as SparseVector dataclass
+    return tokens  # converted to SparseVector(indices, values) for Qdrant
 ```
 
 ### Reciprocal Rank Fusion (RRF)
@@ -456,7 +464,7 @@ results = client.query_points(
         ),
     ],
     query=models.FusionQuery(fusion=models.Fusion.RRF),
-    limit=20,
+    limit=30,  # Configurable via SearchConfig.rerank_candidates
     with_payload=True
 )
 ```
@@ -477,11 +485,11 @@ Skip enhancement when:
 def should_skip_enhancement(query: str) -> bool:
     if query.startswith('"') and query.endswith('"'):
         return True
-    if re.match(r'^[A-Z][a-zA-Z]+$', query):  # PascalCase
+    if re.match(r'^[A-Z][a-zA-Z0-9]+$', query):  # PascalCase
         return True
-    if re.match(r'^[a-z_]+$', query) and '_' in query:  # snake_case
+    if re.match(r'^[a-z][a-z0-9_]*$', query) and '_' in query:  # snake_case
         return True
-    if '/' in query or query.endswith('.py'):  # File path
+    if '/' in query or query.endswith((".py", ".ts", ".js", ".tsx", ".jsx")):  # File path
         return True
     return False
 ```
@@ -498,11 +506,13 @@ class QueryIntent(Enum):
 def classify_intent(query: str) -> QueryIntent:
     query_lower = query.lower()
 
-    if any(kw in query_lower for kw in ["bug", "fix", "error", "fail", "broken", "why"]):
+    DEBUG_KEYWORDS = {"bug", "fix", "error", "fail", "broken", "why", "crash", "exception", "traceback", "debug"}
+    words = set(query_lower.split())
+    if words & DEBUG_KEYWORDS:
         return QueryIntent.DEBUG
-    if any(kw in query_lower for kw in ["where is", "find", "locate", "defined"]):
+    if any(phrase in query_lower for phrase in ["where is", "where are", "find ", "locate ", "defined", "declaration"]):
         return QueryIntent.LOCATION
-    if any(kw in query_lower for kw in ["what is", "explain", "how does", "documentation"]):
+    if any(phrase in query_lower for phrase in ["what is", "explain", "how does", "how do", "documentation", "readme", "guide"]):
         return QueryIntent.DOCS
     return QueryIntent.CODE
 ```
@@ -553,15 +563,15 @@ code-search extract-terms --output indexer/terminology_candidates.yaml
 
 ```python
 async def search_with_rerank(query: str, limit: int = 10) -> list[Chunk]:
-    # Stage 1: Hybrid search (50 candidates)
-    candidates = await hybrid_search(query, limit=50)
+    # Stage 1: Hybrid search (default 30 candidates, configurable via SearchConfig.rerank_candidates)
+    candidates = await hybrid_search(query, limit=30)
 
-    # Check skip conditions
+    # Check skip conditions (threshold configurable via SearchConfig.no_rerank_threshold, default 10)
     if should_skip_rerank(query, candidates):
         return candidates[:limit]
 
-    # Stage 2: Re-rank with Voyage
-    reranked = await voyage_client.rerank(
+    # Stage 2: Re-rank with Voyage (sync via RerankProvider.rerank(), orchestrated by async SearchEngine.search())
+    reranked = rerank_provider.rerank(
         query=query,
         documents=[c.content for c in candidates],
         model="rerank-2.5",
@@ -573,7 +583,7 @@ async def search_with_rerank(query: str, limit: int = 10) -> list[Chunk]:
 
 ### Skip Conditions
 
-1. Few candidates (≤10)
+1. Few candidates (configurable via `SearchConfig.no_rerank_threshold`, default 10)
 2. High-confidence top result (>0.92)
 3. Exact identifier query
 4. File path query
@@ -596,7 +606,7 @@ def build_prefetch(query: str, active_file: str | None, intent: QueryIntent) -> 
 
     # Structural boost: same module gets extra candidates
     if active_file:
-        module = get_module_from_path(active_file)
+        module = detect_app_name(active_file)  # from code_search.indexer.metadata
         prefetches.append(
             Prefetch(
                 query=dense_vector,
@@ -763,21 +773,26 @@ code-search/
 │   │   └── tokenizer.py    # Voyage tokenizer wrapper
 │   ├── search/
 │   │   ├── __init__.py
+│   │   ├── engine.py       # SearchEngine — top-level orchestrator
 │   │   ├── hybrid.py       # Dense + BM25 fusion
+│   │   ├── intent.py       # Query intent classification heuristics
+│   │   ├── models.py       # QueryIntent, SearchResult, SearchRequest, SearchResponse
 │   │   ├── rerank.py       # Voyage reranker
-│   │   └── enhance.py      # Query enhancement
+│   │   ├── enhance.py      # Query enhancement
+│   │   └── tokenize.py     # BM25 tokenization (camelCase/snake_case splitting)
 │   ├── indexer/
 │   │   ├── __init__.py
 │   │   ├── pipeline.py     # Main indexing pipeline
 │   │   ├── cache.py        # SQLite caching
-│   │   ├── git.py          # Git change detection (primary)
+│   │   ├── git_tracker.py  # Git change detection (primary)
 │   │   ├── file_hash.py    # File-hash change detection (secondary)
+│   │   ├── metadata.py     # detect_app_name, classify_layer, build_chunk_id
 │   │   └── ignore.py       # Ignore pattern hierarchy loading
 │   ├── clients/
 │   │   ├── __init__.py
 │   │   ├── base.py         # EmbeddingProvider ABC
+│   │   ├── qdrant.py       # QdrantManager — collection CRUD, hybrid query
 │   │   └── voyage.py       # Voyage API wrapper with retry
-│   └── voyage_client.py    # Voyage API wrapper with retry
 ├── pyproject.toml
 ├── README.md
 └── tests/
@@ -871,6 +886,8 @@ security:
 
 ## 14. CLI Commands
 
+**Note:** CLI wiring for search/index commands is deferred — search currently shows a placeholder message.
+
 ```bash
 # Indexing
 code-search index                      # Incremental (git-aware)
@@ -878,7 +895,7 @@ code-search index --full               # Full reindex
 code-search index --files path/to.py   # Specific files
 
 # Search (debugging only - use Claude Code for normal queries)
-code-search search "query" --raw       # See scores, metadata
+code-search search "query" --raw       # See scores, metadata (placeholder — wiring deferred)
 
 # Status
 code-search status                     # Health, chunk counts, last indexed

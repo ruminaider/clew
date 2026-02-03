@@ -49,6 +49,9 @@ code-search/                          # https://github.com/ruminaider/code-searc
 │   │   └── identity.py               # Chunk identity generation
 │   ├── search/
 │   │   ├── __init__.py
+│   │   ├── engine.py                 # Top-level search orchestrator
+│   │   ├── models.py                 # QueryIntent, SearchResult, SearchRequest, SearchResponse
+│   │   ├── tokenize.py               # BM25 tokenization and sparse vectors
 │   │   ├── hybrid.py                 # Dense + BM25 fusion
 │   │   ├── rerank.py                 # Voyage reranker
 │   │   ├── enhance.py                # Query enhancement
@@ -57,10 +60,10 @@ code-search/                          # https://github.com/ruminaider/code-searc
 │   │   ├── __init__.py
 │   │   ├── pipeline.py               # Main indexing pipeline
 │   │   ├── cache.py                  # SQLite caching
-│   │   ├── git.py                    # Git change detection (primary)
+│   │   ├── git_tracker.py            # Git change detection (primary)
 │   │   ├── file_hash.py              # File-hash change detection (secondary)
 │   │   ├── ignore.py                 # Ignore pattern hierarchy
-│   │   └── batch.py                  # Batch embedding with retry
+│   │   └── metadata.py               # Chunk metadata extraction
 │   ├── clients/
 │   │   ├── __init__.py
 │   │   ├── base.py                   # EmbeddingProvider ABC
@@ -433,6 +436,38 @@ class CacheDB:
                    VALUES (?, ?, ?, ?)""",
                 (file_path, file_hash, len(chunk_ids), json.dumps(chunk_ids))
             )
+
+    def get_file_chunk_ids(self, file_path: str) -> list[str]:
+        """Get cached chunk IDs for a file."""
+        with self._get_cache_conn() as conn:
+            row = conn.execute(
+                "SELECT chunk_ids FROM chunk_cache WHERE file_path = ?",
+                (file_path,),
+            ).fetchone()
+            if row:
+                return json.loads(row["chunk_ids"])
+            return []
+
+    def get_last_indexed_commit(self, collection_name: str) -> str | None:
+        """Get the last indexed commit hash for a collection."""
+        with self._get_state_conn() as conn:
+            row = conn.execute(
+                "SELECT last_commit FROM index_state WHERE collection_name = ?",
+                (collection_name,),
+            ).fetchone()
+            return row[0] if row else None
+
+    def set_last_indexed_commit(self, collection_name: str, commit_hash: str) -> None:
+        """Set the last indexed commit hash for a collection."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                """INSERT INTO index_state (collection_name, last_commit, last_indexed_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(collection_name) DO UPDATE SET
+                    last_commit = excluded.last_commit,
+                    last_indexed_at = excluded.last_indexed_at""",
+                (collection_name, commit_hash),
+            )
 ```
 
 ---
@@ -489,16 +524,27 @@ class IndexingConfig(BaseModel):
     embedding_provider: str = Field(default="voyage")  # voyage | openai | ollama
     embedding_model: str = Field(default="voyage-code-3")
 
+class SearchConfig(BaseModel):
+    """Search pipeline configuration. See Tradeoff B resolution."""
+
+    rerank_candidates: int = Field(default=30, ge=10, le=100)
+    rerank_top_k: int = Field(default=10, ge=1, le=50)
+    no_rerank_threshold: int = Field(default=10, ge=1)
+    rerank_model: str = "rerank-2.5"
+    high_confidence_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
+    low_variance_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+
 class ProjectConfig(BaseModel):
     """Root configuration model."""
 
-    project: dict = Field(default_factory=lambda: {"name": "default", "root": "."})
+    project: dict[str, str] = Field(default_factory=lambda: {"name": "default", "root": "."})
     collections: dict[str, CollectionConfig] = Field(default_factory=dict)
-    chunking: dict = Field(default_factory=lambda: {"default_max_tokens": 3000})
+    chunking: dict[str, int] = Field(default_factory=lambda: {"default_max_tokens": 3000})
     django: DjangoConfig = Field(default_factory=DjangoConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     indexing: IndexingConfig = Field(default_factory=IndexingConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
     terminology_file: str | None = None
 
     @field_validator("collections", mode="before")
@@ -1147,6 +1193,27 @@ assert checker.check_total_chunks(499_990, 5) is True
 assert checker.check_total_chunks(499_990, 20) is False
 ```
 
+### Phase 2: Search Pipeline
+
+Phase 2 delivers the search pipeline and completes the indexing flow. All modules listed below are implemented and tested.
+
+#### Delivered Modules
+
+| Module | Description |
+|--------|-------------|
+| `code_search/models.py` | `SearchConfig` added to `ProjectConfig` (rerank thresholds, candidate counts) |
+| `code_search/search/models.py` | `QueryIntent`, `SearchResult`, `SearchRequest`, `SearchResponse` dataclasses |
+| `code_search/search/tokenize.py` | BM25 tokenization: camelCase/snake_case splitting, raw term-count sparse vectors |
+| `code_search/search/engine.py` | `SearchEngine` — top-level orchestrator: enhance -> classify -> hybrid search -> rerank |
+| `code_search/search/hybrid.py` | `HybridSearchEngine` — dense + BM25 multi-prefetch with structural boosting |
+| `code_search/search/rerank.py` | `RerankProvider` — Voyage rerank-2.5 with configurable skip conditions |
+| `code_search/search/enhance.py` | `QueryEnhancer` — terminology expansion from YAML |
+| `code_search/search/intent.py` | `classify_intent` — keyword heuristic intent routing |
+| `code_search/indexer/metadata.py` | `detect_app_name`, `classify_layer`, `extract_signature`, `build_chunk_id` |
+| `code_search/indexer/pipeline.py` | `IndexingPipeline` — file -> chunk -> metadata -> embed -> upsert (batch embedding inline) |
+| `code_search/indexer/git_tracker.py` | `GitChangeTracker` — `git diff --name-status` parsing (A/M/D/R) |
+| `code_search/clients/qdrant.py` | `QdrantManager` — collection CRUD, hybrid query with RRF fusion, delete by file_path |
+
 ---
 
 ## 10. Developer Workflow
@@ -1350,7 +1417,18 @@ Three-tier fallback for chunking files when AST parsing fails. No LangChain depe
 
 ```python
 # code_search/chunker/fallback.py
+from dataclasses import dataclass, field
+from typing import Any
 from .tokenizer import count_tokens
+
+@dataclass
+class Chunk:
+    """A chunk of source code or text."""
+
+    content: str
+    source: str  # "ast" or "fallback"
+    file_path: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 # Split points ordered by preference (most semantic to least)
 SPLIT_SEPARATORS = [
@@ -1488,7 +1566,7 @@ def split_file(
     # Tier 2 + 3: Token-recursive with line-split fallback
     text_chunks = token_recursive_split(content, max_tokens, overlap_tokens)
     return [
-        Chunk(content=c, source="fallback", file_path=file_path)
+        Chunk(content=c, source="fallback", file_path=file_path, metadata={})
         for c in text_chunks
     ]
 ```
