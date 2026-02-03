@@ -73,3 +73,27 @@ class TestChunkCache:
         cache.set_file_chunks("models.py", "hash2", ["new_chunk"])
         assert cache.get_file_hash("models.py") == "hash2"
         assert cache.get_file_chunk_ids("models.py") == ["new_chunk"]
+
+
+class TestIndexState:
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_get_missing_commit_returns_none(self, cache: CacheDB) -> None:
+        assert cache.get_last_indexed_commit("code") is None
+
+    def test_set_and_get_commit(self, cache: CacheDB) -> None:
+        cache.set_last_indexed_commit("code", "abc123def")
+        assert cache.get_last_indexed_commit("code") == "abc123def"
+
+    def test_update_commit(self, cache: CacheDB) -> None:
+        cache.set_last_indexed_commit("code", "abc123")
+        cache.set_last_indexed_commit("code", "def456")
+        assert cache.get_last_indexed_commit("code") == "def456"
+
+    def test_different_collections_independent(self, cache: CacheDB) -> None:
+        cache.set_last_indexed_commit("code", "abc123")
+        cache.set_last_indexed_commit("docs", "def456")
+        assert cache.get_last_indexed_commit("code") == "abc123"
+        assert cache.get_last_indexed_commit("docs") == "def456"

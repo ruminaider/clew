@@ -158,3 +158,24 @@ class CacheDB:
                 "VALUES (?, ?, ?, ?)",
                 (file_path, file_hash, len(chunk_ids), json.dumps(chunk_ids)),
             )
+
+    def get_last_indexed_commit(self, collection_name: str) -> str | None:
+        """Get the last indexed commit hash for a collection."""
+        with self._get_state_conn() as conn:
+            row = conn.execute(
+                "SELECT last_commit FROM index_state WHERE collection_name = ?",
+                (collection_name,),
+            ).fetchone()
+            return row[0] if row else None
+
+    def set_last_indexed_commit(self, collection_name: str, commit_hash: str) -> None:
+        """Set the last indexed commit hash for a collection."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                """INSERT INTO index_state (collection_name, last_commit, last_indexed_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(collection_name) DO UPDATE SET
+                    last_commit = excluded.last_commit,
+                    last_indexed_at = excluded.last_indexed_at""",
+                (collection_name, commit_hash),
+            )
