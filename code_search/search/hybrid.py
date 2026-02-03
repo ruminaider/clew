@@ -40,6 +40,7 @@ class HybridSearchEngine:
         limit: int = 30,
         intent: QueryIntent | None = None,
         active_file: str | None = None,
+        query_filter: models.Filter | None = None,
     ) -> list[SearchResult]:
         """Execute hybrid search with structural boosting and return ranked results."""
         # Embed query
@@ -62,6 +63,7 @@ class HybridSearchEngine:
             collection=collection,
             prefetches=prefetches,
             limit=limit,
+            query_filter=query_filter,
         )
 
         return [self._point_to_result(p) for p in points]

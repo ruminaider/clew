@@ -71,6 +71,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["integration: requires external services (Qdrant)"]
 
 [tool.mypy]
 python_version = "3.10"

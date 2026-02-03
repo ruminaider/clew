@@ -76,6 +76,5 @@ class RerankProvider:
             truncation=True,
         )
         return [
-            RerankResult(index=r.index, relevance_score=r.relevance_score)
-            for r in result.results
+            RerankResult(index=r.index, relevance_score=r.relevance_score) for r in result.results
         ]

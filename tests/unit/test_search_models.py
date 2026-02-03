@@ -63,8 +63,11 @@ class TestSearchRequest:
 
     def test_custom_values(self) -> None:
         req = SearchRequest(
-            query="q", collection="docs", limit=5,
-            intent=QueryIntent.DEBUG, active_file="src/auth.py",
+            query="q",
+            collection="docs",
+            limit=5,
+            intent=QueryIntent.DEBUG,
+            active_file="src/auth.py",
         )
         assert req.collection == "docs"
         assert req.intent == QueryIntent.DEBUG
@@ -87,6 +90,9 @@ class TestSearchResponse:
 
     def test_empty_response(self) -> None:
         resp = SearchResponse(
-            results=[], query_enhanced="q", total_candidates=0, intent=QueryIntent.CODE,
+            results=[],
+            query_enhanced="q",
+            total_candidates=0,
+            intent=QueryIntent.CODE,
         )
         assert resp.results == []

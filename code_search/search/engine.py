@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from code_search.models import SearchConfig
 
+from .filters import build_qdrant_filter
 from .intent import classify_intent, get_intent_collection_preference
 from .models import SearchRequest, SearchResponse, SearchResult
 from .rerank import should_skip_rerank
@@ -56,12 +57,14 @@ class SearchEngine:
             collection = get_intent_collection_preference(intent)
 
         # Step 4: Hybrid search with configurable candidate limit (Tradeoff B)
+        query_filter = build_qdrant_filter(request.filters) if request.filters else None
         candidates = await self._hybrid.search(
             query=query_enhanced,
             collection=collection,
             limit=self._config.rerank_candidates,
             intent=intent,
             active_file=request.active_file,
+            query_filter=query_filter,
         )
 
         total_candidates = len(candidates)

@@ -32,18 +32,12 @@ def manager(mock_client: Mock) -> QdrantManager:
 
 
 class TestEnsureCollection:
-    def test_creates_when_missing(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
+    def test_creates_when_missing(self, manager: QdrantManager, mock_client: Mock) -> None:
         manager.ensure_collection("code")
         mock_client.create_collection.assert_called_once()
 
-    def test_skips_when_exists(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
-        mock_client.get_collections.return_value = Mock(
-            collections=[_collection("code")]
-        )
+    def test_skips_when_exists(self, manager: QdrantManager, mock_client: Mock) -> None:
+        mock_client.get_collections.return_value = Mock(collections=[_collection("code")])
         manager.ensure_collection("code")
         mock_client.create_collection.assert_not_called()
 
@@ -60,20 +54,14 @@ class TestEnsureCollection:
 
 
 class TestUpsertPoints:
-    def test_delegates_to_client(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
+    def test_delegates_to_client(self, manager: QdrantManager, mock_client: Mock) -> None:
         points = [Mock()]
         manager.upsert_points("code", points)
-        mock_client.upsert.assert_called_once_with(
-            collection_name="code", points=points
-        )
+        mock_client.upsert.assert_called_once_with(collection_name="code", points=points)
 
 
 class TestDeleteByFilePath:
-    def test_deletes_points_by_filter(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
+    def test_deletes_points_by_filter(self, manager: QdrantManager, mock_client: Mock) -> None:
         manager.delete_by_file_path("code", "backend/models.py")
         mock_client.delete.assert_called_once()
         call_args = mock_client.delete.call_args
@@ -81,9 +69,7 @@ class TestDeleteByFilePath:
 
 
 class TestQueryHybrid:
-    def test_returns_points(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
+    def test_returns_points(self, manager: QdrantManager, mock_client: Mock) -> None:
         from qdrant_client import models
 
         mock_client.query_points.return_value = Mock(
@@ -98,19 +84,13 @@ class TestQueryHybrid:
         assert len(results) == 1
         mock_client.query_points.assert_called_once()
 
-    def test_passes_limit(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
+    def test_passes_limit(self, manager: QdrantManager, mock_client: Mock) -> None:
         from qdrant_client import models
 
         mock_client.query_points.return_value = Mock(points=[])
         manager.query_hybrid(
             "code",
-            prefetches=[
-                models.Prefetch(
-                    query=[0.1] * 1024, using="dense", limit=30
-                )
-            ],
+            prefetches=[models.Prefetch(query=[0.1] * 1024, using="dense", limit=30)],
             limit=20,
         )
         call_kwargs = mock_client.query_points.call_args.kwargs
@@ -118,27 +98,17 @@ class TestQueryHybrid:
 
 
 class TestHealthCheck:
-    def test_returns_true_when_healthy(
-        self, manager: QdrantManager
-    ) -> None:
+    def test_returns_true_when_healthy(self, manager: QdrantManager) -> None:
         assert manager.health_check() is True
 
-    def test_returns_false_on_error(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
-        mock_client.get_collections.side_effect = Exception(
-            "connection refused"
-        )
+    def test_returns_false_on_error(self, manager: QdrantManager, mock_client: Mock) -> None:
+        mock_client.get_collections.side_effect = Exception("connection refused")
         assert manager.health_check() is False
 
 
 class TestCollectionInfo:
-    def test_collection_exists(
-        self, manager: QdrantManager, mock_client: Mock
-    ) -> None:
-        mock_client.get_collections.return_value = Mock(
-            collections=[_collection("code")]
-        )
+    def test_collection_exists(self, manager: QdrantManager, mock_client: Mock) -> None:
+        mock_client.get_collections.return_value = Mock(collections=[_collection("code")])
         assert manager.collection_exists("code") is True
         assert manager.collection_exists("other") is False
 

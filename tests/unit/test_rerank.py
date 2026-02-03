@@ -9,42 +9,84 @@ from code_search.search.rerank import RerankProvider, RerankResult, should_skip_
 
 class TestShouldSkipRerank:
     def test_few_candidates(self) -> None:
-        assert should_skip_rerank(
-            "query", num_candidates=5, top_score=0.5, score_variance=0.5,
-        ) is True
+        assert (
+            should_skip_rerank(
+                "query",
+                num_candidates=5,
+                top_score=0.5,
+                score_variance=0.5,
+            )
+            is True
+        )
 
     def test_at_threshold_skipped(self) -> None:
-        assert should_skip_rerank(
-            "query", num_candidates=10, top_score=0.5, score_variance=0.5,
-            no_rerank_threshold=10,
-        ) is True
+        assert (
+            should_skip_rerank(
+                "query",
+                num_candidates=10,
+                top_score=0.5,
+                score_variance=0.5,
+                no_rerank_threshold=10,
+            )
+            is True
+        )
 
     def test_high_confidence_top(self) -> None:
-        assert should_skip_rerank(
-            "query", num_candidates=50, top_score=0.95, score_variance=0.5,
-            high_confidence_threshold=0.92,
-        ) is True
+        assert (
+            should_skip_rerank(
+                "query",
+                num_candidates=50,
+                top_score=0.95,
+                score_variance=0.5,
+                high_confidence_threshold=0.92,
+            )
+            is True
+        )
 
     def test_low_variance(self) -> None:
-        assert should_skip_rerank(
-            "query", num_candidates=50, top_score=0.5, score_variance=0.05,
-            low_variance_threshold=0.1,
-        ) is True
+        assert (
+            should_skip_rerank(
+                "query",
+                num_candidates=50,
+                top_score=0.5,
+                score_variance=0.05,
+                low_variance_threshold=0.1,
+            )
+            is True
+        )
 
     def test_pascal_case_identifier(self) -> None:
-        assert should_skip_rerank(
-            "UserModel", num_candidates=50, top_score=0.5, score_variance=0.5,
-        ) is True
+        assert (
+            should_skip_rerank(
+                "UserModel",
+                num_candidates=50,
+                top_score=0.5,
+                score_variance=0.5,
+            )
+            is True
+        )
 
     def test_file_path(self) -> None:
-        assert should_skip_rerank(
-            "src/auth.py", num_candidates=50, top_score=0.5, score_variance=0.5,
-        ) is True
+        assert (
+            should_skip_rerank(
+                "src/auth.py",
+                num_candidates=50,
+                top_score=0.5,
+                score_variance=0.5,
+            )
+            is True
+        )
 
     def test_normal_query_not_skipped(self) -> None:
-        assert should_skip_rerank(
-            "how does auth work", num_candidates=50, top_score=0.5, score_variance=0.5,
-        ) is False
+        assert (
+            should_skip_rerank(
+                "how does auth work",
+                num_candidates=50,
+                top_score=0.5,
+                score_variance=0.5,
+            )
+            is False
+        )
 
 
 class TestRerankProvider:

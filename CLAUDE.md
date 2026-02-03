@@ -4,9 +4,11 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 ## Project State
 
-**Phase 1 (Core Infrastructure) is complete** on branch `feature/phase1-core-infrastructure`. 20 source modules, 10 test files, 80 tests passing at 86% coverage.
+**Phase 1 (Core Infrastructure) is complete.** 20 source modules, 10 test files, 80 tests passing at 86% coverage.
 
-**Phase 2 (Search Pipeline) is complete** on branch `feature/phase2-search-pipeline`. 27 source modules, 16 test files, 240 tests passing at 91% coverage.
+**Phase 2 (Search Pipeline) is complete.** 27 source modules, 16 test files, 240 tests passing at 91% coverage.
+
+**Phase 3 (MCP Integration & CLI) is complete.** 31 source modules, 27 test files, 349 tests passing at 92% coverage.
 
 ## Module Inventory
 
@@ -23,6 +25,7 @@ code_search/
 │   └── voyage.py       # VoyageEmbeddingProvider — httpx async client for Voyage AI
 ├── indexer/            # File discovery, caching, change detection, indexing pipeline
 │   ├── cache.py        # CacheDB — SQLite via contextmanager, embedding + chunk caches, state tracking
+│   ├── change_detector.py # ChangeDetector — unified interface: git-first, file-hash fallback
 │   ├── file_hash.py    # FileHashTracker — SHA256-based change detection (added/modified/unchanged)
 │   ├── git_tracker.py  # GitChangeTracker — git diff --name-status change detection (A/M/D/R parsing)
 │   ├── ignore.py       # IgnorePatternLoader — .gitignore + .codesearchignore + defaults
@@ -34,11 +37,15 @@ code_search/
 │   ├── hybrid.py       # HybridSearchEngine — dense + BM25 multi-prefetch with structural boosting
 │   ├── intent.py       # classify_intent — keyword heuristic intent routing (DEBUG > LOCATION > DOCS > CODE)
 │   ├── models.py       # QueryIntent, SearchResult, SearchRequest, SearchResponse dataclasses
+│   ├── filters.py      # build_qdrant_filter() — converts SearchRequest.filters to Qdrant Filter objects
 │   ├── rerank.py       # RerankProvider — Voyage rerank-2.5 integration with configurable skip conditions
 │   └── tokenize.py     # BM25 tokenization — camelCase/snake_case splitting, raw term count sparse vectors
-├── cli.py              # Typer app — index, search, status commands
+├── cli.py              # Typer app — index, search, status, serve commands (fully wired)
 ├── config.py           # Environment class — env var loading with defaults
+├── discovery.py        # discover_files() — centralized file discovery using IgnorePatternLoader + SafetyChecker
 ├── exceptions.py       # Exception hierarchy with user-facing fix suggestions
+├── factory.py          # Component factory — centralized wiring, create_components() returns Components dataclass
+├── mcp_server.py       # FastMCP server — 4 tools: search, get_context, explain, index_status
 ├── models.py           # Pydantic v2 models — ProjectConfig, SearchConfig, CollectionConfig, SafetyConfig, etc.
 └── safety.py           # SafetyChecker — file size, chunk count, collection limits
 ```
@@ -56,10 +63,19 @@ code_search/
 ## Commands
 
 ```bash
+# Dev commands
 pytest --cov=code_search -v    # Run tests with coverage
+pytest -m integration          # Run integration tests only
 ruff check .                   # Lint
 ruff format --check .          # Check formatting
 mypy code_search/              # Type check
+
+# CLI commands
+code-search index [PROJECT_ROOT] --full    # Full reindex
+code-search index [PROJECT_ROOT]           # Incremental (change detection)
+code-search search "query" --raw           # Search with JSON output
+code-search status                          # Show Qdrant health + index stats
+code-search serve                           # Start MCP server (stdio transport)
 ```
 
 ## Key Files
@@ -77,6 +93,24 @@ mypy code_search/              # Type check
 - Testing: pytest + pytest-asyncio, respx for HTTP mocking
 - Linting: ruff, mypy (strict)
 
+## MCP Server Configuration
+
+Add to Claude Code's `.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "code-search": {
+      "command": "code-search",
+      "args": ["serve"],
+      "env": {
+        "VOYAGE_API_KEY": "your-key-here",
+        "QDRANT_URL": "http://localhost:6333"
+      }
+    }
+  }
+}
+```
+
 ## Conventions
 
 - Use `ruff` for formatting and linting
@@ -84,3 +118,5 @@ mypy code_search/              # Type check
 - Async where interacting with Voyage API or Qdrant
 - All config through Pydantic models validated from YAML
 - Error messages should tell the user how to fix the problem (e.g., "Qdrant not running. Start with: docker compose up -d qdrant")
+- Component wiring through `factory.py` — no global state, one factory call per invocation
+- MCP tools return structured dicts with `error` + `fix` keys on failure

@@ -128,3 +128,26 @@ class TestHybridSearch:
         await engine.search("test", limit=5)
         call_kwargs = mock_qdrant.query_hybrid.call_args.kwargs
         assert call_kwargs["limit"] == 5
+
+    async def test_passes_query_filter_to_qdrant(
+        self,
+        engine: HybridSearchEngine,
+        mock_qdrant: Mock,
+    ) -> None:
+        from qdrant_client import models
+
+        qf = models.Filter(
+            must=[models.FieldCondition(key="language", match=models.MatchValue(value="python"))]
+        )
+        await engine.search("test", query_filter=qf)
+        call_kwargs = mock_qdrant.query_hybrid.call_args.kwargs
+        assert call_kwargs["query_filter"] is qf
+
+    async def test_no_filter_passes_none(
+        self,
+        engine: HybridSearchEngine,
+        mock_qdrant: Mock,
+    ) -> None:
+        await engine.search("test")
+        call_kwargs = mock_qdrant.query_hybrid.call_args.kwargs
+        assert call_kwargs["query_filter"] is None

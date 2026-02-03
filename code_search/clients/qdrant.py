@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 class QdrantManager:
     """Manage Qdrant collections and point operations."""
 
-    def __init__(
-        self, url: str = "http://localhost:6333", api_key: str | None = None
-    ) -> None:
+    def __init__(self, url: str = "http://localhost:6333", api_key: str | None = None) -> None:
         self._url = url
         try:
             self._client = QdrantClient(url=url, api_key=api_key)
@@ -33,16 +31,12 @@ class QdrantManager:
         """Access the underlying Qdrant client."""
         return self._client
 
-    def ensure_collection(
-        self, name: str, dense_dim: int = 1024
-    ) -> None:
+    def ensure_collection(self, name: str, dense_dim: int = 1024) -> None:
         """Create collection with dense + BM25 sparse vectors if it doesn't exist.
 
         Sparse vector uses name "bm25" with Modifier.IDF per DESIGN.md.
         """
-        existing = [
-            c.name for c in self._client.get_collections().collections
-        ]
+        existing = [c.name for c in self._client.get_collections().collections]
         if name in existing:
             logger.debug("Collection '%s' already exists", name)
             return
@@ -67,15 +61,11 @@ class QdrantManager:
             dense_dim,
         )
 
-    def upsert_points(
-        self, collection: str, points: list[models.PointStruct]
-    ) -> None:
+    def upsert_points(self, collection: str, points: list[models.PointStruct]) -> None:
         """Upsert points into a collection."""
         self._client.upsert(collection_name=collection, points=points)
 
-    def delete_by_file_path(
-        self, collection: str, file_path: str
-    ) -> None:
+    def delete_by_file_path(self, collection: str, file_path: str) -> None:
         """Delete all points matching a file_path."""
         self._client.delete(
             collection_name=collection,
@@ -119,15 +109,11 @@ class QdrantManager:
 
     def collection_exists(self, name: str) -> bool:
         """Check if a collection exists."""
-        return name in [
-            c.name for c in self._client.get_collections().collections
-        ]
+        return name in [c.name for c in self._client.get_collections().collections]
 
     def collection_count(self, name: str) -> int:
         """Get the number of points in a collection."""
-        return self._client.count(
-            collection_name=name
-        ).count
+        return self._client.count(collection_name=name).count
 
     def health_check(self) -> bool:
         """Check if Qdrant is reachable."""

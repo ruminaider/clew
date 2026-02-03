@@ -53,7 +53,10 @@ def search_config() -> SearchConfig:
 
 @pytest.fixture
 def engine(
-    mock_hybrid: Mock, mock_reranker: Mock, enhancer: Mock, search_config: SearchConfig,
+    mock_hybrid: Mock,
+    mock_reranker: Mock,
+    enhancer: Mock,
+    search_config: SearchConfig,
 ) -> SearchEngine:
     return SearchEngine(
         hybrid_engine=mock_hybrid,
@@ -114,7 +117,10 @@ class TestSearchEngine:
         assert len(response.results) <= 1
 
     async def test_skips_rerank_when_few_results(
-        self, engine: SearchEngine, mock_hybrid: Mock, mock_reranker: Mock,
+        self,
+        engine: SearchEngine,
+        mock_hybrid: Mock,
+        mock_reranker: Mock,
     ) -> None:
         mock_hybrid.search = AsyncMock(
             return_value=[SearchResult(content="x", file_path="f.py", score=0.5)]
@@ -123,7 +129,9 @@ class TestSearchEngine:
         mock_reranker.rerank.assert_not_called()
 
     async def test_docs_intent_overrides_collection(
-        self, engine: SearchEngine, mock_hybrid: Mock,
+        self,
+        engine: SearchEngine,
+        mock_hybrid: Mock,
     ) -> None:
         """DOCS intent should search docs collection."""
         await engine.search(SearchRequest(query="what is the prescription model"))
@@ -131,14 +139,35 @@ class TestSearchEngine:
         assert call_kwargs["collection"] == "docs"
 
     async def test_uses_configurable_rerank_candidates(
-        self, mock_hybrid: Mock, mock_reranker: Mock, enhancer: Mock,
+        self,
+        mock_hybrid: Mock,
+        mock_reranker: Mock,
+        enhancer: Mock,
     ) -> None:
         """Tradeoff B: rerank_candidates comes from SearchConfig."""
         config = SearchConfig(rerank_candidates=50)
         engine = SearchEngine(
-            hybrid_engine=mock_hybrid, reranker=mock_reranker,
-            enhancer=enhancer, search_config=config,
+            hybrid_engine=mock_hybrid,
+            reranker=mock_reranker,
+            enhancer=enhancer,
+            search_config=config,
         )
         await engine.search(SearchRequest(query="test"))
         call_kwargs = mock_hybrid.search.call_args.kwargs
         assert call_kwargs["limit"] == 50
+
+    async def test_passes_filters_to_hybrid(self, engine: SearchEngine, mock_hybrid: Mock) -> None:
+        request = SearchRequest(query="test", filters={"language": "python"})
+        await engine.search(request)
+        call_kwargs = mock_hybrid.search.call_args.kwargs
+        qf = call_kwargs["query_filter"]
+        assert qf is not None
+        assert len(qf.must) == 1
+        assert qf.must[0].key == "language"
+
+    async def test_invalid_filter_raises(self, engine: SearchEngine) -> None:
+        from code_search.exceptions import InvalidFilterError
+
+        request = SearchRequest(query="test", filters={"invalid_key": "val"})
+        with pytest.raises(InvalidFilterError):
+            await engine.search(request)

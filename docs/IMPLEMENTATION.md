@@ -1214,6 +1214,38 @@ Phase 2 delivers the search pipeline and completes the indexing flow. All module
 | `code_search/indexer/git_tracker.py` | `GitChangeTracker` — `git diff --name-status` parsing (A/M/D/R) |
 | `code_search/clients/qdrant.py` | `QdrantManager` — collection CRUD, hybrid query with RRF fusion, delete by file_path |
 
+### Phase 3: MCP Integration & CLI Wiring
+
+Phase 3 wires the search pipeline into a usable product: MCP server (4 tools for Claude), CLI commands, and change detection integration. All modules listed below are implemented and tested.
+
+#### Delivered Modules
+
+| Module | Description |
+|--------|-------------|
+| `code_search/factory.py` | `create_components()` — centralized wiring, returns `Components` dataclass with all services |
+| `code_search/mcp_server.py` | FastMCP server with 4 tools: `search`, `get_context`, `explain`, `index_status` |
+| `code_search/indexer/change_detector.py` | `ChangeDetector` — unified interface: git-first, file-hash fallback; `ChangeResult` dataclass |
+| `code_search/cli.py` | Fully wired Typer CLI: `index`, `search`, `status`, `serve` commands |
+
+#### MCP Tools
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `search` | `query`, `limit?`, `collection?`, `active_file?` | Array of `{file_path, content, score, chunk_type, line_start, line_end, language, class_name, function_name}` |
+| `get_context` | `file_path`, `line_start?`, `line_end?` | `{file_path, content, language, related_chunks}` |
+| `explain` | `file_path`, `symbol?`, `question?` | `{file_path, symbol, question, related_chunks}` |
+| `index_status` | `action` ("status"\|"trigger"), `project_root?` | Status: `{indexed, qdrant_healthy, collections, last_commit}`. Trigger: `{triggered, files_processed, chunks_created}` |
+
+#### Test Coverage
+
+| Test File | Tests | Description |
+|-----------|-------|-------------|
+| `tests/unit/test_factory.py` | 13 | Factory wiring, graceful degradation, config loading |
+| `tests/unit/test_change_detector.py` | 8 | Git/hash paths, rename handling, commit tracking |
+| `tests/unit/test_mcp_server.py` | 42 | All 4 MCP tools, error handling, edge cases |
+| `tests/unit/test_cli.py` | 11 | All CLI commands, `--raw` output, error display |
+| `tests/integration/test_end_to_end.py` | 12 | Full pipeline: index -> search, change detection, MCP tools |
+
 ---
 
 ## 10. Developer Workflow
