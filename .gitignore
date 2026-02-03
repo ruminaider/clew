@@ -23,3 +23,9 @@ venv/
 
 # Qdrant local data
 .qdrant/
+
+# Worktrees
+.worktrees/
+
+# Coverage
+.coverage
