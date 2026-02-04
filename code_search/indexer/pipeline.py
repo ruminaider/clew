@@ -27,7 +27,9 @@ from code_search.search.tokenize import text_to_sparse_vector
 
 if TYPE_CHECKING:
     from code_search.clients.base import EmbeddingProvider
+    from code_search.clients.description import DescriptionProvider
     from code_search.clients.qdrant import QdrantManager
+    from code_search.indexer.cache import CacheDB
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +89,15 @@ class IndexingPipeline:
         self,
         qdrant: QdrantManager,
         embedder: EmbeddingProvider,
+        description_provider: DescriptionProvider | None = None,
+        cache: CacheDB | None = None,
         batch_size: int = 100,
         max_tokens: int = 3000,
     ) -> None:
         self._qdrant = qdrant
         self._embedder = embedder
+        self._description_provider = description_provider
+        self._cache = cache
         self._batch_size = batch_size
         self._max_tokens = max_tokens
         self._parser = ASTParser()
@@ -143,13 +149,87 @@ class IndexingPipeline:
 
         return result
 
+    async def _generate_descriptions(self, chunks: list[Chunk]) -> list[str | None] | None:
+        """Generate NL descriptions for chunks that lack docstrings.
+
+        Returns None if no description provider is configured.
+        Returns a list parallel to chunks with descriptions or None per chunk.
+        """
+        if not self._description_provider:
+            return None
+
+        import hashlib
+
+        results: list[str | None] = [None] * len(chunks)
+        to_generate: list[tuple[int, dict[str, str]]] = []
+
+        for i, chunk in enumerate(chunks):
+            docstring = chunk.metadata.get("docstring")
+            if docstring:
+                continue
+
+            content_hash = hashlib.sha256(chunk.content.encode()).hexdigest()
+
+            # Check cache first
+            if self._cache:
+                cached = self._cache.get_description(
+                    content_hash, self._description_provider.model_name
+                )
+                if cached:
+                    results[i] = cached
+                    continue
+
+            to_generate.append(
+                (
+                    i,
+                    {
+                        "code": chunk.content,
+                        "language": _detect_language(chunk.file_path),
+                        "entity_type": chunk.metadata.get("entity_type", "section"),
+                        "name": chunk.metadata.get(
+                            "qualified_name", chunk.metadata.get("name", "")
+                        ),
+                        "_content_hash": content_hash,
+                    },
+                )
+            )
+
+        if not to_generate:
+            return results
+
+        items = [item for _, item in to_generate]
+        descriptions = await self._description_provider.generate_batch(items)
+
+        for (idx, item), desc in zip(to_generate, descriptions):
+            results[idx] = desc
+            if desc and self._cache:
+                self._cache.set_description(
+                    item["_content_hash"],
+                    self._description_provider.model_name,
+                    desc,
+                )
+
+        return results
+
     async def _embed_and_upsert(self, chunks: list[Chunk], collection: str) -> None:
         """Embed a batch of chunks and upsert to Qdrant."""
-        texts = [c.content for c in chunks]
+        # Generate NL descriptions (if provider configured)
+        descriptions = await self._generate_descriptions(chunks)
+
+        # Build texts for embedding: prepend description if available
+        texts: list[str] = []
+        for i, chunk in enumerate(chunks):
+            desc = descriptions[i] if descriptions else None
+            if desc:
+                texts.append(f"# Description: {desc}\n\n{chunk.content}")
+            else:
+                texts.append(chunk.content)
+
         embeddings = await self._embedder.embed(texts, input_type="document")
 
         points: list[models.PointStruct] = []
-        for chunk, embedding in zip(chunks, embeddings):
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            # BM25 sparse vector from raw content only (not prepended description)
             sparse = text_to_sparse_vector(chunk.content)
             file_path_str = chunk.file_path
 
@@ -166,7 +246,7 @@ class IndexingPipeline:
                 content=chunk.content,
             )
 
-            payload = {
+            payload: dict[str, object] = {
                 "content": chunk.content,
                 "chunk_id": chunk_id,
                 "file_path": file_path_str,
@@ -184,6 +264,16 @@ class IndexingPipeline:
                 "embedding_model": self._embedder.model_name,
                 "indexed_at": datetime.now(tz=timezone.utc).isoformat(),
             }
+
+            # Add NL description if generated
+            desc = descriptions[i] if descriptions else None
+            if desc:
+                payload["nl_description"] = desc
+
+            # Add docstring from chunk metadata if present
+            docstring = chunk.metadata.get("docstring")
+            if docstring:
+                payload["docstring"] = docstring
 
             # Qdrant requires UUID or int IDs -- generate deterministic UUID from chunk_id
             point_id = str(uuid.uuid5(CHUNK_UUID_NAMESPACE, chunk_id))

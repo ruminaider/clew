@@ -17,6 +17,7 @@ def mock_env() -> MagicMock:
     env.QDRANT_URL = "http://localhost:6333"
     env.QDRANT_API_KEY = None
     env.CACHE_DIR = Path("/tmp/test-cache")
+    env.ANTHROPIC_API_KEY = ""
     return env
 
 
@@ -83,6 +84,8 @@ class TestCreateComponentsDefaultConfig:
         _patch_all["IndexingPipeline"].assert_called_once_with(
             qdrant=_patch_all["QdrantManager"].return_value,
             embedder=_patch_all["create_embedding_provider"].return_value,
+            description_provider=None,
+            cache=_patch_all["CacheDB"].return_value,
         )
 
 
@@ -161,3 +164,93 @@ class TestRerankerCreatedWithApiKey:
         result = create_components()
         _patch_all["RerankProvider"].assert_called_once_with(api_key="test-voyage-key")
         assert result.reranker is _patch_all["RerankProvider"].return_value
+
+
+class TestDescriptionProviderNoneByDefault:
+    """When nl_description_enabled is False (default), description_provider should be None."""
+
+    def test_description_provider_none(self, _patch_all: dict[str, MagicMock]) -> None:
+        result = create_components()
+        assert result.description_provider is None
+
+
+class TestDescriptionProviderCreatedWhenEnabled:
+    """When nl_description_enabled is True and ANTHROPIC_API_KEY is set."""
+
+    def test_description_provider_created(self, _patch_all: dict[str, MagicMock]) -> None:
+        _patch_all["env"].ANTHROPIC_API_KEY = "test-anthropic-key"
+
+        with (
+            patch("code_search.factory.ProjectConfig") as mock_config_cls,
+            patch(
+                "code_search.clients.description.AnthropicDescriptionProvider"
+            ) as mock_provider_cls,
+        ):
+            mock_config = MagicMock()
+            mock_config.terminology_file = None
+            mock_config.search = MagicMock()
+            mock_indexing = MagicMock()
+            mock_indexing.nl_description_enabled = True
+            mock_indexing.nl_description_model = "claude-sonnet-4-5-20250929"
+            mock_indexing.nl_description_max_concurrent = 5
+            mock_config.indexing = mock_indexing
+            mock_config_cls.return_value = mock_config
+
+            result = create_components()
+
+            mock_provider_cls.assert_called_once_with(
+                api_key="test-anthropic-key",
+                model="claude-sonnet-4-5-20250929",
+                max_concurrent=5,
+            )
+            assert result.description_provider is mock_provider_cls.return_value
+
+    def test_description_provider_none_without_api_key(
+        self, _patch_all: dict[str, MagicMock]
+    ) -> None:
+        """Even with nl_description_enabled=True, None if no ANTHROPIC_API_KEY."""
+        _patch_all["env"].ANTHROPIC_API_KEY = ""
+
+        with patch("code_search.factory.ProjectConfig") as mock_config_cls:
+            mock_config = MagicMock()
+            mock_config.terminology_file = None
+            mock_config.search = MagicMock()
+            mock_indexing = MagicMock()
+            mock_indexing.nl_description_enabled = True
+            mock_config.indexing = mock_indexing
+            mock_config_cls.return_value = mock_config
+
+            result = create_components()
+            assert result.description_provider is None
+
+
+class TestIndexingPipelineReceivesDescriptionProvider:
+    """IndexingPipeline should receive description_provider and cache."""
+
+    def test_pipeline_receives_provider_and_cache(self, _patch_all: dict[str, MagicMock]) -> None:
+        _patch_all["env"].ANTHROPIC_API_KEY = "test-key"
+
+        with (
+            patch("code_search.factory.ProjectConfig") as mock_config_cls,
+            patch(
+                "code_search.clients.description.AnthropicDescriptionProvider"
+            ) as mock_provider_cls,
+        ):
+            mock_config = MagicMock()
+            mock_config.terminology_file = None
+            mock_config.search = MagicMock()
+            mock_indexing = MagicMock()
+            mock_indexing.nl_description_enabled = True
+            mock_indexing.nl_description_model = "claude-sonnet-4-5-20250929"
+            mock_indexing.nl_description_max_concurrent = 5
+            mock_config.indexing = mock_indexing
+            mock_config_cls.return_value = mock_config
+
+            create_components()
+
+            _patch_all["IndexingPipeline"].assert_called_once_with(
+                qdrant=_patch_all["QdrantManager"].return_value,
+                embedder=_patch_all["create_embedding_provider"].return_value,
+                description_provider=mock_provider_cls.return_value,
+                cache=_patch_all["CacheDB"].return_value,
+            )

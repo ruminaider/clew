@@ -19,6 +19,7 @@ from code_search.search.rerank import RerankProvider
 
 if TYPE_CHECKING:
     from code_search.clients.base import EmbeddingProvider
+    from code_search.clients.description import DescriptionProvider
 
 
 @dataclass
@@ -33,6 +34,7 @@ class Components:
     indexing_pipeline: IndexingPipeline
     enhancer: QueryEnhancer | None
     reranker: RerankProvider | None
+    description_provider: DescriptionProvider | None = None
 
 
 def create_components(config_path: Path | None = None) -> Components:
@@ -78,8 +80,24 @@ def create_components(config_path: Path | None = None) -> Components:
         search_config=config.search,
     )
 
+    # NL Description provider (optional)
+    description_provider: DescriptionProvider | None = None
+    if config.indexing.nl_description_enabled and env.ANTHROPIC_API_KEY:
+        from code_search.clients.description import AnthropicDescriptionProvider
+
+        description_provider = AnthropicDescriptionProvider(
+            api_key=env.ANTHROPIC_API_KEY,
+            model=config.indexing.nl_description_model,
+            max_concurrent=config.indexing.nl_description_max_concurrent,
+        )
+
     # Indexing
-    indexing_pipeline = IndexingPipeline(qdrant=qdrant, embedder=embedder)
+    indexing_pipeline = IndexingPipeline(
+        qdrant=qdrant,
+        embedder=embedder,
+        description_provider=description_provider,
+        cache=cache,
+    )
 
     return Components(
         config=config,
@@ -90,4 +108,5 @@ def create_components(config_path: Path | None = None) -> Components:
         indexing_pipeline=indexing_pipeline,
         enhancer=enhancer,
         reranker=reranker,
+        description_provider=description_provider,
     )
