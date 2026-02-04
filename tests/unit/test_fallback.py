@@ -69,3 +69,42 @@ class TestSplitFile:
         chunks = split_file("big.txt", plain, max_tokens=100, ast_parser=self.parser)
         for chunk in chunks:
             assert count_tokens(chunk.content) <= 100
+
+    def test_split_file_preserves_docstring(self) -> None:
+        """Docstrings from AST-parsed entities flow through to Chunk metadata."""
+        source = '''def greet(name):
+    """Say hello."""
+    return f"Hello, {name}"
+'''
+        chunks = split_file("test.py", source, max_tokens=3000, ast_parser=self.parser)
+        assert chunks[0].metadata.get("docstring") == "Say hello."
+
+    def test_split_file_no_docstring(self) -> None:
+        """Chunks without docstrings have None in metadata."""
+        source = """def add(a, b):
+    return a + b
+"""
+        chunks = split_file("test.py", source, max_tokens=3000, ast_parser=self.parser)
+        assert chunks[0].metadata.get("docstring") is None
+
+    def test_split_file_docstring_on_class_and_method(self) -> None:
+        """Docstrings propagate for both classes and their methods."""
+        source = '''class Calculator:
+    """A simple calculator."""
+
+    def add(self, a, b):
+        """Add two numbers."""
+        return a + b
+'''
+        chunks = split_file("test.py", source, max_tokens=3000, ast_parser=self.parser)
+        class_chunk = next(c for c in chunks if c.metadata.get("entity_type") == "class")
+        method_chunk = next(c for c in chunks if c.metadata.get("entity_type") == "method")
+        assert class_chunk.metadata["docstring"] == "A simple calculator."
+        assert method_chunk.metadata["docstring"] == "Add two numbers."
+
+    def test_split_file_fallback_chunks_no_docstring_key(self) -> None:
+        """Fallback chunks from non-AST paths do not have docstring in metadata."""
+        plain = "This is just plain text.\n" * 100
+        chunks = split_file("readme.txt", plain, max_tokens=50, ast_parser=self.parser)
+        for chunk in chunks:
+            assert "docstring" not in chunk.metadata

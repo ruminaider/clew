@@ -189,6 +189,7 @@ def _extract_ast_chunks(tree: Any, file_path: str, content: str, max_tokens: int
             "line_start": entity.line_start,
             "line_end": entity.line_end,
             "parent_class": entity.parent_class or "",
+            "docstring": entity.docstring,
         }
         if count_tokens(entity.content) <= max_tokens:
             chunks.append(
