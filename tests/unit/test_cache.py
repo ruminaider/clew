@@ -97,3 +97,31 @@ class TestIndexState:
         cache.set_last_indexed_commit("docs", "def456")
         assert cache.get_last_indexed_commit("code") == "abc123"
         assert cache.get_last_indexed_commit("docs") == "def456"
+
+
+class TestDescriptionCache:
+    """Test NL description caching."""
+
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_get_description_missing(self, cache: CacheDB) -> None:
+        result = cache.get_description("abc123", "claude-sonnet-4-5-20250929")
+        assert result is None
+
+    def test_set_and_get_description(self, cache: CacheDB) -> None:
+        cache.set_description("abc123", "claude-sonnet-4-5-20250929", "Validates email format.")
+        result = cache.get_description("abc123", "claude-sonnet-4-5-20250929")
+        assert result == "Validates email format."
+
+    def test_description_keyed_by_model(self, cache: CacheDB) -> None:
+        cache.set_description("abc123", "model-a", "Description A")
+        cache.set_description("abc123", "model-b", "Description B")
+        assert cache.get_description("abc123", "model-a") == "Description A"
+        assert cache.get_description("abc123", "model-b") == "Description B"
+
+    def test_description_upsert(self, cache: CacheDB) -> None:
+        cache.set_description("abc123", "model-a", "Old")
+        cache.set_description("abc123", "model-a", "New")
+        assert cache.get_description("abc123", "model-a") == "New"

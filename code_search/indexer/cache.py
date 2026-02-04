@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS chunk_cache (
 
 CREATE INDEX IF NOT EXISTS idx_chunk_cache_hash
 ON chunk_cache(file_hash);
+
+CREATE TABLE IF NOT EXISTS description_cache (
+    content_hash TEXT NOT NULL,
+    provider_model TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (content_hash, provider_model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_description_cache_model
+ON description_cache(provider_model);
 """
 
 STATE_SCHEMA = """
@@ -157,6 +168,31 @@ class CacheDB:
                 "(file_path, file_hash, chunk_count, chunk_ids) "
                 "VALUES (?, ?, ?, ?)",
                 (file_path, file_hash, len(chunk_ids), json.dumps(chunk_ids)),
+            )
+
+    def get_description(self, content_hash: str, model: str) -> str | None:
+        """Get cached NL description or None if not found."""
+        with self._get_cache_conn() as conn:
+            row = conn.execute(
+                "SELECT description FROM description_cache "
+                "WHERE content_hash = ? AND provider_model = ?",
+                (content_hash, model),
+            ).fetchone()
+            return row["description"] if row else None
+
+    def set_description(
+        self,
+        content_hash: str,
+        model: str,
+        description: str,
+    ) -> None:
+        """Cache an NL description."""
+        with self._get_cache_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO description_cache "
+                "(content_hash, provider_model, description) "
+                "VALUES (?, ?, ?)",
+                (content_hash, model, description),
             )
 
     def get_last_indexed_commit(self, collection_name: str) -> str | None:
