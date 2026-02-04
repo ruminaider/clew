@@ -18,6 +18,7 @@ class CodeEntity:
     line_start: int
     line_end: int
     parent_class: str | None
+    docstring: str | None = None
 
 
 class PythonChunker:
@@ -52,6 +53,7 @@ class PythonChunker:
                 line_start=node.start_point[0] + 1,
                 line_end=node.end_point[0] + 1,
                 parent_class=None,
+                docstring=self._extract_docstring(node, source_bytes),
             )
             for method in self._get_methods(node):
                 method_name = self._get_name(method)
@@ -64,6 +66,7 @@ class PythonChunker:
                     line_start=method.start_point[0] + 1,
                     line_end=method.end_point[0] + 1,
                     parent_class=name,
+                    docstring=self._extract_docstring(method, source_bytes),
                 )
         elif node.type == "function_definition":
             yield CodeEntity(
@@ -74,7 +77,44 @@ class PythonChunker:
                 line_start=node.start_point[0] + 1,
                 line_end=node.end_point[0] + 1,
                 parent_class=None,
+                docstring=self._extract_docstring(node, source_bytes),
             )
+
+    def _extract_docstring(self, node: Any, source_bytes: bytes) -> str | None:
+        """Extract docstring from a function/class definition node.
+
+        Docstrings are the first expression_statement containing a string
+        in the body block.  f-strings and byte literals are rejected since
+        they cannot be valid Python docstrings.
+        """
+        for child in node.children:
+            if child.type == "block":
+                for stmt in child.children:
+                    if stmt.type == "expression_statement":
+                        for expr in stmt.children:
+                            if expr.type == "string":
+                                raw = source_bytes[expr.start_byte : expr.end_byte].decode("utf-8")
+                                # Reject f-strings and byte literals (not valid Python docstrings)
+                                lower_raw = raw.lstrip().lower()
+                                if lower_raw.startswith(('f"', "f'", 'b"', "b'")):
+                                    return None
+                                # Strip string prefix (r, u) and quote delimiters
+                                stripped_prefix = raw.lstrip("rRuU")
+                                if stripped_prefix.startswith('"""') or stripped_prefix.startswith(
+                                    "'''"
+                                ):
+                                    content = stripped_prefix[3:-3]
+                                elif stripped_prefix.startswith('"') or stripped_prefix.startswith(
+                                    "'"
+                                ):
+                                    content = stripped_prefix[1:-1]
+                                else:
+                                    return None
+                                return content.strip() if content.strip() else None
+                    # Only the first statement can be a docstring
+                    if stmt.type not in ("comment", "newline", "expression_statement"):
+                        break
+        return None
 
     def _get_name(self, node: Any) -> str:
         """Extract name from definition node."""
