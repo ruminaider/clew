@@ -1,0 +1,192 @@
+"""Tests for description generation providers."""
+
+from __future__ import annotations
+
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from code_search.clients.description import DescriptionProvider
+
+
+@pytest.fixture()
+def mock_anthropic() -> MagicMock:
+    """Provide a mock anthropic module in sys.modules."""
+    mock_module = MagicMock()
+    with patch.dict(sys.modules, {"anthropic": mock_module}):
+        yield mock_module
+
+
+def _make_provider(
+    mock_anthropic: MagicMock,
+    *,
+    api_key: str = "test-key",
+    model: str | None = None,
+    max_tokens: int = 150,
+    max_concurrent: int = 5,
+) -> AnthropicDescriptionProvider:  # noqa: F821
+    """Create an AnthropicDescriptionProvider with the mocked anthropic module."""
+    from code_search.clients.description import AnthropicDescriptionProvider
+
+    kwargs: dict[str, object] = {"api_key": api_key}
+    if model is not None:
+        kwargs["model"] = model
+    kwargs["max_tokens"] = max_tokens
+    kwargs["max_concurrent"] = max_concurrent
+    return AnthropicDescriptionProvider(**kwargs)  # type: ignore[arg-type]
+
+
+class TestDescriptionProviderABC:
+    """Test the ABC cannot be instantiated directly."""
+
+    def test_cannot_instantiate_abc(self) -> None:
+        with pytest.raises(TypeError):
+            DescriptionProvider()  # type: ignore[abstract]
+
+
+class TestAnthropicDescriptionProvider:
+    """Test Anthropic Claude description provider."""
+
+    def test_model_name(self, mock_anthropic: MagicMock) -> None:
+        provider = _make_provider(mock_anthropic)
+        assert provider.model_name == "claude-sonnet-4-5-20250929"
+
+    def test_custom_model(self, mock_anthropic: MagicMock) -> None:
+        provider = _make_provider(mock_anthropic, model="claude-haiku-4-5-20251001")
+        assert provider.model_name == "claude-haiku-4-5-20251001"
+
+    async def test_generate_description(self, mock_anthropic: MagicMock) -> None:
+        provider = _make_provider(mock_anthropic)
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Validate an email address format.")]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            result = await provider.generate_description(
+                code='def validate_email(email: str) -> bool:\n    return "@" in email',
+                language="python",
+                entity_type="function",
+                name="validate_email",
+            )
+
+        assert result == "Validate an email address format."
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["model"] == "claude-sonnet-4-5-20250929"
+        assert call_kwargs["max_tokens"] == 150
+
+    async def test_generate_description_strips_whitespace(self, mock_anthropic: MagicMock) -> None:
+        provider = _make_provider(mock_anthropic)
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="  Check user permissions.  \n")]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            result = await provider.generate_description(
+                code="def check_perms(): pass",
+                language="python",
+                entity_type="function",
+                name="check_perms",
+            )
+
+        assert result == "Check user permissions."
+
+    async def test_generate_description_returns_none_on_error(
+        self, mock_anthropic: MagicMock
+    ) -> None:
+        provider = _make_provider(mock_anthropic)
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.side_effect = Exception("API error")
+            result = await provider.generate_description(
+                code="def broken(): pass",
+                language="python",
+                entity_type="function",
+                name="broken",
+            )
+
+        assert result is None
+
+    async def test_generate_description_returns_none_on_empty(
+        self, mock_anthropic: MagicMock
+    ) -> None:
+        provider = _make_provider(mock_anthropic)
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="   ")]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            result = await provider.generate_description(
+                code="def empty(): pass",
+                language="python",
+                entity_type="function",
+                name="empty",
+            )
+
+        assert result is None
+
+    async def test_generate_batch(self, mock_anthropic: MagicMock) -> None:
+        provider = _make_provider(mock_anthropic)
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="A description.")]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            items = [
+                {
+                    "code": "def a(): pass",
+                    "language": "python",
+                    "entity_type": "function",
+                    "name": "a",
+                },
+                {
+                    "code": "def b(): pass",
+                    "language": "python",
+                    "entity_type": "function",
+                    "name": "b",
+                },
+            ]
+            results = await provider.generate_batch(items)
+
+        assert len(results) == 2
+        assert all(r == "A description." for r in results)
+
+    async def test_generate_batch_respects_concurrency(self, mock_anthropic: MagicMock) -> None:
+        """Verify semaphore limits concurrency in generate_batch."""
+        provider = _make_provider(mock_anthropic, max_concurrent=2)
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Desc.")]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            items = [
+                {
+                    "code": f"def f{i}(): pass",
+                    "language": "python",
+                    "entity_type": "function",
+                    "name": f"f{i}",
+                }
+                for i in range(5)
+            ]
+            results = await provider.generate_batch(items)
+
+        assert len(results) == 5
+        assert mock_create.call_count == 5
