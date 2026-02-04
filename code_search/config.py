@@ -12,6 +12,7 @@ class Environment:
     QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY") or None
     CACHE_DIR: Path = Path(os.environ.get("CODE_SEARCH_CACHE_DIR", ".code-search"))
     LOG_LEVEL: str = os.environ.get("CODE_SEARCH_LOG_LEVEL", "INFO")
+    ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
 
     @classmethod
     def validate(cls) -> list[str]:

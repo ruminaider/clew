@@ -57,6 +57,9 @@ class IndexingConfig(BaseModel):
     fallback_max_tokens: int = Field(default=3000, ge=500, le=8000)
     embedding_provider: str = Field(default="voyage")
     embedding_model: str = Field(default="voyage-code-3")
+    nl_description_enabled: bool = Field(default=False)
+    nl_description_model: str = Field(default="claude-sonnet-4-5-20250929")
+    nl_description_max_concurrent: int = Field(default=5, ge=1, le=20)
 
 
 class SearchConfig(BaseModel):
