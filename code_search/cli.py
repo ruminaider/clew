@@ -21,6 +21,11 @@ def index(
     config: Path = typer.Option("config.yaml", "--config", "-c", help="Config file path"),
     full: bool = typer.Option(False, "--full", help="Full reindex (ignore change detection)"),
     files: list[str] | None = typer.Option(None, "--files", "-f", help="Specific files to index"),
+    nl_descriptions: bool = typer.Option(
+        False,
+        "--nl-descriptions",
+        help="Generate NL descriptions for undocumented code (requires ANTHROPIC_API_KEY)",
+    ),
 ) -> None:
     """Index the codebase for semantic search."""
     from code_search.exceptions import CodeSearchError
@@ -28,7 +33,10 @@ def index(
     from code_search.indexer.change_detector import ChangeDetector
 
     try:
-        components = create_components(config_path=config if config.exists() else None)
+        components = create_components(
+            config_path=config if config.exists() else None,
+            nl_descriptions=nl_descriptions,
+        )
     except CodeSearchError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None

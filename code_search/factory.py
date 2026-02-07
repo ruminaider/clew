@@ -37,11 +37,16 @@ class Components:
     description_provider: DescriptionProvider | None = None
 
 
-def create_components(config_path: Path | None = None) -> Components:
+def create_components(
+    config_path: Path | None = None,
+    *,
+    nl_descriptions: bool = False,
+) -> Components:
     """Create all components with proper configuration.
 
     Args:
         config_path: Path to YAML config file. Uses defaults if None or missing.
+        nl_descriptions: If True, override config to enable NL description generation.
 
     Returns:
         Components dataclass with all wired components.
@@ -52,6 +57,9 @@ def create_components(config_path: Path | None = None) -> Components:
         config = ProjectConfig.from_yaml(config_path)
     else:
         config = ProjectConfig()
+
+    if nl_descriptions:
+        config.indexing.nl_description_enabled = True
 
     # Infrastructure
     qdrant = QdrantManager(url=env.QDRANT_URL, api_key=env.QDRANT_API_KEY)

@@ -174,6 +174,25 @@ class TestDescriptionProviderNoneByDefault:
         assert result.description_provider is None
 
 
+class TestNLDescriptionsOverride:
+    """nl_descriptions=True overrides config to enable descriptions."""
+
+    def test_create_components_nl_descriptions_override(
+        self, _patch_all: dict[str, MagicMock]
+    ) -> None:
+        """nl_descriptions=True overrides config to enable descriptions."""
+        _patch_all["env"].ANTHROPIC_API_KEY = "test-key"
+
+        with patch(
+            "code_search.clients.description.AnthropicDescriptionProvider"
+        ) as mock_provider_cls:
+            result = create_components(nl_descriptions=True)
+
+            assert result.config.indexing.nl_description_enabled is True
+            mock_provider_cls.assert_called_once()
+            assert result.description_provider is mock_provider_cls.return_value
+
+
 class TestDescriptionProviderCreatedWhenEnabled:
     """When nl_description_enabled is True and ANTHROPIC_API_KEY is set."""
 

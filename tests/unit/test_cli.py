@@ -180,6 +180,51 @@ class TestIndexCommand:
         assert result.exit_code == 1
 
 
+class TestIndexNLDescriptions:
+    @patch("code_search.discovery.discover_files")
+    @patch("code_search.factory.create_components")
+    def test_index_with_nl_descriptions_flag(
+        self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
+    ) -> None:
+        """--nl-descriptions flag passes nl_descriptions=True to factory."""
+        test_py = tmp_path / "test.py"
+        test_py.write_text("x = 1")
+        mock_discover.return_value = [test_py]
+        mock_components = mock_factory.return_value
+        mock_components.indexing_pipeline.index_files = AsyncMock(
+            return_value=Mock(files_processed=1, chunks_created=3, files_skipped=0, errors=[])
+        )
+
+        result = runner.invoke(app, ["index", str(tmp_path), "--full", "--nl-descriptions"])
+        assert result.exit_code == 0
+        # Verify nl_descriptions=True was passed to create_components
+        mock_factory.assert_called_once_with(config_path=None, nl_descriptions=True)
+
+    @patch("code_search.discovery.discover_files")
+    @patch("code_search.factory.create_components")
+    def test_index_without_nl_descriptions_flag(
+        self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
+    ) -> None:
+        """Without --nl-descriptions, nl_descriptions=False is passed."""
+        test_py = tmp_path / "test.py"
+        test_py.write_text("x = 1")
+        mock_discover.return_value = [test_py]
+        mock_components = mock_factory.return_value
+        mock_components.indexing_pipeline.index_files = AsyncMock(
+            return_value=Mock(files_processed=1, chunks_created=3, files_skipped=0, errors=[])
+        )
+
+        result = runner.invoke(app, ["index", str(tmp_path), "--full"])
+        assert result.exit_code == 0
+        mock_factory.assert_called_once_with(config_path=None, nl_descriptions=False)
+
+    def test_nl_descriptions_in_help(self) -> None:
+        """--nl-descriptions appears in help text."""
+        result = runner.invoke(app, ["index", "--help"])
+        assert result.exit_code == 0
+        assert "--nl-descriptions" in result.stdout
+
+
 class TestServeCommand:
     @patch("code_search.mcp_server.mcp")
     def test_serve_calls_mcp_run(self, mock_mcp: Mock) -> None:
