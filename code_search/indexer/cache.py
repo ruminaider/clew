@@ -7,6 +7,10 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from code_search.indexer.relationships import Relationship
 
 CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -76,6 +80,19 @@ CREATE TABLE IF NOT EXISTS safety_state (
     last_checked_at TEXT DEFAULT (datetime('now')),
     limit_breached BOOLEAN DEFAULT FALSE
 );
+
+CREATE TABLE IF NOT EXISTS code_relationships (
+    source_entity TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    target_entity TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    confidence TEXT DEFAULT 'static',
+    PRIMARY KEY (source_entity, relationship, target_entity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rel_source ON code_relationships(source_entity);
+CREATE INDEX IF NOT EXISTS idx_rel_target ON code_relationships(target_entity);
+CREATE INDEX IF NOT EXISTS idx_rel_file ON code_relationships(file_path);
 """
 
 
@@ -214,4 +231,87 @@ class CacheDB:
                     last_commit = excluded.last_commit,
                     last_indexed_at = excluded.last_indexed_at""",
                 (collection_name, commit_hash),
+            )
+
+    def store_relationships(self, relationships: list[Relationship]) -> None:
+        """Store relationships, upserting on conflict."""
+        with self._get_state_conn() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO code_relationships
+                   (source_entity, relationship, target_entity, file_path, confidence)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (r.source_entity, r.relationship, r.target_entity, r.file_path, r.confidence)
+                    for r in relationships
+                ],
+            )
+
+    def get_relationships(
+        self,
+        entity: str,
+        *,
+        direction: str = "both",
+        relationship_types: list[str] | None = None,
+    ) -> list[Relationship]:
+        """Get relationships for an entity.
+
+        Args:
+            entity: Entity identifier (e.g., "app/main.py::Foo")
+            direction: "inbound", "outbound", or "both"
+            relationship_types: Optional filter by relationship type
+        """
+        from code_search.indexer.relationships import Relationship as _Relationship
+
+        results: list[_Relationship] = []
+        with self._get_state_conn() as conn:
+            if direction in ("outbound", "both"):
+                query = (
+                    "SELECT source_entity, relationship, target_entity, file_path, confidence "
+                    "FROM code_relationships WHERE source_entity = ?"
+                )
+                params: list[str] = [entity]
+                if relationship_types:
+                    placeholders = ",".join("?" * len(relationship_types))
+                    query += f" AND relationship IN ({placeholders})"
+                    params.extend(relationship_types)
+                for row in conn.execute(query, params):
+                    results.append(
+                        _Relationship(
+                            source_entity=row[0],
+                            relationship=row[1],
+                            target_entity=row[2],
+                            file_path=row[3],
+                            confidence=row[4],
+                        )
+                    )
+
+            if direction in ("inbound", "both"):
+                query = (
+                    "SELECT source_entity, relationship, target_entity, file_path, confidence "
+                    "FROM code_relationships WHERE target_entity = ?"
+                )
+                params = [entity]
+                if relationship_types:
+                    placeholders = ",".join("?" * len(relationship_types))
+                    query += f" AND relationship IN ({placeholders})"
+                    params.extend(relationship_types)
+                for row in conn.execute(query, params):
+                    results.append(
+                        _Relationship(
+                            source_entity=row[0],
+                            relationship=row[1],
+                            target_entity=row[2],
+                            file_path=row[3],
+                            confidence=row[4],
+                        )
+                    )
+
+        return results
+
+    def delete_relationships_by_file(self, file_path: str) -> None:
+        """Delete all relationships originating from a file."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                "DELETE FROM code_relationships WHERE file_path = ?",
+                (file_path,),
             )

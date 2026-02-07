@@ -125,3 +125,67 @@ class TestDescriptionCache:
         cache.set_description("abc123", "model-a", "Old")
         cache.set_description("abc123", "model-a", "New")
         assert cache.get_description("abc123", "model-a") == "New"
+
+
+class TestRelationshipStore:
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_store_and_get_relationships(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
+            Relationship("a.py::Foo", "inherits", "c.py::Base", "a.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.get_relationships("a.py::Foo", direction="outbound")
+        assert len(result) == 2
+
+    def test_get_relationships_inbound(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::main", "calls", "b.py::helper", "a.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.get_relationships("b.py::helper", direction="inbound")
+        assert len(result) == 1
+        assert result[0].source_entity == "a.py::main"
+
+    def test_get_relationships_both_directions(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
+            Relationship("c.py::Baz", "calls", "a.py::Foo", "c.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.get_relationships("a.py::Foo", direction="both")
+        assert len(result) == 2
+
+    def test_delete_relationships_by_file(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
+            Relationship("b.py::Bar", "calls", "c.py::Baz", "b.py"),
+        ]
+        cache.store_relationships(rels)
+        cache.delete_relationships_by_file("a.py")
+        result = cache.get_relationships("a.py::Foo", direction="outbound")
+        assert len(result) == 0
+        # b.py relationships should still exist
+        result = cache.get_relationships("b.py::Bar", direction="outbound")
+        assert len(result) == 1
+
+    def test_store_relationships_upserts(self, cache: CacheDB) -> None:
+        """Storing same relationship twice doesn't create duplicates."""
+        from code_search.indexer.relationships import Relationship
+
+        rel = Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py")
+        cache.store_relationships([rel])
+        cache.store_relationships([rel])
+        result = cache.get_relationships("a.py::Foo", direction="outbound")
+        assert len(result) == 1
