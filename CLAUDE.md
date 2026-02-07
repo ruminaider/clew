@@ -10,6 +10,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **Phase 3 (MCP Integration & CLI) is complete.** 31 source modules, 27 test files, 349 tests passing at 92% coverage.
 
+**V1.1 (NL Descriptions) is complete.** 32 source modules, 30 test files, 394 tests passing. LLM-generated descriptions for undocumented code chunks, prepended before embedding to improve semantic search quality.
+
 ## Module Inventory
 
 ```
@@ -21,6 +23,7 @@ code_search/
 │   └── tokenizer.py    # tiktoken cl100k_base token counting
 ├── clients/            # External service abstractions
 │   ├── base.py         # EmbeddingProvider ABC (embed, embed_query, dimensions, model_name)
+│   ├── description.py  # DescriptionProvider ABC + AnthropicDescriptionProvider — NL descriptions for code
 │   ├── qdrant.py       # QdrantManager — collection CRUD, hybrid query with RRF fusion, delete by file_path
 │   └── voyage.py       # VoyageEmbeddingProvider — httpx async client for Voyage AI
 ├── indexer/            # File discovery, caching, change detection, indexing pipeline
@@ -73,6 +76,7 @@ mypy code_search/              # Type check
 # CLI commands
 code-search index [PROJECT_ROOT] --full    # Full reindex
 code-search index [PROJECT_ROOT]           # Incremental (change detection)
+code-search index [PROJECT_ROOT] --nl-descriptions  # Generate NL descriptions (requires ANTHROPIC_API_KEY)
 code-search search "query" --raw           # Search with JSON output
 code-search status                          # Show Qdrant health + index stats
 code-search serve                           # Start MCP server (stdio transport)
@@ -85,6 +89,7 @@ code-search serve                           # Start MCP server (stdio transport)
 - `docs/adr/` — Architecture Decision Records (Qdrant over Milvus, build vs adopt)
 - `docs/plans/2026-02-06-phase1-core-infrastructure.md` — Phase 1 plan (complete)
 - `docs/plans/2026-02-06-phase2-search-pipeline.md` — Phase 2 plan (complete)
+- `docs/plans/2026-02-09-v1.1-nl-descriptions.md` — V1.1 NL Descriptions plan (complete)
 - `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.2+)
 
 ## Tech Stack
@@ -104,7 +109,8 @@ Add to Claude Code's `.mcp.json`:
       "args": ["serve"],
       "env": {
         "VOYAGE_API_KEY": "your-key-here",
-        "QDRANT_URL": "http://localhost:6333"
+        "QDRANT_URL": "http://localhost:6333",
+        "ANTHROPIC_API_KEY": "your-key-here (optional, for NL descriptions)"
       }
     }
   }

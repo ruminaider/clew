@@ -316,6 +316,15 @@ CREATE TABLE IF NOT EXISTS chunk_cache (
 
 CREATE INDEX IF NOT EXISTS idx_chunk_cache_hash
 ON chunk_cache(file_hash);
+
+-- Description cache: LLM-generated NL descriptions for code chunks (V1.1)
+CREATE TABLE IF NOT EXISTS description_cache (
+    content_hash TEXT NOT NULL,
+    provider_model TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (content_hash, provider_model)
+);
 ```
 
 ### state.db Schema
@@ -523,6 +532,9 @@ class IndexingConfig(BaseModel):
     fallback_max_tokens: int = Field(default=3000, ge=500, le=8000)
     embedding_provider: str = Field(default="voyage")  # voyage | openai | ollama
     embedding_model: str = Field(default="voyage-code-3")
+    nl_description_enabled: bool = Field(default=False)  # V1.1: generate NL descriptions
+    nl_description_model: str = Field(default="claude-sonnet-4-5-20250929")
+    nl_description_max_concurrent: int = Field(default=5, ge=1, le=20)
 
 class SearchConfig(BaseModel):
     """Search pipeline configuration. See Tradeoff B resolution."""
@@ -1245,6 +1257,59 @@ Phase 3 wires the search pipeline into a usable product: MCP server (4 tools for
 | `tests/unit/test_mcp_server.py` | 42 | All 4 MCP tools, error handling, edge cases |
 | `tests/unit/test_cli.py` | 11 | All CLI commands, `--raw` output, error display |
 | `tests/integration/test_end_to_end.py` | 12 | Full pipeline: index -> search, change detection, MCP tools |
+
+### V1.1: NL Descriptions
+
+V1.1 adds LLM-generated natural language descriptions for code chunks that lack docstrings, improving semantic search quality for NL-to-code queries. Descriptions are prepended to chunk content before embedding, leveraging voyage-code-3's docstring-code pair training distribution.
+
+#### Architecture
+
+- **DescriptionProvider ABC** (`clients/description.py`) — pluggable interface with `AnthropicDescriptionProvider` as default
+- **Prepend approach**: `# Description: {desc}\n\n{code}` before embedding; BM25 sparse vector uses raw content only
+- **Cache-first**: Descriptions cached in SQLite by `(content_hash, provider_model)` to avoid redundant API calls
+- **Docstring extraction**: tree-sitter AST walking finds first `expression_statement > string` in function/class body blocks
+- **Graceful degradation**: LLM failures skip description, log warning, index chunk without it
+
+#### Delivered Modules
+
+| Module | Description |
+|--------|-------------|
+| `code_search/clients/description.py` | `DescriptionProvider` ABC + `AnthropicDescriptionProvider` — async LLM descriptions with semaphore throttling |
+| `code_search/chunker/strategies.py` | Added `docstring` field to `CodeEntity`, `_extract_docstring()` to `PythonChunker` |
+| `code_search/indexer/cache.py` | Added `description_cache` table, `get_description()` / `set_description()` |
+| `code_search/indexer/pipeline.py` | Added `_generate_descriptions()`, prepend logic in `_embed_and_upsert()` |
+| `code_search/models.py` | Added `nl_description_enabled`, `nl_description_model`, `nl_description_max_concurrent` to `IndexingConfig` |
+| `code_search/config.py` | Added `ANTHROPIC_API_KEY` to `Environment` |
+| `code_search/factory.py` | Conditional `AnthropicDescriptionProvider` creation, `nl_descriptions` override parameter |
+| `code_search/cli.py` | Added `--nl-descriptions` flag to `index` command |
+
+#### Configuration
+
+```yaml
+# In config.yaml
+indexing:
+  nl_description_enabled: true
+  nl_description_model: "claude-sonnet-4-5-20250929"
+  nl_description_max_concurrent: 5
+```
+
+Or via CLI flag: `code-search index --nl-descriptions`
+
+Requires `ANTHROPIC_API_KEY` environment variable.
+
+#### Test Coverage
+
+| Test File | Tests | Description |
+|-----------|-------|-------------|
+| `tests/unit/test_strategies.py` | 8 | Docstring extraction from AST (including f/b/r string edge cases) |
+| `tests/unit/test_description_provider.py` | 9 | DescriptionProvider ABC + Anthropic impl, concurrency |
+| `tests/unit/test_cache.py` | 4 | Description cache get/set |
+| `tests/unit/test_config.py` | 2 | ANTHROPIC_API_KEY env var |
+| `tests/unit/test_models.py` | 3 | NL description config fields |
+| `tests/unit/test_fallback.py` | 4 | Docstring propagation through chunk metadata |
+| `tests/unit/test_factory.py` | 5 | Description provider wiring + nl_descriptions override |
+| `tests/unit/test_indexing_pipeline.py` | 7 | Pipeline description generation + prepend logic |
+| `tests/unit/test_cli.py` | 3 | CLI --nl-descriptions flag |
 
 ---
 
