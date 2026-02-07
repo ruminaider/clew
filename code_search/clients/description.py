@@ -76,7 +76,7 @@ class AnthropicDescriptionProvider(DescriptionProvider):
         max_tokens: int = 150,
         max_concurrent: int = 5,
     ) -> None:
-        import anthropic  # type: ignore[import-not-found]
+        import anthropic
 
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
@@ -108,7 +108,10 @@ class AnthropicDescriptionProvider(DescriptionProvider):
                     max_tokens=self._max_tokens,
                     messages=[{"role": "user", "content": prompt}],
                 )
-            text = response.content[0].text.strip()
+            block = response.content[0]
+            if not hasattr(block, "text"):
+                return None
+            text: str = block.text.strip()
             return text if text else None
         except Exception:
             logger.warning(
