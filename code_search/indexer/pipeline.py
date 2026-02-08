@@ -17,6 +17,9 @@ from qdrant_client import models
 
 from code_search.chunker.fallback import Chunk, split_file
 from code_search.chunker.parser import ASTParser
+from code_search.indexer.extractors.python import PythonRelationshipExtractor
+from code_search.indexer.extractors.tests import TestRelationshipExtractor
+from code_search.indexer.extractors.typescript import TypeScriptRelationshipExtractor
 from code_search.indexer.metadata import (
     build_chunk_id,
     classify_layer,
@@ -30,6 +33,7 @@ if TYPE_CHECKING:
     from code_search.clients.description import DescriptionProvider
     from code_search.clients.qdrant import QdrantManager
     from code_search.indexer.cache import CacheDB
+    from code_search.indexer.extractors.base import RelationshipExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +106,16 @@ class IndexingPipeline:
         self._max_tokens = max_tokens
         self._parser = ASTParser()
 
+        # Language-specific relationship extractors
+        _ts_extractor = TypeScriptRelationshipExtractor()
+        self._extractors: dict[str, RelationshipExtractor] = {
+            "python": PythonRelationshipExtractor(),
+            "typescript": _ts_extractor,
+            "tsx": _ts_extractor,
+            "javascript": _ts_extractor,
+        }
+        self._test_extractor = TestRelationshipExtractor()
+
     async def index_files(
         self,
         files: list[Path],
@@ -138,6 +152,10 @@ class IndexingPipeline:
             all_chunks.extend(chunks)
             result.files_processed += 1
 
+            # Extract and store code relationships
+            if self._cache:
+                self._extract_relationships(str(file_path), content)
+
         if not all_chunks:
             return result
 
@@ -148,6 +166,33 @@ class IndexingPipeline:
             result.chunks_created += len(batch)
 
         return result
+
+    def _extract_relationships(self, file_path: str, content: str) -> None:
+        """Extract code relationships from a file and store in cache."""
+        assert self._cache is not None  # caller checks
+
+        language = _detect_language(file_path)
+        extractor = self._extractors.get(language)
+
+        # Delete old relationships for this file before re-extracting
+        self._cache.delete_relationships_by_file(file_path)
+
+        all_rels: list = []
+
+        if extractor and language in ("python", "typescript", "tsx", "javascript"):
+            try:
+                tree = self._parser.parse(content, language)
+                rels = extractor.extract(tree, content, file_path)
+                all_rels.extend(rels)
+
+                # Also run test relationship extractor
+                test_rels = self._test_extractor.extract(tree, content, file_path)
+                all_rels.extend(test_rels)
+            except Exception:
+                logger.debug("Relationship extraction failed for %s", file_path)
+
+        if all_rels:
+            self._cache.store_relationships(all_rels)
 
     async def _generate_descriptions(self, chunks: list[Chunk]) -> list[str | None] | None:
         """Generate NL descriptions for chunks that lack docstrings.

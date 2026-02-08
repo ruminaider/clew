@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from code_search.indexer.cache import CacheDB
 from code_search.indexer.pipeline import (
     IndexingPipeline,
     IndexingResult,
@@ -399,3 +400,98 @@ class TestPipelineDescriptions:
             for call in mock_sparse.call_args_list:
                 text_arg = call[0][0]
                 assert not text_arg.startswith("# Description:")
+
+
+class TestRelationshipExtraction:
+    @pytest.fixture
+    def mock_qdrant(self) -> Mock:
+        qdrant = Mock()
+        qdrant.ensure_collection = Mock()
+        qdrant.upsert_points = Mock()
+        qdrant.delete_by_file_path = Mock()
+        return qdrant
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        embedder = Mock()
+        embedder.embed = AsyncMock(side_effect=lambda texts, **kwargs: [[0.1] * 1024] * len(texts))
+        embedder.model_name = "voyage-code-3"
+        embedder.dimensions = 1024
+        return embedder
+
+    @pytest.fixture
+    def pipeline_with_cache(self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path) -> IndexingPipeline:
+        cache = CacheDB(tmp_path / ".cache")
+        return IndexingPipeline(
+            qdrant=mock_qdrant,
+            embedder=mock_embedder,
+            cache=cache,
+        )
+
+    async def test_pipeline_extracts_relationships(
+        self, pipeline_with_cache: IndexingPipeline, tmp_path: Path
+    ) -> None:
+        """Indexing a Python file extracts import relationships."""
+        py_file = tmp_path / "app" / "main.py"
+        py_file.parent.mkdir(parents=True, exist_ok=True)
+        py_file.write_text("import os\n\ndef main():\n    pass\n")
+
+        result = await pipeline_with_cache.index_files([py_file], collection="code")
+        assert result.files_processed == 1
+
+        # Check relationships were stored
+        rels = pipeline_with_cache._cache.get_relationships(
+            str(py_file), direction="outbound"
+        )
+        assert any(r.relationship == "imports" for r in rels)
+
+    async def test_pipeline_without_cache_skips_relationships(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> None:
+        """Pipeline without cache still indexes files (no relationship storage)."""
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder)
+        py_file = tmp_path / "test.py"
+        py_file.write_text("x = 1\n")
+        result = await pipeline.index_files([py_file], collection="code")
+        assert result.files_processed == 1
+
+    async def test_pipeline_extracts_typescript_relationships(
+        self, pipeline_with_cache: IndexingPipeline, tmp_path: Path
+    ) -> None:
+        """Indexing a TypeScript file extracts import relationships."""
+        ts_file = tmp_path / "src" / "app.ts"
+        ts_file.parent.mkdir(parents=True, exist_ok=True)
+        ts_file.write_text("import { Foo } from './foo';\n\nconst x = 1;\n")
+
+        result = await pipeline_with_cache.index_files([ts_file], collection="code")
+        assert result.files_processed == 1
+
+        rels = pipeline_with_cache._cache.get_relationships(
+            str(ts_file), direction="outbound"
+        )
+        assert any(r.relationship == "imports" for r in rels)
+
+    async def test_pipeline_deletes_old_relationships_on_reindex(
+        self, pipeline_with_cache: IndexingPipeline, tmp_path: Path
+    ) -> None:
+        """Re-indexing a file deletes old relationships before extracting new ones."""
+        py_file = tmp_path / "app" / "models.py"
+        py_file.parent.mkdir(parents=True, exist_ok=True)
+        py_file.write_text("import json\n")
+
+        await pipeline_with_cache.index_files([py_file], collection="code")
+        rels1 = pipeline_with_cache._cache.get_relationships(
+            str(py_file), direction="outbound"
+        )
+        assert len(rels1) >= 1
+
+        # Change file content and re-index
+        py_file.write_text("import os\n")
+        await pipeline_with_cache.index_files([py_file], collection="code")
+        rels2 = pipeline_with_cache._cache.get_relationships(
+            str(py_file), direction="outbound"
+        )
+        # Old "json" import should be gone, only "os" remains
+        targets = [r.target_entity for r in rels2]
+        assert "os" in targets
+        assert "json" not in targets
