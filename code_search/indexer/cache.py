@@ -315,3 +315,62 @@ class CacheDB:
                 "DELETE FROM code_relationships WHERE file_path = ?",
                 (file_path,),
             )
+
+    def traverse_relationships(
+        self,
+        entity: str,
+        *,
+        direction: str = "both",
+        max_depth: int = 2,
+        relationship_types: list[str] | None = None,
+    ) -> list[dict[str, object]]:
+        """BFS traversal of the relationship graph.
+
+        Returns list of dicts with: source_entity, relationship, target_entity,
+        confidence, depth.
+        """
+        from collections import deque
+
+        visited: set[str] = {entity}
+        queue: deque[tuple[str, int]] = deque([(entity, 0)])
+        results: list[dict[str, object]] = []
+        seen_edges: set[tuple[str, str, str]] = set()
+
+        while queue:
+            current, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+
+            neighbors = self.get_relationships(
+                current, direction=direction, relationship_types=relationship_types
+            )
+
+            for rel in neighbors:
+                edge_key = (rel.source_entity, rel.relationship, rel.target_entity)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+
+                results.append(
+                    {
+                        "source_entity": rel.source_entity,
+                        "relationship": rel.relationship,
+                        "target_entity": rel.target_entity,
+                        "confidence": rel.confidence,
+                        "depth": depth + 1,
+                    }
+                )
+
+                # Determine the next entity to follow
+                if direction != "inbound" and rel.source_entity == current:
+                    next_entity = rel.target_entity
+                elif direction != "outbound" and rel.target_entity == current:
+                    next_entity = rel.source_entity
+                else:
+                    continue
+
+                if next_entity not in visited:
+                    visited.add(next_entity)
+                    queue.append((next_entity, depth + 1))
+
+        return results

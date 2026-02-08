@@ -189,3 +189,81 @@ class TestRelationshipStore:
         cache.store_relationships([rel])
         result = cache.get_relationships("a.py::Foo", direction="outbound")
         assert len(result) == 1
+
+
+class TestBFSTraversal:
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_single_hop(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py")]
+        cache.store_relationships(rels)
+        result = cache.traverse_relationships("a.py::Foo", direction="outbound", max_depth=1)
+        assert len(result) == 1
+        assert result[0]["depth"] == 1
+
+    def test_multi_hop(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
+            Relationship("b.py::Bar", "calls", "c.py::Baz", "b.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.traverse_relationships("a.py::Foo", direction="outbound", max_depth=2)
+        assert len(result) == 2
+        depths = {r["target_entity"]: r["depth"] for r in result}
+        assert depths["b.py::Bar"] == 1
+        assert depths["c.py::Baz"] == 2
+
+    def test_max_depth_limits_traversal(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::A", "calls", "b.py::B", "a.py"),
+            Relationship("b.py::B", "calls", "c.py::C", "b.py"),
+            Relationship("c.py::C", "calls", "d.py::D", "c.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.traverse_relationships("a.py::A", direction="outbound", max_depth=1)
+        assert len(result) == 1
+
+    def test_filter_by_relationship_type(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
+            Relationship("a.py::Foo", "calls", "c.py::Baz", "a.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.traverse_relationships(
+            "a.py::Foo", direction="outbound", max_depth=1, relationship_types=["imports"]
+        )
+        assert len(result) == 1
+        assert result[0]["relationship"] == "imports"
+
+    def test_cycle_detection(self, cache: CacheDB) -> None:
+        """BFS doesn't loop on circular references."""
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::A", "calls", "b.py::B", "a.py"),
+            Relationship("b.py::B", "calls", "a.py::A", "b.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.traverse_relationships("a.py::A", direction="outbound", max_depth=5)
+        assert len(result) == 2
+
+    def test_inbound_traversal(self, cache: CacheDB) -> None:
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::A", "calls", "c.py::C", "a.py"),
+            Relationship("b.py::B", "calls", "c.py::C", "b.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.traverse_relationships("c.py::C", direction="inbound", max_depth=1)
+        assert len(result) == 2
