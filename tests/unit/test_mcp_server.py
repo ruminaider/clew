@@ -11,6 +11,7 @@ from code_search.mcp_server import (
     get_context,
     index_status,
     search,
+    trace,
 )
 
 
@@ -632,3 +633,74 @@ class TestIndexStatusTool:
         assert ".txt" not in extensions
         assert ".py" in extensions
         assert ".tsx" in extensions
+
+
+class TestTraceTool:
+    @patch("code_search.mcp_server._get_components")
+    async def test_trace_outbound(self, mock_get_components) -> None:
+        mock_components = _mock_components()
+        mock_components.cache.traverse_relationships.return_value = [
+            {
+                "source_entity": "app/main.py::Foo",
+                "relationship": "calls",
+                "target_entity": "app/utils.py::helper",
+                "confidence": "inferred",
+                "depth": 1,
+            }
+        ]
+        mock_get_components.return_value = mock_components
+
+        result = await trace(entity="app/main.py::Foo", direction="outbound")
+        assert result["entity"] == "app/main.py::Foo"
+        assert len(result["relationships"]) == 1
+        assert result["relationships"][0]["target_entity"] == "app/utils.py::helper"
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_trace_with_max_depth(self, mock_get_components) -> None:
+        mock_components = _mock_components()
+        mock_components.cache.traverse_relationships.return_value = []
+        mock_get_components.return_value = mock_components
+
+        await trace(entity="a.py::Foo", max_depth=3)
+        mock_components.cache.traverse_relationships.assert_called_once_with(
+            "a.py::Foo", direction="both", max_depth=3, relationship_types=None
+        )
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_trace_with_relationship_filter(self, mock_get_components) -> None:
+        mock_components = _mock_components()
+        mock_components.cache.traverse_relationships.return_value = []
+        mock_get_components.return_value = mock_components
+
+        await trace(
+            entity="a.py::Foo",
+            relationship_types=["imports", "calls"],
+        )
+        mock_components.cache.traverse_relationships.assert_called_once_with(
+            "a.py::Foo",
+            direction="both",
+            max_depth=2,
+            relationship_types=["imports", "calls"],
+        )
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_trace_max_depth_clamped(self, mock_get_components) -> None:
+        """max_depth is clamped to 5."""
+        mock_components = _mock_components()
+        mock_components.cache.traverse_relationships.return_value = []
+        mock_get_components.return_value = mock_components
+
+        await trace(entity="a.py::Foo", max_depth=10)
+        mock_components.cache.traverse_relationships.assert_called_once_with(
+            "a.py::Foo", direction="both", max_depth=5, relationship_types=None
+        )
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_trace_error_handling(self, mock_get_components) -> None:
+        mock_components = _mock_components()
+        mock_components.cache.traverse_relationships.side_effect = Exception("DB error")
+        mock_get_components.return_value = mock_components
+
+        result = await trace(entity="a.py::Foo")
+        assert "error" in result
+        assert "fix" in result

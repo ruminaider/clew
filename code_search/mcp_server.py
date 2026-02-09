@@ -203,6 +203,47 @@ async def explain(
 
 
 @mcp.tool()
+async def trace(
+    entity: str,
+    direction: str = "both",
+    max_depth: int = 2,
+    relationship_types: list[str] | None = None,
+) -> dict[str, object]:
+    """Trace code relationships for an entity.
+
+    Shows what imports, calls, inherits from, or depends on the given entity.
+    Useful for understanding code dependencies and impact analysis.
+
+    Args:
+        entity: Entity identifier (e.g., "app/main.py::Foo")
+        direction: "inbound" (what depends on entity), "outbound" (what entity depends on), or "both"
+        max_depth: How many hops to follow (1-5, default 2)
+        relationship_types: Optional filter (e.g., ["imports", "calls", "inherits"])
+    """
+    try:
+        components = _get_components()
+        clamped_depth = max(1, min(5, max_depth))
+
+        relationships = components.cache.traverse_relationships(
+            entity,
+            direction=direction,
+            max_depth=clamped_depth,
+            relationship_types=relationship_types,
+        )
+
+        return {
+            "entity": entity,
+            "relationships": relationships,
+        }
+    except Exception as e:
+        logger.exception("Unexpected error in trace")
+        return {
+            "error": f"Failed to trace relationships: {e}",
+            "fix": "Ensure the codebase has been indexed. Run: code-search index --full",
+        }
+
+
+@mcp.tool()
 async def index_status(
     action: str = "status",
     project_root: str | None = None,
