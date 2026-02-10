@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, Mock, patch
 
+from code_search.indexer.pipeline import detect_language
 from code_search.mcp_server import (
     _error_response,
     _result_to_dict,
@@ -47,6 +48,7 @@ def _mock_components():
     components.qdrant.collection_count.return_value = 42
     components.qdrant.ensure_collection = Mock()
     components.cache.get_last_indexed_commit.return_value = "abc123"
+    components.cache.resolve_entity.side_effect = lambda e: e
     return components
 
 
@@ -471,7 +473,8 @@ class TestExplainTool:
         assert call_args.query == "MyClass"
 
     @patch("code_search.mcp_server._get_components")
-    async def test_search_limit_is_five(self, mock_get):
+    async def test_search_limit_is_ten(self, mock_get):
+        """explain() fetches 10 results internally (filters down to 5)."""
         components = _mock_components()
         mock_get.return_value = components
         components.search_engine.search.return_value = Mock(results=[])
@@ -479,7 +482,61 @@ class TestExplainTool:
         await explain("src/main.py", symbol="Foo")
 
         call_args = components.search_engine.search.call_args[0][0]
-        assert call_args.limit == 5
+        assert call_args.limit == 10
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_explain_filters_by_language(self, mock_get):
+        """When file_path is a Python file, low-score results from other languages are filtered out."""
+        components = _mock_components()
+        mock_get.return_value = components
+        results = [
+            _mock_search_result(file_path="src/auth.py", language="python", score=0.9),
+            _mock_search_result(file_path="src/utils.py", language="python", score=0.5),
+            _mock_search_result(file_path="tailwind.config.js", language="javascript", score=0.3),
+            _mock_search_result(file_path="src/models.py", language="python", score=0.4),
+        ]
+        components.search_engine.search.return_value = Mock(results=results)
+
+        output = await explain("src/main.py", symbol="EvvyJWTAuthentication")
+        file_paths = [chunk["file_path"] for chunk in output["related_chunks"]]
+        assert "tailwind.config.js" not in file_paths
+        assert "src/auth.py" in file_paths
+        assert "src/utils.py" in file_paths
+        assert "src/models.py" in file_paths
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_explain_keeps_high_score_cross_language(self, mock_get):
+        """Cross-language results with score >= 0.6 are kept."""
+        components = _mock_components()
+        mock_get.return_value = components
+        results = [
+            _mock_search_result(file_path="src/auth.py", language="python", score=0.9),
+            _mock_search_result(file_path="src/auth.ts", language="typescript", score=0.75),
+            _mock_search_result(file_path="tailwind.config.js", language="javascript", score=0.3),
+        ]
+        components.search_engine.search.return_value = Mock(results=results)
+
+        output = await explain("src/main.py", symbol="AuthService")
+        file_paths = [chunk["file_path"] for chunk in output["related_chunks"]]
+        assert "src/auth.py" in file_paths
+        assert "src/auth.ts" in file_paths  # high score, kept despite different language
+        assert "tailwind.config.js" not in file_paths  # low score + different language, filtered
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_explain_no_filter_for_unknown_language(self, mock_get):
+        """When language can't be detected from file_path, all results are kept."""
+        components = _mock_components()
+        mock_get.return_value = components
+        results = [
+            _mock_search_result(file_path="src/auth.py", language="python", score=0.9),
+            _mock_search_result(file_path="config.js", language="javascript", score=0.3),
+            _mock_search_result(file_path="readme.md", language="markdown", score=0.2),
+        ]
+        components.search_engine.search.return_value = Mock(results=results)
+
+        output = await explain("Makefile", symbol="build")
+        # All results should be kept since Makefile has unknown language
+        assert len(output["related_chunks"]) == 3
 
     @patch("code_search.mcp_server._get_components")
     async def test_explain_handles_error(self, mock_get):
@@ -711,6 +768,30 @@ class TestTraceTool:
         assert "error" in result
         assert "fix" in result
 
+    @patch("code_search.mcp_server._get_components")
+    async def test_trace_includes_resolved_entity(self, mock_get_components) -> None:
+        """When entity is resolved to a different name, resolved_entity is in the response."""
+        mock_components = _mock_components()
+        mock_components.cache.resolve_entity.side_effect = None
+        mock_components.cache.resolve_entity.return_value = (
+            "/abs/path/backend/care/models.py::Prescription"
+        )
+        mock_components.cache.traverse_relationships.return_value = [
+            {
+                "source_entity": "/abs/path/backend/care/models.py::Prescription",
+                "relationship": "inherits",
+                "target_entity": "/abs/path/backend/utils/mixins.py::Base",
+                "confidence": "static",
+                "depth": 1,
+            }
+        ]
+        mock_get_components.return_value = mock_components
+
+        result = await trace(entity="Prescription")
+        assert result["entity"] == "Prescription"
+        assert result["resolved_entity"] == "/abs/path/backend/care/models.py::Prescription"
+        assert len(result["relationships"]) == 1
+
 
 class TestCompactResponse:
     """Test compact vs full response modes."""
@@ -862,8 +943,8 @@ class TestExplainCompact:
         assert "content" in result["related_chunks"][0]
 
     @patch("code_search.mcp_server._get_components")
-    async def test_explain_limit_is_5(self, mock_get) -> None:
-        """explain() uses limit=5 internally."""
+    async def test_explain_limit_is_10(self, mock_get) -> None:
+        """explain() fetches limit=10 internally (filters down to 5)."""
         components = _mock_components()
         components.search_engine.search.return_value = Mock(results=[])
         mock_get.return_value = components
@@ -871,4 +952,4 @@ class TestExplainCompact:
         await explain("src/main.py", symbol="hello")
         call_args = components.search_engine.search.call_args
         request = call_args[0][0]
-        assert request.limit == 5
+        assert request.limit == 10

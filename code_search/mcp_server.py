@@ -15,6 +15,7 @@ from code_search.exceptions import (
     VoyageAuthError,
 )
 from code_search.factory import Components, create_components
+from code_search.indexer.pipeline import detect_language
 from code_search.search.models import SearchRequest
 
 logger = logging.getLogger(__name__)
@@ -221,14 +222,27 @@ async def explain(
         query = symbol or question or file_path
 
         components = _get_components()
-        request = SearchRequest(query=query, limit=5, active_file=file_path)
+        request = SearchRequest(query=query, limit=10, active_file=file_path)
         response = await components.search_engine.search(request)
+
+        # Post-filter: prefer same language, keep high-confidence cross-language results
+        source_lang = detect_language(file_path)
+        if source_lang != "unknown":
+            filtered = [
+                r for r in response.results
+                if r.language == source_lang or r.score >= 0.6
+            ]
+        else:
+            filtered = response.results
+
+        # Limit back down to 5
+        filtered = filtered[:5]
 
         return {
             "file_path": file_path,
             "symbol": symbol,
             "question": question,
-            "related_chunks": [_result_to_dict(r, detail) for r in response.results],
+            "related_chunks": [_result_to_dict(r, detail) for r in filtered],
         }
     except CodeSearchError as e:
         return _error_response(e)
@@ -259,17 +273,23 @@ async def trace(
         components = _get_components()
         clamped_depth = max(1, min(5, max_depth))
 
+        resolved = components.cache.resolve_entity(entity)
+
         relationships = components.cache.traverse_relationships(
-            entity,
+            resolved,
             direction=direction,
             max_depth=clamped_depth,
             relationship_types=relationship_types,
         )
 
-        return {
+        result: dict[str, object] = {
             "entity": entity,
             "relationships": relationships,
         }
+        if resolved != entity:
+            result["resolved_entity"] = resolved
+
+        return result
     except Exception as e:
         logger.exception("Unexpected error in trace")
         return {

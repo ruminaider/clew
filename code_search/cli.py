@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import typer
@@ -28,6 +29,8 @@ def index(
     ),
 ) -> None:
     """Index the codebase for semantic search."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     from code_search.exceptions import CodeSearchError
     from code_search.factory import create_components
     from code_search.indexer.change_detector import ChangeDetector

@@ -17,6 +17,7 @@ from qdrant_client import models
 
 from code_search.chunker.fallback import Chunk, split_file
 from code_search.chunker.parser import ASTParser
+from code_search.chunker.tokenizer import count_tokens
 from code_search.indexer.extractors.api_boundary import APIBoundaryMatcher
 from code_search.indexer.extractors.django_urls import DjangoURLExtractor
 from code_search.indexer.extractors.python import PythonRelationshipExtractor
@@ -56,7 +57,7 @@ LANGUAGE_MAP: dict[str, str] = {
 }
 
 
-def _detect_language(file_path: str) -> str:
+def detect_language(file_path: str) -> str:
     """Detect language from file extension."""
     ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
     return LANGUAGE_MAP.get(ext, "unknown")
@@ -97,7 +98,7 @@ class IndexingPipeline:
         embedder: EmbeddingProvider,
         description_provider: DescriptionProvider | None = None,
         cache: CacheDB | None = None,
-        batch_size: int = 100,
+        batch_size: int = 25,
         max_tokens: int = 3000,
     ) -> None:
         self._qdrant = qdrant
@@ -170,10 +171,17 @@ class IndexingPipeline:
             return result
 
         # Batch embed and upsert
+        total_batches = (len(all_chunks) + self._batch_size - 1) // self._batch_size
         for i in range(0, len(all_chunks), self._batch_size):
+            batch_num = i // self._batch_size + 1
             batch = all_chunks[i : i + self._batch_size]
-            await self._embed_and_upsert(batch, collection)
-            result.chunks_created += len(batch)
+            logger.info("Embedding batch %d/%d (%d chunks)...", batch_num, total_batches, len(batch))
+            try:
+                await self._embed_and_upsert(batch, collection)
+                result.chunks_created += len(batch)
+            except Exception as e:
+                logger.warning("Batch %d/%d failed: %s — skipping", batch_num, total_batches, e)
+                result.errors.append(f"Batch {batch_num}: {e}")
 
         return result
 
@@ -184,7 +192,7 @@ class IndexingPipeline:
         """
         assert self._cache is not None  # caller checks
 
-        language = _detect_language(file_path)
+        language = detect_language(file_path)
         extractor = self._extractors.get(language)
         url_patterns: list[dict[str, str]] = []
 
@@ -286,7 +294,7 @@ class IndexingPipeline:
                     i,
                     {
                         "code": chunk.content,
-                        "language": _detect_language(chunk.file_path),
+                        "language": detect_language(chunk.file_path),
                         "entity_type": chunk.metadata.get("entity_type", "section"),
                         "name": chunk.metadata.get(
                             "qualified_name", chunk.metadata.get("name", "")
@@ -313,6 +321,30 @@ class IndexingPipeline:
 
         return results
 
+    async def _embed_with_token_limit(
+        self, texts: list[str], max_batch_tokens: int = 100_000
+    ) -> list[list[float]]:
+        """Embed texts in sub-batches that respect the API token limit."""
+        all_embeddings: list[list[float]] = []
+        sub_batch: list[str] = []
+        sub_batch_tokens = 0
+
+        for text in texts:
+            tokens = count_tokens(text)
+            if sub_batch and sub_batch_tokens + tokens > max_batch_tokens:
+                embs = await self._embedder.embed(sub_batch, input_type="document")
+                all_embeddings.extend(embs)
+                sub_batch = []
+                sub_batch_tokens = 0
+            sub_batch.append(text)
+            sub_batch_tokens += tokens
+
+        if sub_batch:
+            embs = await self._embedder.embed(sub_batch, input_type="document")
+            all_embeddings.extend(embs)
+
+        return all_embeddings
+
     async def _embed_and_upsert(self, chunks: list[Chunk], collection: str) -> None:
         """Embed a batch of chunks and upsert to Qdrant."""
         # Generate NL descriptions (if provider configured)
@@ -327,7 +359,7 @@ class IndexingPipeline:
             else:
                 texts.append(chunk.content)
 
-        embeddings = await self._embedder.embed(texts, input_type="document")
+        embeddings = await self._embed_with_token_limit(texts)
 
         points: list[models.PointStruct] = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
@@ -352,7 +384,7 @@ class IndexingPipeline:
                 "content": chunk.content,
                 "chunk_id": chunk_id,
                 "file_path": file_path_str,
-                "language": _detect_language(file_path_str),
+                "language": detect_language(file_path_str),
                 "chunk_type": entity_type,
                 "class_name": chunk.metadata.get("parent_class", ""),
                 "function_name": chunk.metadata.get("name", ""),

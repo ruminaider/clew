@@ -221,3 +221,75 @@ class TestPointToResultDocstring:
 
         result = HybridSearchEngine._point_to_result(point)
         assert result.docstring == ""
+
+
+class TestDeduplication:
+    """Tests for SearchEngine._deduplicate."""
+
+    def test_removes_duplicates_same_range(self) -> None:
+        """Two results with the same file_path/line_start/line_end: keep higher score."""
+        results = [
+            SearchResult(
+                content="def hello(): pass",
+                file_path="main.py",
+                score=0.8,
+                chunk_type="function",
+                line_start=1,
+                line_end=5,
+            ),
+            SearchResult(
+                content="def hello(): pass",
+                file_path="main.py",
+                score=0.9,
+                chunk_type="method",
+                line_start=1,
+                line_end=5,
+            ),
+        ]
+        deduped = SearchEngine._deduplicate(results)
+        assert len(deduped) == 1
+        assert deduped[0].score == 0.9
+        assert deduped[0].chunk_type == "method"
+
+    def test_keeps_different_ranges(self) -> None:
+        """Two results from same file but different line ranges are both kept."""
+        results = [
+            SearchResult(
+                content="def hello(): pass",
+                file_path="main.py",
+                score=0.9,
+                line_start=1,
+                line_end=5,
+            ),
+            SearchResult(
+                content="def world(): pass",
+                file_path="main.py",
+                score=0.8,
+                line_start=10,
+                line_end=15,
+            ),
+        ]
+        deduped = SearchEngine._deduplicate(results)
+        assert len(deduped) == 2
+
+    def test_preserves_order(self) -> None:
+        """Results maintain score-based ordering after dedup."""
+        results = [
+            SearchResult(content="a", file_path="a.py", score=0.9, line_start=1, line_end=5),
+            SearchResult(content="b", file_path="b.py", score=0.7, line_start=1, line_end=5),
+            SearchResult(content="a_dup", file_path="a.py", score=0.5, line_start=1, line_end=5),
+        ]
+        deduped = SearchEngine._deduplicate(results)
+        assert len(deduped) == 2
+        # The higher-scored 'a' should remain, 'a_dup' should be dropped
+        file_paths = [r.file_path for r in deduped]
+        assert "a.py" in file_paths
+        assert "b.py" in file_paths
+        # The a.py result should have the higher score
+        a_result = next(r for r in deduped if r.file_path == "a.py")
+        assert a_result.score == 0.9
+
+    def test_empty_results(self) -> None:
+        """Handles empty list gracefully."""
+        deduped = SearchEngine._deduplicate([])
+        assert deduped == []

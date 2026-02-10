@@ -316,6 +316,91 @@ class CacheDB:
                 (file_path,),
             )
 
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """Escape LIKE metacharacters so ``_`` and ``%`` match literally."""
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def resolve_entity(self, entity: str) -> str:
+        """Resolve a user-provided entity identifier to a stored entity.
+
+        Supports exact match, suffix match (for relative paths), and
+        symbol-only match (just class/function name without file path).
+
+        Resolution strategy:
+          1. Exact match against source_entity or target_entity.
+          2. Suffix match — entities whose source_entity or target_entity
+             ends with the provided string (e.g., relative path like
+             ``backend/care/models.py::Prescription``).
+          3. Symbol-only match — when the entity has no ``::`` separator,
+             match against the symbol portion after the last ``::`` in
+             stored entities.
+
+        When multiple candidates exist, source_entity matches are preferred.
+
+        Returns the resolved entity string, or the original if no match is found.
+        """
+        safe = self._escape_like(entity)
+
+        with self._get_state_conn() as conn:
+            # 1. Exact match on source_entity
+            row = conn.execute(
+                "SELECT source_entity FROM code_relationships "
+                "WHERE source_entity = ? LIMIT 1",
+                (entity,),
+            ).fetchone()
+            if row:
+                return row[0]
+
+            # Exact match on target_entity
+            row = conn.execute(
+                "SELECT target_entity FROM code_relationships "
+                "WHERE target_entity = ? LIMIT 1",
+                (entity,),
+            ).fetchone()
+            if row:
+                return row[0]
+
+            # 2. Suffix match — source_entity first, then target_entity
+            suffix_pattern = f"%{safe}"
+            row = conn.execute(
+                "SELECT source_entity FROM code_relationships "
+                "WHERE source_entity LIKE ? ESCAPE '\\' LIMIT 1",
+                (suffix_pattern,),
+            ).fetchone()
+            if row:
+                return row[0]
+
+            row = conn.execute(
+                "SELECT target_entity FROM code_relationships "
+                "WHERE target_entity LIKE ? ESCAPE '\\' LIMIT 1",
+                (suffix_pattern,),
+            ).fetchone()
+            if row:
+                return row[0]
+
+            # 3. Symbol-only match (no :: in the query) — match the trailing
+            #    ``::symbol`` portion of stored entities.
+            if "::" not in entity:
+                symbol_pattern = f"%::{safe}"
+                row = conn.execute(
+                    "SELECT source_entity FROM code_relationships "
+                    "WHERE source_entity LIKE ? ESCAPE '\\' LIMIT 1",
+                    (symbol_pattern,),
+                ).fetchone()
+                if row:
+                    return row[0]
+
+                row = conn.execute(
+                    "SELECT target_entity FROM code_relationships "
+                    "WHERE target_entity LIKE ? ESCAPE '\\' LIMIT 1",
+                    (symbol_pattern,),
+                ).fetchone()
+                if row:
+                    return row[0]
+
+        return entity
+
     def traverse_relationships(
         self,
         entity: str,

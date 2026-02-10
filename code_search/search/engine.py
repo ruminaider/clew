@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from code_search.models import SearchConfig
 
 from .filters import build_qdrant_filter
-from .intent import classify_intent, get_intent_collection_preference
+from .intent import classify_intent
 from .models import SearchRequest, SearchResponse, SearchResult
 from .rerank import should_skip_rerank
 
@@ -51,10 +51,8 @@ class SearchEngine:
         # Step 2: Classify intent (on original query, not enhanced)
         intent = request.intent or classify_intent(query)
 
-        # Step 3: Determine collection (DOCS intent prefers docs collection)
+        # Step 3: Use the collection from the request (user-specified or default)
         collection = request.collection
-        if request.intent is None:
-            collection = get_intent_collection_preference(intent)
 
         # Step 4: Hybrid search with configurable candidate limit (Tradeoff B)
         query_filter = build_qdrant_filter(request.filters) if request.filters else None
@@ -80,6 +78,9 @@ class SearchEngine:
         # Step 5: Rerank (if applicable)
         results = self._maybe_rerank(query_enhanced, candidates)
 
+        # Step 5.5: Deduplicate overlapping results
+        results = self._deduplicate(results)
+
         # Step 6: Apply limit
         results = results[: request.limit]
 
@@ -89,6 +90,21 @@ class SearchEngine:
             total_candidates=total_candidates,
             intent=intent,
         )
+
+    @staticmethod
+    def _deduplicate(results: list[SearchResult]) -> list[SearchResult]:
+        """Remove duplicate results covering the same code range.
+
+        When two results share the same file_path and identical line ranges,
+        keep the one with the higher score.
+        """
+        seen: dict[tuple[str, int, int], SearchResult] = {}
+        for result in results:
+            key = (result.file_path, result.line_start, result.line_end)
+            existing = seen.get(key)
+            if existing is None or result.score > existing.score:
+                seen[key] = result
+        return list(seen.values())
 
     def _maybe_rerank(self, query: str, candidates: list[SearchResult]) -> list[SearchResult]:
         """Rerank candidates if conditions are met."""

@@ -267,3 +267,92 @@ class TestBFSTraversal:
         cache.store_relationships(rels)
         result = cache.traverse_relationships("c.py::C", direction="inbound", max_depth=1)
         assert len(result) == 2
+
+
+class TestResolveEntity:
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_exact_match(self, cache: CacheDB) -> None:
+        """Returns the entity as-is when it's an exact match."""
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship(
+                "/abs/path/backend/care/models.py::Prescription",
+                "imports",
+                "/abs/path/backend/utils/mixins.py::TimestampMixin",
+                "/abs/path/backend/care/models.py",
+            ),
+        ]
+        cache.store_relationships(rels)
+        result = cache.resolve_entity("/abs/path/backend/care/models.py::Prescription")
+        assert result == "/abs/path/backend/care/models.py::Prescription"
+
+    def test_suffix_match_relative_path(self, cache: CacheDB) -> None:
+        """Resolves a relative path to the full absolute entity."""
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship(
+                "/abs/path/backend/care/models.py::Foo",
+                "calls",
+                "/abs/path/backend/utils/helpers.py::bar",
+                "/abs/path/backend/care/models.py",
+            ),
+        ]
+        cache.store_relationships(rels)
+        result = cache.resolve_entity("backend/care/models.py::Foo")
+        assert result == "/abs/path/backend/care/models.py::Foo"
+
+    def test_symbol_only_match(self, cache: CacheDB) -> None:
+        """Resolves a bare symbol name to the full entity."""
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship(
+                "/abs/path/backend/care/models.py::Prescription",
+                "inherits",
+                "/abs/path/backend/utils/mixins.py::Base",
+                "/abs/path/backend/care/models.py",
+            ),
+        ]
+        cache.store_relationships(rels)
+        result = cache.resolve_entity("Prescription")
+        assert result == "/abs/path/backend/care/models.py::Prescription"
+
+    def test_no_match_returns_original(self, cache: CacheDB) -> None:
+        """Returns the original string when nothing matches."""
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
+        ]
+        cache.store_relationships(rels)
+        result = cache.resolve_entity("nonexistent.py::DoesNotExist")
+        assert result == "nonexistent.py::DoesNotExist"
+
+    def test_prefers_source_entity(self, cache: CacheDB) -> None:
+        """When entity suffix appears in both source and target, prefers source."""
+        from code_search.indexer.relationships import Relationship
+
+        rels = [
+            Relationship(
+                "/other/path/models.py::Widget",
+                "calls",
+                "/some/path/models.py::Gadget",
+                "/other/path/models.py",
+            ),
+            Relationship(
+                "/some/path/models.py::Gadget",
+                "imports",
+                "/lib/utils.py::helper",
+                "/some/path/models.py",
+            ),
+        ]
+        cache.store_relationships(rels)
+        # "Gadget" appears as target in 1st rel, source in 2nd rel.
+        # resolve_entity should prefer the source_entity match.
+        result = cache.resolve_entity("Gadget")
+        assert result == "/some/path/models.py::Gadget"

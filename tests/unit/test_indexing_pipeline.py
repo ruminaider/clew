@@ -9,29 +9,29 @@ from code_search.indexer.cache import CacheDB
 from code_search.indexer.pipeline import (
     IndexingPipeline,
     IndexingResult,
-    _detect_language,
     _is_test_file,
+    detect_language,
 )
 
 
 class TestDetectLanguage:
     def test_python(self) -> None:
-        assert _detect_language("models.py") == "python"
+        assert detect_language("models.py") == "python"
 
     def test_typescript(self) -> None:
-        assert _detect_language("app.ts") == "typescript"
+        assert detect_language("app.ts") == "typescript"
 
     def test_tsx(self) -> None:
-        assert _detect_language("Component.tsx") == "tsx"
+        assert detect_language("Component.tsx") == "tsx"
 
     def test_javascript(self) -> None:
-        assert _detect_language("index.js") == "javascript"
+        assert detect_language("index.js") == "javascript"
 
     def test_markdown(self) -> None:
-        assert _detect_language("README.md") == "markdown"
+        assert detect_language("README.md") == "markdown"
 
     def test_unknown(self) -> None:
-        assert _detect_language("data.csv") == "unknown"
+        assert detect_language("data.csv") == "unknown"
 
 
 class TestIsTestFile:

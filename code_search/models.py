@@ -46,7 +46,7 @@ class SafetyConfig(BaseModel):
 
     max_total_chunks: int = Field(default=500_000, ge=1000)
     max_file_size_bytes: int = Field(default=1_048_576, ge=1024)  # 1 MB
-    batch_size: int = Field(default=100, ge=1, le=1000)
+    batch_size: int = Field(default=25, ge=1, le=1000)
     collection_limits: dict[str, int] = Field(default_factory=dict)
 
 
