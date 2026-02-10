@@ -44,9 +44,7 @@ class TestRelationshipExtractor(RelationshipExtractor):
         for child in node.children:
             self._walk(child, file_path, rels)
 
-    def _extract_python_import(
-        self, node: Any, file_path: str, rels: list[Relationship]
-    ) -> None:
+    def _extract_python_import(self, node: Any, file_path: str, rels: list[Relationship]) -> None:
         name_node = node.child_by_field_name("name")
         if name_node:
             rels.append(

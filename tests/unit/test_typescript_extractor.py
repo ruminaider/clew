@@ -34,9 +34,7 @@ class TestImportExtraction:
         source = "import React from 'react';\n"
         tree = parser.parse(source, "typescript")
         rels = extractor.extract(tree, source, "src/app.ts")
-        assert any(
-            r.relationship == "imports" and r.target_entity == "react::React" for r in rels
-        )
+        assert any(r.relationship == "imports" and r.target_entity == "react::React" for r in rels)
 
     def test_namespace_import(
         self, extractor: TypeScriptRelationshipExtractor, parser: ASTParser
@@ -138,9 +136,7 @@ class TestCallExtraction:
         source = "function main() {\n  service.process();\n}\n"
         tree = parser.parse(source, "typescript")
         rels = extractor.extract(tree, source, "src/app.ts")
-        assert any(
-            r.relationship == "calls" and r.target_entity == "service.process" for r in rels
-        )
+        assert any(r.relationship == "calls" and r.target_entity == "service.process" for r in rels)
 
 
 class TestAPICallExtraction:
@@ -167,9 +163,7 @@ class TestAPICallExtraction:
         api_rels = [r for r in rels if r.relationship == "calls_api"]
         assert len(api_rels) == 0
 
-    def test_axios_get(
-        self, extractor: TypeScriptRelationshipExtractor, parser: ASTParser
-    ) -> None:
+    def test_axios_get(self, extractor: TypeScriptRelationshipExtractor, parser: ASTParser) -> None:
         source = "async function getUsers() {\n  await axios.get('/api/users');\n}\n"
         tree = parser.parse(source, "typescript")
         rels = extractor.extract(tree, source, "src/api.ts")
@@ -181,6 +175,4 @@ class TestAPICallExtraction:
         source = "async function create() {\n  await axios.post('/api/items', data);\n}\n"
         tree = parser.parse(source, "typescript")
         rels = extractor.extract(tree, source, "src/api.ts")
-        assert any(
-            r.relationship == "calls_api" and r.target_entity == "/api/items" for r in rels
-        )
+        assert any(r.relationship == "calls_api" and r.target_entity == "/api/items" for r in rels)

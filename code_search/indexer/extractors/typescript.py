@@ -45,9 +45,7 @@ class TypeScriptRelationshipExtractor(RelationshipExtractor):
                 if value_node.type in ("arrow_function", "function"):
                     func_name = name_node.text.decode()
                     for child in value_node.children:
-                        self._walk(
-                            child, source, file_path, rels, current_function=func_name
-                        )
+                        self._walk(child, source, file_path, rels, current_function=func_name)
                     return
                 if value_node.type == "call_expression":
                     self._extract_require(value_node, file_path, rels)
@@ -109,9 +107,7 @@ class TypeScriptRelationshipExtractor(RelationshipExtractor):
                     )
                 )
 
-    def _extract_require(
-        self, call_node: Any, file_path: str, rels: list[Relationship]
-    ) -> None:
+    def _extract_require(self, call_node: Any, file_path: str, rels: list[Relationship]) -> None:
         """Extract CommonJS require() calls."""
         func = call_node.child_by_field_name("function")
         if not func or func.text.decode() != "require":
@@ -244,7 +240,8 @@ class TypeScriptRelationshipExtractor(RelationshipExtractor):
             return None
         for child in args.named_children:
             if child.type == "string":
-                return child.text.decode().strip("'\"")
+                result: str = child.text.decode().strip("'\"")
+                return result
             if child.type == "template_string":
                 return None  # Can't resolve template literals
             break  # Only check first arg
@@ -254,5 +251,6 @@ class TypeScriptRelationshipExtractor(RelationshipExtractor):
         """Get function name from declaration node."""
         name_node = node.child_by_field_name("name")
         if name_node:
-            return name_node.text.decode()
+            result: str = name_node.text.decode()
+            return result
         return None

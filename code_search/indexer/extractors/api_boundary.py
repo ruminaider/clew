@@ -105,7 +105,11 @@ class APIBoundaryMatcher:
         for _regex, _normalized, info in compiled_patterns:
             static_prefix = _DJANGO_CONVERTER_RE.split(info.get("pattern", ""))[0]
             static_prefix = _normalize_url(static_prefix)
-            if static_prefix and call_url.startswith(static_prefix) and len(call_url) > len(static_prefix):
+            if (
+                static_prefix
+                and call_url.startswith(static_prefix)
+                and len(call_url) > len(static_prefix)
+            ):
                 return info
 
         return None

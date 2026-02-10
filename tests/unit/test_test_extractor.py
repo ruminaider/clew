@@ -45,8 +45,7 @@ class TestTestDetection:
         self, extractor: TestRelationshipExtractor, parser: ASTParser
     ) -> None:
         source = (
-            "import { UserService } from '../services/user';\n\n"
-            "test('creates user', () => {});\n"
+            "import { UserService } from '../services/user';\n\ntest('creates user', () => {});\n"
         )
         tree = parser.parse(source, "typescript")
         rels = extractor.extract(tree, source, "src/__tests__/user.test.ts")

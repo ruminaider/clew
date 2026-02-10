@@ -252,9 +252,7 @@ class TestTraceCommand:
     def test_trace_with_direction_flag(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
         mock_components.cache.traverse_relationships.return_value = []
-        result = runner.invoke(
-            app, ["trace", "app/main.py::Foo", "--direction", "inbound"]
-        )
+        result = runner.invoke(app, ["trace", "app/main.py::Foo", "--direction", "inbound"])
         assert result.exit_code == 0
         mock_components.cache.traverse_relationships.assert_called_once()
 

@@ -420,7 +420,9 @@ class TestRelationshipExtraction:
         return embedder
 
     @pytest.fixture
-    def pipeline_with_cache(self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path) -> IndexingPipeline:
+    def pipeline_with_cache(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> IndexingPipeline:
         cache = CacheDB(tmp_path / ".cache")
         return IndexingPipeline(
             qdrant=mock_qdrant,
@@ -440,9 +442,7 @@ class TestRelationshipExtraction:
         assert result.files_processed == 1
 
         # Check relationships were stored
-        rels = pipeline_with_cache._cache.get_relationships(
-            str(py_file), direction="outbound"
-        )
+        rels = pipeline_with_cache._cache.get_relationships(str(py_file), direction="outbound")
         assert any(r.relationship == "imports" for r in rels)
 
     async def test_pipeline_without_cache_skips_relationships(
@@ -466,9 +466,7 @@ class TestRelationshipExtraction:
         result = await pipeline_with_cache.index_files([ts_file], collection="code")
         assert result.files_processed == 1
 
-        rels = pipeline_with_cache._cache.get_relationships(
-            str(ts_file), direction="outbound"
-        )
+        rels = pipeline_with_cache._cache.get_relationships(str(ts_file), direction="outbound")
         assert any(r.relationship == "imports" for r in rels)
 
     async def test_pipeline_deletes_old_relationships_on_reindex(
@@ -480,17 +478,13 @@ class TestRelationshipExtraction:
         py_file.write_text("import json\n")
 
         await pipeline_with_cache.index_files([py_file], collection="code")
-        rels1 = pipeline_with_cache._cache.get_relationships(
-            str(py_file), direction="outbound"
-        )
+        rels1 = pipeline_with_cache._cache.get_relationships(str(py_file), direction="outbound")
         assert len(rels1) >= 1
 
         # Change file content and re-index
         py_file.write_text("import os\n")
         await pipeline_with_cache.index_files([py_file], collection="code")
-        rels2 = pipeline_with_cache._cache.get_relationships(
-            str(py_file), direction="outbound"
-        )
+        rels2 = pipeline_with_cache._cache.get_relationships(str(py_file), direction="outbound")
         # Old "json" import should be gone, only "os" remains
         targets = [r.target_entity for r in rels2]
         assert "os" in targets
@@ -519,28 +513,22 @@ class TestAPIBoundaryIntegration:
     ) -> None:
         """After all files are indexed, API boundaries are matched."""
         cache = CacheDB(tmp_path / ".cache")
-        pipeline = IndexingPipeline(
-            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
-        )
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder, cache=cache)
 
         # Create a Django urls.py
         urls_file = tmp_path / "app" / "urls.py"
         urls_file.parent.mkdir(parents=True, exist_ok=True)
         urls_file.write_text(
-            'from django.urls import path\nfrom . import views\n\n'
+            "from django.urls import path\nfrom . import views\n\n"
             'urlpatterns = [\n    path("api/users/", views.user_list),\n]\n'
         )
 
         # Create a TS file with fetch call
         ts_file = tmp_path / "src" / "api.ts"
         ts_file.parent.mkdir(parents=True, exist_ok=True)
-        ts_file.write_text(
-            "async function getUsers() {\n  await fetch('/api/users/');\n}\n"
-        )
+        ts_file.write_text("async function getUsers() {\n  await fetch('/api/users/');\n}\n")
 
-        result = await pipeline.index_files(
-            [urls_file, ts_file], collection="code"
-        )
+        result = await pipeline.index_files([urls_file, ts_file], collection="code")
         assert result.files_processed == 2
         # No crash — API boundary matching ran successfully
 
@@ -549,9 +537,7 @@ class TestAPIBoundaryIntegration:
     ) -> None:
         """Pipeline without any urls.py files doesn't crash."""
         cache = CacheDB(tmp_path / ".cache")
-        pipeline = IndexingPipeline(
-            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
-        )
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder, cache=cache)
         py_file = tmp_path / "main.py"
         py_file.write_text("import os\n")
         result = await pipeline.index_files([py_file], collection="code")

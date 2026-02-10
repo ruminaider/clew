@@ -84,9 +84,7 @@ class TestInheritanceExtraction:
         inherits = [r for r in rels if r.relationship == "inherits"]
         assert len(inherits) == 2
 
-    def test_no_base_class(
-        self, extractor: PythonRelationshipExtractor, parser: ASTParser
-    ) -> None:
+    def test_no_base_class(self, extractor: PythonRelationshipExtractor, parser: ASTParser) -> None:
         source = "class Foo:\n    pass\n"
         tree = parser.parse(source, "python")
         rels = extractor.extract(tree, source, "app/models.py")
@@ -99,9 +97,7 @@ class TestInheritanceExtraction:
         source = "class Foo(models.Model):\n    pass\n"
         tree = parser.parse(source, "python")
         rels = extractor.extract(tree, source, "app/models.py")
-        assert any(
-            r.relationship == "inherits" and r.target_entity == "models.Model" for r in rels
-        )
+        assert any(r.relationship == "inherits" and r.target_entity == "models.Model" for r in rels)
 
 
 class TestDecoratorExtraction:
@@ -133,8 +129,7 @@ class TestDecoratorExtraction:
         tree = parser.parse(source, "python")
         rels = extractor.extract(tree, source, "app/models.py")
         assert any(
-            r.relationship == "decorates" and r.target_entity == "app/models.py::Foo"
-            for r in rels
+            r.relationship == "decorates" and r.target_entity == "app/models.py::Foo" for r in rels
         )
 
 
@@ -152,17 +147,13 @@ class TestCallExtraction:
             for r in rels
         )
 
-    def test_method_call(
-        self, extractor: PythonRelationshipExtractor, parser: ASTParser
-    ) -> None:
+    def test_method_call(self, extractor: PythonRelationshipExtractor, parser: ASTParser) -> None:
         source = "def main():\n    self.save()\n"
         tree = parser.parse(source, "python")
         rels = extractor.extract(tree, source, "app/main.py")
         assert any(r.relationship == "calls" and r.target_entity == "self.save" for r in rels)
 
-    def test_chained_call(
-        self, extractor: PythonRelationshipExtractor, parser: ASTParser
-    ) -> None:
+    def test_chained_call(self, extractor: PythonRelationshipExtractor, parser: ASTParser) -> None:
         source = "def query():\n    queryset.filter(active=True).order_by('name')\n"
         tree = parser.parse(source, "python")
         rels = extractor.extract(tree, source, "app/views.py")

@@ -205,13 +205,16 @@ class PythonRelationshipExtractor(RelationshipExtractor):
         """Extract decorator name from decorator node."""
         for child in decorator_node.children:
             if child.type == "identifier":
-                return child.text.decode()
+                result: str = child.text.decode()
+                return result
             if child.type == "call":
                 func = child.child_by_field_name("function")
                 if func:
-                    return func.text.decode()
+                    result = func.text.decode()
+                    return result
             if child.type == "attribute":
-                return child.text.decode()
+                result = child.text.decode()
+                return result
         return None
 
     @staticmethod

@@ -20,22 +20,20 @@ def extractor() -> DjangoURLExtractor:
 
 class TestURLPatternExtraction:
     def test_path_pattern(self, extractor: DjangoURLExtractor, parser: ASTParser) -> None:
-        source = '''from django.urls import path
+        source = """from django.urls import path
 from . import views
 
 urlpatterns = [
     path("api/users/", views.user_list, name="user-list"),
     path("api/users/<int:pk>/", views.user_detail, name="user-detail"),
 ]
-'''
+"""
         tree = parser.parse(source, "python")
         patterns = extractor.extract_url_patterns(tree, source, "app/urls.py")
         assert "/api/users/" in [p["pattern"] for p in patterns]
         assert "/api/users/<int:pk>/" in [p["pattern"] for p in patterns]
 
-    def test_path_with_view_name(
-        self, extractor: DjangoURLExtractor, parser: ASTParser
-    ) -> None:
+    def test_path_with_view_name(self, extractor: DjangoURLExtractor, parser: ASTParser) -> None:
         source = 'path("api/items/", views.item_list)\n'
         tree = parser.parse(source, "python")
         patterns = extractor.extract_url_patterns(tree, source, "app/urls.py")
@@ -51,12 +49,12 @@ urlpatterns = [
         assert len(patterns) == 0
 
     def test_include_pattern(self, extractor: DjangoURLExtractor, parser: ASTParser) -> None:
-        source = '''from django.urls import include, path
+        source = """from django.urls import include, path
 
 urlpatterns = [
     path("api/", include("users.urls")),
 ]
-'''
+"""
         tree = parser.parse(source, "python")
         patterns = extractor.extract_url_patterns(tree, source, "project/urls.py")
         assert any(p.get("include") == "users.urls" for p in patterns)

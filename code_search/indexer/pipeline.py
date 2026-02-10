@@ -177,9 +177,7 @@ class IndexingPipeline:
 
         return result
 
-    def _extract_relationships(
-        self, file_path: str, content: str
-    ) -> list[dict[str, str]]:
+    def _extract_relationships(self, file_path: str, content: str) -> list[dict[str, str]]:
         """Extract code relationships from a file and store in cache.
 
         Returns any Django URL patterns found (for API boundary matching).
@@ -193,7 +191,9 @@ class IndexingPipeline:
         # Delete old relationships for this file before re-extracting
         self._cache.delete_relationships_by_file(file_path)
 
-        all_rels: list = []
+        from code_search.indexer.relationships import Relationship as _Relationship
+
+        all_rels: list[_Relationship] = []
 
         if extractor and language in ("python", "typescript", "tsx", "javascript"):
             try:

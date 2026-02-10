@@ -9,9 +9,7 @@ from typing import Any
 class DjangoURLExtractor:
     """Extract URL patterns from Django urls.py files."""
 
-    def extract_url_patterns(
-        self, tree: Any, source: str, file_path: str
-    ) -> list[dict[str, str]]:
+    def extract_url_patterns(self, tree: Any, source: str, file_path: str) -> list[dict[str, str]]:
         """Extract URL patterns from a parsed AST.
 
         Only processes files named urls.py. Returns empty list for other files.
@@ -30,9 +28,7 @@ class DjangoURLExtractor:
         for child in node.children:
             self._walk(child, file_path, patterns)
 
-    def _extract_url_call(
-        self, node: Any, file_path: str, patterns: list[dict[str, str]]
-    ) -> None:
+    def _extract_url_call(self, node: Any, file_path: str, patterns: list[dict[str, str]]) -> None:
         func = node.child_by_field_name("function")
         if not func:
             return

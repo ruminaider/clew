@@ -66,7 +66,11 @@ class TestAPIBoundaryMatching:
         """Frontend /api/users/123 matches backend /api/users/<int:pk>/."""
         matcher = APIBoundaryMatcher()
         url_patterns = [
-            {"pattern": "/api/users/<int:pk>/", "view": "views.user_detail", "file_path": "users/urls.py"},
+            {
+                "pattern": "/api/users/<int:pk>/",
+                "view": "views.user_detail",
+                "file_path": "users/urls.py",
+            },
         ]
         api_calls = [
             Relationship(

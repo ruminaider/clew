@@ -216,7 +216,7 @@ async def trace(
 
     Args:
         entity: Entity identifier (e.g., "app/main.py::Foo")
-        direction: "inbound" (what depends on entity), "outbound" (what entity depends on), or "both"
+        direction: "inbound" (dependents), "outbound" (dependencies), or "both"
         max_depth: How many hops to follow (1-5, default 2)
         relationship_types: Optional filter (e.g., ["imports", "calls", "inherits"])
     """
