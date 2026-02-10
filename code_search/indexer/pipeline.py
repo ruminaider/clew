@@ -17,6 +17,8 @@ from qdrant_client import models
 
 from code_search.chunker.fallback import Chunk, split_file
 from code_search.chunker.parser import ASTParser
+from code_search.indexer.extractors.api_boundary import APIBoundaryMatcher
+from code_search.indexer.extractors.django_urls import DjangoURLExtractor
 from code_search.indexer.extractors.python import PythonRelationshipExtractor
 from code_search.indexer.extractors.tests import TestRelationshipExtractor
 from code_search.indexer.extractors.typescript import TypeScriptRelationshipExtractor
@@ -115,6 +117,8 @@ class IndexingPipeline:
             "javascript": _ts_extractor,
         }
         self._test_extractor = TestRelationshipExtractor()
+        self._django_url_extractor = DjangoURLExtractor()
+        self._api_boundary_matcher = APIBoundaryMatcher()
 
     async def index_files(
         self,
@@ -125,6 +129,7 @@ class IndexingPipeline:
         """Index a list of files into a Qdrant collection."""
         result = IndexingResult()
         all_chunks: list[Chunk] = []
+        all_url_patterns: list[dict[str, str]] = []
 
         for file_path in files:
             try:
@@ -154,7 +159,12 @@ class IndexingPipeline:
 
             # Extract and store code relationships
             if self._cache:
-                self._extract_relationships(str(file_path), content)
+                url_patterns = self._extract_relationships(str(file_path), content)
+                all_url_patterns.extend(url_patterns)
+
+        # Post-processing: match API boundaries across languages
+        if self._cache and all_url_patterns:
+            self._match_api_boundaries(all_url_patterns)
 
         if not all_chunks:
             return result
@@ -167,12 +177,18 @@ class IndexingPipeline:
 
         return result
 
-    def _extract_relationships(self, file_path: str, content: str) -> None:
-        """Extract code relationships from a file and store in cache."""
+    def _extract_relationships(
+        self, file_path: str, content: str
+    ) -> list[dict[str, str]]:
+        """Extract code relationships from a file and store in cache.
+
+        Returns any Django URL patterns found (for API boundary matching).
+        """
         assert self._cache is not None  # caller checks
 
         language = _detect_language(file_path)
         extractor = self._extractors.get(language)
+        url_patterns: list[dict[str, str]] = []
 
         # Delete old relationships for this file before re-extracting
         self._cache.delete_relationships_by_file(file_path)
@@ -188,11 +204,52 @@ class IndexingPipeline:
                 # Also run test relationship extractor
                 test_rels = self._test_extractor.extract(tree, content, file_path)
                 all_rels.extend(test_rels)
+
+                # Extract Django URL patterns from urls.py files
+                if language == "python":
+                    url_patterns = self._django_url_extractor.extract_url_patterns(
+                        tree, content, file_path
+                    )
             except Exception:
                 logger.debug("Relationship extraction failed for %s", file_path)
 
         if all_rels:
             self._cache.store_relationships(all_rels)
+
+        return url_patterns
+
+    def _match_api_boundaries(self, url_patterns: list[dict[str, str]]) -> None:
+        """Match frontend API calls to backend URL patterns."""
+        assert self._cache is not None
+
+        # Collect all calls_api relationships from the store
+        # We need to scan by querying relationships — get all calls_api rels
+        # by checking outbound relationships of known API-calling entities.
+        # Since we can't enumerate all entities, query by relationship type
+        # using a direct SQL query.
+        from code_search.indexer.relationships import Relationship as _Relationship
+
+        api_calls: list[_Relationship] = []
+        with self._cache._get_state_conn() as conn:
+            rows = conn.execute(
+                "SELECT source_entity, relationship, target_entity, file_path, confidence "
+                "FROM code_relationships WHERE relationship = 'calls_api'"
+            ).fetchall()
+            for row in rows:
+                api_calls.append(
+                    _Relationship(
+                        source_entity=row[0],
+                        relationship=row[1],
+                        target_entity=row[2],
+                        file_path=row[3],
+                        confidence=row[4],
+                    )
+                )
+
+        if api_calls:
+            matches = self._api_boundary_matcher.match(url_patterns, api_calls)
+            if matches:
+                self._cache.store_relationships(matches)
 
     async def _generate_descriptions(self, chunks: list[Chunk]) -> list[str | None] | None:
         """Generate NL descriptions for chunks that lack docstrings.

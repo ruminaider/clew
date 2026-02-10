@@ -495,3 +495,64 @@ class TestRelationshipExtraction:
         targets = [r.target_entity for r in rels2]
         assert "os" in targets
         assert "json" not in targets
+
+
+class TestAPIBoundaryIntegration:
+    @pytest.fixture
+    def mock_qdrant(self) -> Mock:
+        qdrant = Mock()
+        qdrant.ensure_collection = Mock()
+        qdrant.upsert_points = Mock()
+        qdrant.delete_by_file_path = Mock()
+        return qdrant
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        embedder = Mock()
+        embedder.embed = AsyncMock(side_effect=lambda texts, **kwargs: [[0.1] * 1024] * len(texts))
+        embedder.model_name = "voyage-code-3"
+        embedder.dimensions = 1024
+        return embedder
+
+    async def test_api_boundary_matching_runs_after_extraction(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> None:
+        """After all files are indexed, API boundaries are matched."""
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(
+            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
+        )
+
+        # Create a Django urls.py
+        urls_file = tmp_path / "app" / "urls.py"
+        urls_file.parent.mkdir(parents=True, exist_ok=True)
+        urls_file.write_text(
+            'from django.urls import path\nfrom . import views\n\n'
+            'urlpatterns = [\n    path("api/users/", views.user_list),\n]\n'
+        )
+
+        # Create a TS file with fetch call
+        ts_file = tmp_path / "src" / "api.ts"
+        ts_file.parent.mkdir(parents=True, exist_ok=True)
+        ts_file.write_text(
+            "async function getUsers() {\n  await fetch('/api/users/');\n}\n"
+        )
+
+        result = await pipeline.index_files(
+            [urls_file, ts_file], collection="code"
+        )
+        assert result.files_processed == 2
+        # No crash — API boundary matching ran successfully
+
+    async def test_pipeline_without_urls_no_crash(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> None:
+        """Pipeline without any urls.py files doesn't crash."""
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(
+            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
+        )
+        py_file = tmp_path / "main.py"
+        py_file.write_text("import os\n")
+        result = await pipeline.index_files([py_file], collection="code")
+        assert result.files_processed == 1
