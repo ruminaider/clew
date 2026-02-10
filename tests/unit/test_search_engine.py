@@ -128,13 +128,25 @@ class TestSearchEngine:
         await engine.search(SearchRequest(query="test"))
         mock_reranker.rerank.assert_not_called()
 
-    async def test_docs_intent_overrides_collection(
+    async def test_docs_intent_uses_request_collection(
         self,
         engine: SearchEngine,
         mock_hybrid: Mock,
     ) -> None:
-        """DOCS intent should search docs collection."""
+        """DOCS intent should respect request.collection, not auto-override."""
         await engine.search(SearchRequest(query="what is the prescription model"))
+        call_kwargs = mock_hybrid.search.call_args.kwargs
+        assert call_kwargs["collection"] == "code"
+
+    async def test_explicit_collection_respected(
+        self,
+        engine: SearchEngine,
+        mock_hybrid: Mock,
+    ) -> None:
+        """Explicit collection in request is always used."""
+        await engine.search(
+            SearchRequest(query="what is the prescription model", collection="docs")
+        )
         call_kwargs = mock_hybrid.search.call_args.kwargs
         assert call_kwargs["collection"] == "docs"
 
@@ -171,3 +183,39 @@ class TestSearchEngine:
         request = SearchRequest(query="test", filters={"invalid_key": "val"})
         with pytest.raises(InvalidFilterError):
             await engine.search(request)
+
+
+class TestPointToResultDocstring:
+    """Test docstring extraction from Qdrant payload."""
+
+    def test_point_to_result_extracts_docstring(self) -> None:
+        """Verify docstring is pulled from Qdrant payload into SearchResult."""
+        from unittest.mock import Mock
+        from code_search.search.hybrid import HybridSearchEngine
+
+        point = Mock()
+        point.score = 0.9
+        point.payload = {
+            "content": "def foo(): pass",
+            "file_path": "src/main.py",
+            "docstring": "Do the foo thing.",
+            "signature": "def foo():",
+        }
+
+        result = HybridSearchEngine._point_to_result(point)
+        assert result.docstring == "Do the foo thing."
+
+    def test_point_to_result_docstring_defaults_empty(self) -> None:
+        """Verify docstring defaults to empty string when not in payload."""
+        from unittest.mock import Mock
+        from code_search.search.hybrid import HybridSearchEngine
+
+        point = Mock()
+        point.score = 0.9
+        point.payload = {
+            "content": "def foo(): pass",
+            "file_path": "src/main.py",
+        }
+
+        result = HybridSearchEngine._point_to_result(point)
+        assert result.docstring == ""
