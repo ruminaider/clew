@@ -1,7 +1,7 @@
 """Tests for query intent classification."""
 
-from code_search.search.intent import classify_intent, get_intent_collection_preference
-from code_search.search.models import QueryIntent
+from clew.search.intent import classify_intent, get_intent_collection_preference
+from clew.search.models import QueryIntent
 
 
 class TestClassifyIntent:

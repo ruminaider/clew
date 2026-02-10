@@ -1,6 +1,6 @@
 """Tests for SearchConfig and IndexingConfig in models.py."""
 
-from code_search.models import IndexingConfig, SearchConfig
+from clew.models import IndexingConfig, SearchConfig
 
 
 class TestSearchConfig:

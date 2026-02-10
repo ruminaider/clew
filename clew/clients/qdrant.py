@@ -11,7 +11,7 @@ import logging
 
 from qdrant_client import QdrantClient, models
 
-from code_search.exceptions import QdrantConnectionError
+from clew.exceptions import QdrantConnectionError
 
 logger = logging.getLogger(__name__)
 

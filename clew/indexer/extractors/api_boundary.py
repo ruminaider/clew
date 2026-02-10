@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from code_search.indexer.relationships import Relationship
+from clew.indexer.relationships import Relationship
 
 # Django path converter patterns: <int:pk>, <str:slug>, <uuid:id>, etc.
 _DJANGO_CONVERTER_RE = re.compile(r"<\w+:\w+>")

@@ -1,4 +1,4 @@
-"""Typer CLI for code-search."""
+"""Typer CLI for clew."""
 
 from __future__ import annotations
 
@@ -31,16 +31,16 @@ def index(
     """Index the codebase for semantic search."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    from code_search.exceptions import CodeSearchError
-    from code_search.factory import create_components
-    from code_search.indexer.change_detector import ChangeDetector
+    from clew.exceptions import ClewError
+    from clew.factory import create_components
+    from clew.indexer.change_detector import ChangeDetector
 
     try:
         components = create_components(
             config_path=config if config.exists() else None,
             nl_descriptions=nl_descriptions,
         )
-    except CodeSearchError as e:
+    except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
@@ -52,7 +52,7 @@ def index(
     if files:
         file_paths = [Path(f) for f in files]
     else:
-        from code_search.discovery import discover_files
+        from clew.discovery import discover_files
 
         file_paths = discover_files(root, components.config)
 
@@ -122,13 +122,13 @@ def search(
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
 ) -> None:
     """Search the codebase."""
-    from code_search.exceptions import CodeSearchError
-    from code_search.factory import create_components
-    from code_search.search.models import QueryIntent, SearchRequest
+    from clew.exceptions import ClewError
+    from clew.factory import create_components
+    from clew.search.models import QueryIntent, SearchRequest
 
     try:
         components = create_components()
-    except CodeSearchError as e:
+    except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
@@ -204,16 +204,16 @@ def search(
 @app.command()
 def status() -> None:
     """Show system health and index statistics."""
-    from code_search.exceptions import CodeSearchError
-    from code_search.factory import create_components
+    from clew.exceptions import ClewError
+    from clew.factory import create_components
 
     try:
         components = create_components()
-    except CodeSearchError as e:
+    except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
-    table = Table(title="code-search status")
+    table = Table(title="clew status")
     table.add_column("Component", style="bold")
     table.add_column("Status")
 
@@ -247,12 +247,12 @@ def trace(
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
 ) -> None:
     """Trace code relationships for an entity."""
-    from code_search.exceptions import CodeSearchError
-    from code_search.factory import create_components
+    from clew.exceptions import ClewError
+    from clew.factory import create_components
 
     try:
         components = create_components()
-    except CodeSearchError as e:
+    except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
@@ -294,6 +294,6 @@ def trace(
 @app.command()
 def serve() -> None:
     """Start the MCP server for Claude Code integration."""
-    from code_search.mcp_server import mcp as mcp_server
+    from clew.mcp_server import mcp as mcp_server
 
     mcp_server.run()

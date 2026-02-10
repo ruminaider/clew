@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from code_search.indexer.extractors.api_boundary import APIBoundaryMatcher
-from code_search.indexer.relationships import Relationship
+from clew.indexer.extractors.api_boundary import APIBoundaryMatcher
+from clew.indexer.relationships import Relationship
 
 
 class TestAPIBoundaryMatching:

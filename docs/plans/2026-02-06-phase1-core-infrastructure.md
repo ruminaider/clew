@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build the foundational infrastructure for the code-search tool — project skeleton, chunking pipeline, caching, change detection, embedding abstraction, and safety limits.
+**Goal:** Build the foundational infrastructure for the clew tool — project skeleton, chunking pipeline, caching, change detection, embedding abstraction, and safety limits.
 
 **Architecture:** A Python CLI tool that uses tree-sitter for AST-based code chunking, Voyage AI for embeddings, Qdrant for vector storage, and SQLite for caching. Files are chunked via a three-tier fallback (AST → token-recursive → line split), then embedded and stored. Change detection uses git-diff primarily with file-hash as fallback. All configuration is Pydantic-validated from YAML.
 
@@ -30,10 +30,10 @@ All specs, schemas, models, and code samples come from `docs/IMPLEMENTATION.md`.
 - Create: Full directory tree per IMPLEMENTATION.md Section 1
 - Create: `pyproject.toml`
 - Create: All `__init__.py` files
-- Create: `code_search/exceptions.py`
-- Create: `code_search/models.py`
-- Create: `code_search/config.py`
-- Create: `code_search/__main__.py`
+- Create: `clew/exceptions.py`
+- Create: `clew/models.py`
+- Create: `clew/config.py`
+- Create: `clew/__main__.py`
 - Create: `tests/conftest.py`
 - Create: `tests/fixtures/python/sample_models.py`
 
@@ -42,10 +42,10 @@ All specs, schemas, models, and code samples come from `docs/IMPLEMENTATION.md`.
 Create every directory in the tree:
 
 ```bash
-mkdir -p code_search/chunker
-mkdir -p code_search/search
-mkdir -p code_search/indexer
-mkdir -p code_search/clients
+mkdir -p clew/chunker
+mkdir -p clew/search
+mkdir -p clew/indexer
+mkdir -p clew/clients
 mkdir -p tests/unit
 mkdir -p tests/integration
 mkdir -p tests/fixtures/python
@@ -60,7 +60,7 @@ Copy exactly from IMPLEMENTATION.md Section 2:
 
 ```toml
 [project]
-name = "code-search"
+name = "clew"
 version = "0.1.0"
 description = "Semantic code search with hybrid retrieval and MCP integration"
 readme = "README.md"
@@ -69,7 +69,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "Ruminaider", email = "hello@ruminaider.com"}
 ]
-keywords = ["code-search", "embeddings", "qdrant", "mcp", "claude"]
+keywords = ["clew", "embeddings", "qdrant", "mcp", "claude"]
 
 dependencies = [
     # Core
@@ -116,7 +116,7 @@ dev = [
 ]
 
 [project.scripts]
-code-search = "code_search.cli:app"
+clew = "clew.cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -142,37 +142,37 @@ strict = true
 
 Create empty `__init__.py` in each package directory:
 
-- `code_search/__init__.py`
-- `code_search/chunker/__init__.py`
-- `code_search/search/__init__.py`
-- `code_search/indexer/__init__.py`
-- `code_search/clients/__init__.py`
+- `clew/__init__.py`
+- `clew/chunker/__init__.py`
+- `clew/search/__init__.py`
+- `clew/indexer/__init__.py`
+- `clew/clients/__init__.py`
 - `tests/__init__.py`
 
-### Step 4: Create `code_search/__main__.py`
+### Step 4: Create `clew/__main__.py`
 
 ```python
-"""Entry point: python -m code_search."""
+"""Entry point: python -m clew."""
 
-from code_search.cli import app
+from clew.cli import app
 
 app()
 ```
 
-### Step 5: Create `code_search/exceptions.py`
+### Step 5: Create `clew/exceptions.py`
 
 Copy the full exception hierarchy from IMPLEMENTATION.md Section 7:
 
 ```python
-"""Custom exception hierarchy for code-search."""
+"""Custom exception hierarchy for clew."""
 
 
-class CodeSearchError(Exception):
-    """Base exception for code-search."""
+class ClewError(Exception):
+    """Base exception for clew."""
 
 
 # Configuration errors
-class ConfigError(CodeSearchError):
+class ConfigError(ClewError):
     """Configuration-related errors."""
 
 
@@ -189,7 +189,7 @@ class ConfigValidationError(ConfigError):
 
 
 # Infrastructure errors
-class InfrastructureError(CodeSearchError):
+class InfrastructureError(ClewError):
     """Infrastructure-related errors."""
 
 
@@ -235,7 +235,7 @@ class VoyageRateLimitError(VoyageError):
 
 
 # Indexing errors
-class IndexingError(CodeSearchError):
+class IndexingError(ClewError):
     """Indexing-related errors."""
 
 
@@ -249,7 +249,7 @@ class ParseError(IndexingError):
 
 
 # Search errors
-class SearchError(CodeSearchError):
+class SearchError(ClewError):
     """Search-related errors."""
 
 
@@ -267,7 +267,7 @@ class InvalidFilterError(SearchError):
         )
 ```
 
-### Step 6: Create `code_search/models.py`
+### Step 6: Create `clew/models.py`
 
 Copy the full Pydantic models from IMPLEMENTATION.md Section 5:
 
@@ -403,7 +403,7 @@ class ProjectConfig(BaseModel):
             return cls(), errors
 ```
 
-### Step 7: Create `code_search/config.py`
+### Step 7: Create `clew/config.py`
 
 ```python
 """Config loading and validation."""
@@ -418,8 +418,8 @@ class Environment:
     VOYAGE_API_KEY: str = os.environ.get("VOYAGE_API_KEY", "")
     QDRANT_URL: str = os.environ.get("QDRANT_URL", "http://localhost:6333")
     QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY") or None
-    CACHE_DIR: Path = Path(os.environ.get("CODE_SEARCH_CACHE_DIR", ".code-search"))
-    LOG_LEVEL: str = os.environ.get("CODE_SEARCH_LOG_LEVEL", "INFO")
+    CACHE_DIR: Path = Path(os.environ.get("CLEW_CACHE_DIR", ".clew"))
+    LOG_LEVEL: str = os.environ.get("CLEW_LOG_LEVEL", "INFO")
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -475,7 +475,7 @@ def mock_qdrant_client() -> Mock:
 @pytest.fixture
 def temp_cache_dir(tmp_path: Path) -> Path:
     """Temporary directory for SQLite caches."""
-    cache_dir = tmp_path / ".code-search"
+    cache_dir = tmp_path / ".clew"
     cache_dir.mkdir()
     return cache_dir
 ```
@@ -515,10 +515,10 @@ def create_prescription(user, medication: str) -> "Prescription":
     )
 ```
 
-### Step 10: Create stub `code_search/cli.py` (placeholder for Task 1.5)
+### Step 10: Create stub `clew/cli.py` (placeholder for Task 1.5)
 
 ```python
-"""Typer CLI for code-search."""
+"""Typer CLI for clew."""
 
 from pathlib import Path
 
@@ -558,7 +558,7 @@ def search(
 pip install -e ".[dev]"
 ruff check .
 ruff format --check .
-mypy code_search/
+mypy clew/
 pytest --co  # collect tests (should find conftest.py)
 ```
 
@@ -586,7 +586,7 @@ Create `docker-compose.yml` in project root — copy from IMPLEMENTATION.md Sect
 services:
   qdrant:
     image: qdrant/qdrant:v1.9.2
-    container_name: code-search-qdrant
+    container_name: clew-qdrant
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -617,8 +617,8 @@ VOYAGE_API_KEY=pa-xxxxxxxxxxxxxxxxxxxx
 # Optional (defaults shown)
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
-CODE_SEARCH_CACHE_DIR=.code-search
-CODE_SEARCH_LOG_LEVEL=INFO
+CLEW_CACHE_DIR=.clew
+CLEW_LOG_LEVEL=INFO
 ```
 
 ### Step 3: Create `.gitignore`
@@ -642,7 +642,7 @@ venv/
 .env
 
 # Cache
-.code-search/
+.clew/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -684,7 +684,7 @@ git commit -m "feat(infra): add Qdrant Docker setup with health check and persis
 ## Task 1.2: Voyage Tokenizer Integration
 
 **Files:**
-- Create: `code_search/chunker/tokenizer.py`
+- Create: `clew/chunker/tokenizer.py`
 - Create: `tests/unit/test_tokenizer.py`
 
 ### Step 1: Write the failing test
@@ -693,7 +693,7 @@ git commit -m "feat(infra): add Qdrant Docker setup with health check and persis
 # tests/unit/test_tokenizer.py
 """Tests for Voyage tokenizer wrapper."""
 
-from code_search.chunker.tokenizer import count_tokens, chunk_fits
+from clew.chunker.tokenizer import count_tokens, chunk_fits
 
 
 class TestCountTokens:
@@ -736,12 +736,12 @@ class TestChunkFits:
 pytest tests/unit/test_tokenizer.py -v
 ```
 
-Expected: FAIL — `ModuleNotFoundError: No module named 'code_search.chunker.tokenizer'` (module doesn't exist yet).
+Expected: FAIL — `ModuleNotFoundError: No module named 'clew.chunker.tokenizer'` (module doesn't exist yet).
 
 ### Step 3: Write implementation
 
 ```python
-# code_search/chunker/tokenizer.py
+# clew/chunker/tokenizer.py
 """Voyage tokenizer wrapper for accurate token counting."""
 
 from functools import lru_cache
@@ -777,8 +777,8 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/chunker/tokenizer.py
-mypy code_search/chunker/tokenizer.py
+ruff check clew/chunker/tokenizer.py
+mypy clew/chunker/tokenizer.py
 ```
 
 Expected: No errors.
@@ -786,7 +786,7 @@ Expected: No errors.
 ### Step 6: Commit
 
 ```bash
-git add code_search/chunker/tokenizer.py tests/unit/test_tokenizer.py
+git add clew/chunker/tokenizer.py tests/unit/test_tokenizer.py
 git commit -m "feat(chunker): add Voyage tokenizer integration for token counting"
 ```
 
@@ -795,8 +795,8 @@ git commit -m "feat(chunker): add Voyage tokenizer integration for token countin
 ## Task 1.3: Basic AST Chunker
 
 **Files:**
-- Create: `code_search/chunker/parser.py`
-- Create: `code_search/chunker/strategies.py`
+- Create: `clew/chunker/parser.py`
+- Create: `clew/chunker/strategies.py`
 - Create: `tests/unit/test_chunker.py`
 
 ### Step 1: Write the failing tests
@@ -805,8 +805,8 @@ git commit -m "feat(chunker): add Voyage tokenizer integration for token countin
 # tests/unit/test_chunker.py
 """Tests for AST parsing and entity extraction."""
 
-from code_search.chunker.parser import ASTParser
-from code_search.chunker.strategies import PythonChunker, CodeEntity
+from clew.chunker.parser import ASTParser
+from clew.chunker.strategies import PythonChunker, CodeEntity
 
 
 class TestASTParser:
@@ -907,7 +907,7 @@ pytest tests/unit/test_chunker.py -v
 
 Expected: FAIL — modules don't exist yet.
 
-### Step 3: Write `code_search/chunker/parser.py`
+### Step 3: Write `clew/chunker/parser.py`
 
 Copy from IMPLEMENTATION.md Section 6 (ASTParser class):
 
@@ -978,7 +978,7 @@ class ASTParser:
         return self.parse(content, language)
 ```
 
-### Step 4: Write `code_search/chunker/strategies.py`
+### Step 4: Write `clew/chunker/strategies.py`
 
 Copy from IMPLEMENTATION.md Section 6 (CodeEntity + PythonChunker):
 
@@ -1091,8 +1091,8 @@ Expected: All tests PASS.
 ### Step 6: Run linters
 
 ```bash
-ruff check code_search/chunker/parser.py code_search/chunker/strategies.py
-mypy code_search/chunker/parser.py code_search/chunker/strategies.py
+ruff check clew/chunker/parser.py clew/chunker/strategies.py
+mypy clew/chunker/parser.py clew/chunker/strategies.py
 ```
 
 Expected: No errors. The `Any` types for tree-sitter nodes are acceptable since tree-sitter's Python bindings don't have full type stubs.
@@ -1100,7 +1100,7 @@ Expected: No errors. The `Any` types for tree-sitter nodes are acceptable since 
 ### Step 7: Commit
 
 ```bash
-git add code_search/chunker/parser.py code_search/chunker/strategies.py tests/unit/test_chunker.py
+git add clew/chunker/parser.py clew/chunker/strategies.py tests/unit/test_chunker.py
 git commit -m "feat(chunker): add tree-sitter AST parser and Python entity extraction"
 ```
 
@@ -1109,7 +1109,7 @@ git commit -m "feat(chunker): add tree-sitter AST parser and Python entity extra
 ## Task 1.4: SQLite Caching
 
 **Files:**
-- Create: `code_search/indexer/cache.py`
+- Create: `clew/indexer/cache.py`
 - Create: `tests/unit/test_cache.py`
 
 ### Step 1: Write the failing tests
@@ -1123,7 +1123,7 @@ from pathlib import Path
 
 import pytest
 
-from code_search.indexer.cache import CacheDB
+from clew.indexer.cache import CacheDB
 
 
 class TestCacheDB:
@@ -1205,7 +1205,7 @@ Expected: FAIL — module doesn't exist yet.
 ### Step 3: Write implementation
 
 ```python
-# code_search/indexer/cache.py
+# clew/indexer/cache.py
 """SQLite caching for embeddings and chunk state."""
 
 from __future__ import annotations
@@ -1381,14 +1381,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/indexer/cache.py
-mypy code_search/indexer/cache.py
+ruff check clew/indexer/cache.py
+mypy clew/indexer/cache.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/cache.py tests/unit/test_cache.py
+git add clew/indexer/cache.py tests/unit/test_cache.py
 git commit -m "feat(indexer): add SQLite caching for embeddings and chunk state"
 ```
 
@@ -1397,7 +1397,7 @@ git commit -m "feat(indexer): add SQLite caching for embeddings and chunk state"
 ## Task 1.5: Minimal CLI
 
 **Files:**
-- Modify: `code_search/cli.py` (replace stub from Task 0)
+- Modify: `clew/cli.py` (replace stub from Task 0)
 - Create: `tests/unit/test_cli.py`
 
 ### Step 1: Write the failing tests
@@ -1408,7 +1408,7 @@ git commit -m "feat(indexer): add SQLite caching for embeddings and chunk state"
 
 from typer.testing import CliRunner
 
-from code_search.cli import app
+from clew.cli import app
 
 runner = CliRunner()
 
@@ -1443,12 +1443,12 @@ pytest tests/unit/test_cli.py -v
 
 Expected: Tests may pass if the stub from Task 0 is sufficient. If not, update in next step.
 
-### Step 3: Update `code_search/cli.py` with richer stubs
+### Step 3: Update `clew/cli.py` with richer stubs
 
 Replace the Task 0 stub with the version from IMPLEMENTATION.md Section 9, adding rich console output for status:
 
 ```python
-"""Typer CLI for code-search."""
+"""Typer CLI for clew."""
 
 from pathlib import Path
 
@@ -1472,7 +1472,7 @@ def index(
 @app.command()
 def status() -> None:
     """Show system health and index statistics."""
-    console.print("[bold]code-search status[/bold]")
+    console.print("[bold]clew status[/bold]")
     console.print("  Qdrant: [dim]not checked[/dim]")
     console.print("  Collections: [dim]none[/dim]")
 
@@ -1497,8 +1497,8 @@ Expected: All PASS.
 ### Step 5: Verify CLI works end-to-end
 
 ```bash
-code-search --help
-code-search status
+clew --help
+clew status
 ```
 
 Expected: Help text displays, status shows stub output.
@@ -1506,7 +1506,7 @@ Expected: Help text displays, status shows stub output.
 ### Step 6: Commit
 
 ```bash
-git add code_search/cli.py tests/unit/test_cli.py
+git add clew/cli.py tests/unit/test_cli.py
 git commit -m "feat(cli): add minimal typer CLI with index, status, and search commands"
 ```
 
@@ -1515,7 +1515,7 @@ git commit -m "feat(cli): add minimal typer CLI with index, status, and search c
 ## Task 1.6: Splitter Fallback Chain
 
 **Files:**
-- Create: `code_search/chunker/fallback.py`
+- Create: `clew/chunker/fallback.py`
 - Create: `tests/unit/test_fallback.py`
 
 ### Step 1: Write the failing tests
@@ -1524,13 +1524,13 @@ git commit -m "feat(cli): add minimal typer CLI with index, status, and search c
 # tests/unit/test_fallback.py
 """Tests for the three-tier splitter fallback chain."""
 
-from code_search.chunker.fallback import (
+from clew.chunker.fallback import (
     line_split,
     split_file,
     token_recursive_split,
 )
-from code_search.chunker.parser import ASTParser
-from code_search.chunker.tokenizer import count_tokens
+from clew.chunker.parser import ASTParser
+from clew.chunker.tokenizer import count_tokens
 
 
 class TestTokenRecursiveSplit:
@@ -1612,7 +1612,7 @@ Expected: FAIL — module doesn't exist.
 
 ### Step 3: Write implementation
 
-Create `code_search/chunker/fallback.py` — adapted from IMPLEMENTATION.md Section 12. This needs a `Chunk` dataclass for the return type:
+Create `clew/chunker/fallback.py` — adapted from IMPLEMENTATION.md Section 12. This needs a `Chunk` dataclass for the return type:
 
 ```python
 """Splitter fallback chain: tree-sitter → token-recursive → line split."""
@@ -1812,14 +1812,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/chunker/fallback.py
-mypy code_search/chunker/fallback.py
+ruff check clew/chunker/fallback.py
+mypy clew/chunker/fallback.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/chunker/fallback.py tests/unit/test_fallback.py
+git add clew/chunker/fallback.py tests/unit/test_fallback.py
 git commit -m "feat(chunker): add three-tier splitter fallback chain (AST → token → line)"
 ```
 
@@ -1828,9 +1828,9 @@ git commit -m "feat(chunker): add three-tier splitter fallback chain (AST → to
 ## Task 1.7: Embedding Provider ABC
 
 **Files:**
-- Create: `code_search/clients/base.py`
-- Create: `code_search/clients/voyage.py`
-- Modify: `code_search/clients/__init__.py`
+- Create: `clew/clients/base.py`
+- Create: `clew/clients/voyage.py`
+- Modify: `clew/clients/__init__.py`
 - Create: `tests/unit/test_embedding_provider.py`
 
 ### Step 1: Write the failing tests
@@ -1843,8 +1843,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from code_search.clients.base import EmbeddingProvider
-from code_search.clients.voyage import VoyageEmbeddingProvider
+from clew.clients.base import EmbeddingProvider
+from clew.clients.voyage import VoyageEmbeddingProvider
 
 
 class TestEmbeddingProviderABC:
@@ -1855,17 +1855,17 @@ class TestEmbeddingProviderABC:
 
 class TestVoyageEmbeddingProvider:
     def test_dimensions(self) -> None:
-        with patch("code_search.clients.voyage.voyageai"):
+        with patch("clew.clients.voyage.voyageai"):
             provider = VoyageEmbeddingProvider(api_key="test-key")
         assert provider.dimensions == 1024
 
     def test_model_name(self) -> None:
-        with patch("code_search.clients.voyage.voyageai"):
+        with patch("clew.clients.voyage.voyageai"):
             provider = VoyageEmbeddingProvider(api_key="test-key")
         assert provider.model_name == "voyage-code-3"
 
     def test_custom_model(self) -> None:
-        with patch("code_search.clients.voyage.voyageai"):
+        with patch("clew.clients.voyage.voyageai"):
             provider = VoyageEmbeddingProvider(
                 api_key="test-key", model="voyage-3"
             )
@@ -1878,7 +1878,7 @@ class TestVoyageEmbeddingProvider:
             embeddings=[[0.1] * 1024, [0.2] * 1024]
         )
 
-        with patch("code_search.clients.voyage.voyageai") as mock_voyage:
+        with patch("clew.clients.voyage.voyageai") as mock_voyage:
             mock_voyage.AsyncClient.return_value = mock_client
             provider = VoyageEmbeddingProvider(api_key="test-key")
 
@@ -1893,7 +1893,7 @@ class TestVoyageEmbeddingProvider:
             embeddings=[[0.1] * 1024]
         )
 
-        with patch("code_search.clients.voyage.voyageai") as mock_voyage:
+        with patch("clew.clients.voyage.voyageai") as mock_voyage:
             mock_voyage.AsyncClient.return_value = mock_client
             provider = VoyageEmbeddingProvider(api_key="test-key")
 
@@ -1909,7 +1909,7 @@ pytest tests/unit/test_embedding_provider.py -v
 
 Expected: FAIL — modules don't exist.
 
-### Step 3: Write `code_search/clients/base.py`
+### Step 3: Write `clew/clients/base.py`
 
 ```python
 """Abstract base class for embedding providers."""
@@ -1953,7 +1953,7 @@ class EmbeddingProvider(ABC):
         ...
 ```
 
-### Step 4: Write `code_search/clients/voyage.py`
+### Step 4: Write `clew/clients/voyage.py`
 
 ```python
 """Voyage AI embedding provider."""
@@ -1997,7 +1997,7 @@ class VoyageEmbeddingProvider(EmbeddingProvider):
         return embeddings[0]
 ```
 
-### Step 5: Write provider factory in `code_search/clients/__init__.py`
+### Step 5: Write provider factory in `clew/clients/__init__.py`
 
 ```python
 """Client wrappers for external services."""
@@ -2006,11 +2006,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from code_search.exceptions import ConfigError
+from clew.exceptions import ConfigError
 
 if TYPE_CHECKING:
-    from code_search.config import Environment
-    from code_search.models import IndexingConfig
+    from clew.config import Environment
+    from clew.models import IndexingConfig
 
     from .base import EmbeddingProvider
 
@@ -2039,14 +2039,14 @@ Expected: All tests PASS.
 ### Step 7: Run linters
 
 ```bash
-ruff check code_search/clients/
-mypy code_search/clients/
+ruff check clew/clients/
+mypy clew/clients/
 ```
 
 ### Step 8: Commit
 
 ```bash
-git add code_search/clients/ tests/unit/test_embedding_provider.py
+git add clew/clients/ tests/unit/test_embedding_provider.py
 git commit -m "feat(clients): add EmbeddingProvider ABC with Voyage implementation"
 ```
 
@@ -2055,7 +2055,7 @@ git commit -m "feat(clients): add EmbeddingProvider ABC with Voyage implementati
 ## Task 1.8: File-Hash Change Detection
 
 **Files:**
-- Create: `code_search/indexer/file_hash.py`
+- Create: `clew/indexer/file_hash.py`
 - Create: `tests/unit/test_file_hash.py`
 
 ### Step 1: Write the failing tests
@@ -2068,8 +2068,8 @@ from pathlib import Path
 
 import pytest
 
-from code_search.indexer.cache import CacheDB
-from code_search.indexer.file_hash import FileHashTracker
+from clew.indexer.cache import CacheDB
+from clew.indexer.file_hash import FileHashTracker
 
 
 class TestFileHashTracker:
@@ -2151,7 +2151,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/indexer/file_hash.py
+# clew/indexer/file_hash.py
 """File-hash based change detection (secondary to git-diff)."""
 
 from __future__ import annotations
@@ -2214,14 +2214,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/indexer/file_hash.py
-mypy code_search/indexer/file_hash.py
+ruff check clew/indexer/file_hash.py
+mypy clew/indexer/file_hash.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/file_hash.py tests/unit/test_file_hash.py
+git add clew/indexer/file_hash.py tests/unit/test_file_hash.py
 git commit -m "feat(indexer): add file-hash change detection as git-diff fallback"
 ```
 
@@ -2230,7 +2230,7 @@ git commit -m "feat(indexer): add file-hash change detection as git-diff fallbac
 ## Task 1.9: Ignore Pattern Loading
 
 **Files:**
-- Create: `code_search/indexer/ignore.py`
+- Create: `clew/indexer/ignore.py`
 - Create: `tests/unit/test_ignore.py`
 
 ### Step 1: Write the failing tests
@@ -2244,7 +2244,7 @@ from pathlib import Path
 
 import pytest
 
-from code_search.indexer.ignore import DEFAULT_IGNORE_PATTERNS, IgnorePatternLoader
+from clew.indexer.ignore import DEFAULT_IGNORE_PATTERNS, IgnorePatternLoader
 
 
 class TestDefaultPatterns:
@@ -2276,8 +2276,8 @@ class TestIgnorePatternLoader:
         assert loader.should_ignore("app.log")
         assert loader.should_ignore("build/output.js")
 
-    def test_codesearchignore_loaded(self, project_root: Path) -> None:
-        (project_root / ".codesearchignore").write_text("*.generated.py\n")
+    def test_clewignore_loaded(self, project_root: Path) -> None:
+        (project_root / ".clewignore").write_text("*.generated.py\n")
         loader = IgnorePatternLoader(project_root)
         loader.load()
         assert loader.should_ignore("output.generated.py")
@@ -2290,7 +2290,7 @@ class TestIgnorePatternLoader:
         assert loader.should_ignore("backend/app/migrations/0001.py")
 
     def test_env_var_override(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CODE_SEARCH_EXCLUDE", "*.tmp,*.bak")
+        monkeypatch.setenv("CLEW_EXCLUDE", "*.tmp,*.bak")
         loader = IgnorePatternLoader(project_root)
         loader.load()
         assert loader.should_ignore("data.tmp")
@@ -2326,7 +2326,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/indexer/ignore.py
+# clew/indexer/ignore.py
 """Ignore pattern loading from 5-source hierarchy."""
 
 from __future__ import annotations
@@ -2377,16 +2377,16 @@ class IgnorePatternLoader:
         if gitignore.exists():
             all_patterns.extend(self._read_pattern_file(gitignore))
 
-        # Source 3: .codesearchignore
-        codesearchignore = self.project_root / ".codesearchignore"
-        if codesearchignore.exists():
-            all_patterns.extend(self._read_pattern_file(codesearchignore))
+        # Source 3: .clewignore
+        clewignore = self.project_root / ".clewignore"
+        if clewignore.exists():
+            all_patterns.extend(self._read_pattern_file(clewignore))
 
         # Source 4: config.yaml exclude patterns
         all_patterns.extend(self.config_excludes)
 
         # Source 5: Environment variable (highest priority)
-        env_excludes = os.environ.get("CODE_SEARCH_EXCLUDE", "")
+        env_excludes = os.environ.get("CLEW_EXCLUDE", "")
         if env_excludes:
             all_patterns.extend(env_excludes.split(","))
 
@@ -2422,14 +2422,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/indexer/ignore.py
-mypy code_search/indexer/ignore.py
+ruff check clew/indexer/ignore.py
+mypy clew/indexer/ignore.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/ignore.py tests/unit/test_ignore.py
+git add clew/indexer/ignore.py tests/unit/test_ignore.py
 git commit -m "feat(indexer): add 5-source ignore pattern loading with pathspec"
 ```
 
@@ -2438,10 +2438,10 @@ git commit -m "feat(indexer): add 5-source ignore pattern loading with pathspec"
 ## Task 1.10: Safety Limits
 
 **Files:**
-- Create: `code_search/safety.py`
+- Create: `clew/safety.py`
 - Create: `tests/unit/test_safety.py`
 
-The `SafetyConfig` model already exists in `code_search/models.py` from Task 0. This task implements the `SafetyChecker` that enforces those limits.
+The `SafetyConfig` model already exists in `clew/models.py` from Task 0. This task implements the `SafetyChecker` that enforces those limits.
 
 ### Step 1: Write the failing tests
 
@@ -2453,8 +2453,8 @@ import logging
 
 import pytest
 
-from code_search.models import SafetyConfig
-from code_search.safety import SafetyChecker
+from clew.models import SafetyConfig
+from clew.safety import SafetyChecker
 
 
 class TestSafetyCheckerFileSize:
@@ -2539,7 +2539,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/safety.py
+# clew/safety.py
 """Safety limit enforcement for indexing."""
 
 from __future__ import annotations
@@ -2612,14 +2612,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/safety.py
-mypy code_search/safety.py
+ruff check clew/safety.py
+mypy clew/safety.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/safety.py tests/unit/test_safety.py
+git add clew/safety.py tests/unit/test_safety.py
 git commit -m "feat(safety): add SafetyChecker for file size and chunk count limits"
 ```
 
@@ -2630,10 +2630,10 @@ git commit -m "feat(safety): add SafetyChecker for file size and chunk count lim
 After all tasks are complete, run the full test suite and linters:
 
 ```bash
-pytest --cov=code_search -v
+pytest --cov=clew -v
 ruff check .
 ruff format --check .
-mypy code_search/
+mypy clew/
 ```
 
 Expected: All tests pass, no linting errors, no type errors.
@@ -2643,8 +2643,8 @@ Expected: All tests pass, no linting errors, no type errors.
 Verify the directory structure matches IMPLEMENTATION.md Section 1 (Phase 1 files only):
 
 ```
-code-search/
-├── code_search/
+clew/
+├── clew/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── cli.py

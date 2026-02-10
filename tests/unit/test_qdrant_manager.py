@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from code_search.clients.qdrant import QdrantManager
+from clew.clients.qdrant import QdrantManager
 
 
 def _collection(name: str) -> SimpleNamespace:
@@ -27,7 +27,7 @@ def mock_client() -> Mock:
 
 @pytest.fixture
 def manager(mock_client: Mock) -> QdrantManager:
-    with patch("code_search.clients.qdrant.QdrantClient", return_value=mock_client):
+    with patch("clew.clients.qdrant.QdrantClient", return_value=mock_client):
         return QdrantManager(url="http://localhost:6333")
 
 

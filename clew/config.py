@@ -10,11 +10,11 @@ def _resolve_cache_dir() -> Path:
     """Resolve cache directory: env var > git root > CWD fallback.
 
     Resolution order:
-    1. CODE_SEARCH_CACHE_DIR env var (absolute path)
-    2. {git_root}/.code-search/ (auto-detected)
-    3. .code-search/ relative to CWD (fallback)
+    1. CLEW_CACHE_DIR env var (absolute path)
+    2. {git_root}/.clew/ (auto-detected)
+    3. .clew/ relative to CWD (fallback)
     """
-    env_val = os.environ.get("CODE_SEARCH_CACHE_DIR")
+    env_val = os.environ.get("CLEW_CACHE_DIR")
     if env_val:
         return Path(env_val)
 
@@ -26,11 +26,11 @@ def _resolve_cache_dir() -> Path:
             timeout=5,
         )
         if result.returncode == 0:
-            return Path(result.stdout.strip()) / ".code-search"
+            return Path(result.stdout.strip()) / ".clew"
     except (FileNotFoundError, TimeoutExpired):
         pass
 
-    return Path(".code-search")
+    return Path(".clew")
 
 
 class Environment:
@@ -40,7 +40,7 @@ class Environment:
     QDRANT_URL: str = os.environ.get("QDRANT_URL", "http://localhost:6333")
     QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY") or None
     CACHE_DIR: Path = _resolve_cache_dir()
-    LOG_LEVEL: str = os.environ.get("CODE_SEARCH_LOG_LEVEL", "INFO")
+    LOG_LEVEL: str = os.environ.get("CLEW_LOG_LEVEL", "INFO")
     ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
 
     @classmethod

@@ -26,10 +26,10 @@
 ## Task 2.0: Search Models, SearchConfig & Chunk Metadata Extension
 
 **Files:**
-- Create: `code_search/search/models.py`
+- Create: `clew/search/models.py`
 - Create: `tests/unit/test_search_models.py`
-- Modify: `code_search/models.py` (add SearchConfig, wire into ProjectConfig)
-- Modify: `code_search/chunker/fallback.py` (add metadata to Chunk dataclass)
+- Modify: `clew/models.py` (add SearchConfig, wire into ProjectConfig)
+- Modify: `clew/chunker/fallback.py` (add metadata to Chunk dataclass)
 
 ### Step 1: Write the failing tests
 
@@ -37,7 +37,7 @@
 # tests/unit/test_search_models.py
 """Tests for search pipeline data models."""
 
-from code_search.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
+from clew.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
 
 
 class TestQueryIntent:
@@ -140,7 +140,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write search models
 
 ```python
-# code_search/search/models.py
+# clew/search/models.py
 """Search pipeline data models."""
 
 from __future__ import annotations
@@ -199,10 +199,10 @@ class SearchResponse:
     intent: QueryIntent
 ```
 
-Also update `code_search/search/__init__.py`:
+Also update `clew/search/__init__.py`:
 
 ```python
-# code_search/search/__init__.py
+# clew/search/__init__.py
 """Search pipeline: hybrid retrieval with reranking."""
 ```
 
@@ -213,7 +213,7 @@ Write tests for SearchConfig first:
 ```python
 # tests/unit/test_models.py (CREATE — this file does not exist yet)
 
-from code_search.models import SearchConfig
+from clew.models import SearchConfig
 
 
 class TestSearchConfig:
@@ -237,7 +237,7 @@ class TestSearchConfig:
             SearchConfig(rerank_candidates=200)  # above 100
 ```
 
-Add to `code_search/models.py`:
+Add to `clew/models.py`:
 
 ```python
 class SearchConfig(BaseModel):
@@ -259,7 +259,7 @@ search: SearchConfig = Field(default_factory=SearchConfig)
 
 ### Step 5: Extend Chunk with metadata
 
-Modify `code_search/chunker/fallback.py`:
+Modify `clew/chunker/fallback.py`:
 
 Add `field` to the import from `dataclasses`, add `Any` to the import from `typing`:
 
@@ -331,14 +331,14 @@ Expected: All tests PASS (new models + existing tests still green).
 ### Step 7: Run linters
 
 ```bash
-ruff check code_search/search/models.py code_search/models.py code_search/chunker/fallback.py
-mypy code_search/search/models.py code_search/models.py code_search/chunker/fallback.py
+ruff check clew/search/models.py clew/models.py clew/chunker/fallback.py
+mypy clew/search/models.py clew/models.py clew/chunker/fallback.py
 ```
 
 ### Step 8: Commit
 
 ```bash
-git add code_search/search/ code_search/models.py code_search/chunker/fallback.py tests/unit/test_search_models.py tests/unit/test_models.py
+git add clew/search/ clew/models.py clew/chunker/fallback.py tests/unit/test_search_models.py tests/unit/test_models.py
 git commit -m "feat(search): add search models, SearchConfig, and extend Chunk with metadata"
 ```
 
@@ -347,7 +347,7 @@ git commit -m "feat(search): add search models, SearchConfig, and extend Chunk w
 ## Task 2.1: Code Tokenization for BM25
 
 **Files:**
-- Create: `code_search/search/tokenize.py`
+- Create: `clew/search/tokenize.py`
 - Create: `tests/unit/test_code_tokenize.py`
 
 **Key design spec:** Raw term counts for sparse vector values (Tradeoff E). Qdrant `Modifier.IDF` handles weighting at query time. Hash-based token IDs via `md5(token) % 2^31`.
@@ -358,7 +358,7 @@ git commit -m "feat(search): add search models, SearchConfig, and extend Chunk w
 # tests/unit/test_code_tokenize.py
 """Tests for code-aware BM25 tokenization."""
 
-from code_search.search.tokenize import SparseVector, split_identifier, text_to_sparse_vector, tokenize_code
+from clew.search.tokenize import SparseVector, split_identifier, text_to_sparse_vector, tokenize_code
 
 
 class TestSplitIdentifier:
@@ -449,7 +449,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/search/tokenize.py
+# clew/search/tokenize.py
 """Code-aware tokenization for BM25 sparse vectors.
 
 Sparse vector values are raw term counts (not normalized).
@@ -571,14 +571,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/search/tokenize.py tests/unit/test_code_tokenize.py
-mypy code_search/search/tokenize.py
+ruff check clew/search/tokenize.py tests/unit/test_code_tokenize.py
+mypy clew/search/tokenize.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/search/tokenize.py tests/unit/test_code_tokenize.py
+git add clew/search/tokenize.py tests/unit/test_code_tokenize.py
 git commit -m "feat(search): add code-aware BM25 tokenization with raw term counts"
 ```
 
@@ -587,7 +587,7 @@ git commit -m "feat(search): add code-aware BM25 tokenization with raw term coun
 ## Task 2.2: Intent Classification
 
 **Files:**
-- Create: `code_search/search/intent.py`
+- Create: `clew/search/intent.py`
 - Create: `tests/unit/test_intent.py`
 
 **Key design spec:** Priority order: DEBUG > LOCATION > DOCS > CODE (default). DOCS intent should prefer docs collection.
@@ -598,8 +598,8 @@ git commit -m "feat(search): add code-aware BM25 tokenization with raw term coun
 # tests/unit/test_intent.py
 """Tests for query intent classification."""
 
-from code_search.search.intent import classify_intent, get_intent_collection_preference
-from code_search.search.models import QueryIntent
+from clew.search.intent import classify_intent, get_intent_collection_preference
+from clew.search.models import QueryIntent
 
 
 class TestClassifyIntent:
@@ -659,7 +659,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/search/intent.py
+# clew/search/intent.py
 """Query intent classification using keyword heuristics."""
 
 from __future__ import annotations
@@ -733,14 +733,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/search/intent.py tests/unit/test_intent.py
-mypy code_search/search/intent.py
+ruff check clew/search/intent.py tests/unit/test_intent.py
+mypy clew/search/intent.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/search/intent.py tests/unit/test_intent.py
+git add clew/search/intent.py tests/unit/test_intent.py
 git commit -m "feat(search): add keyword-based intent classification with DOCS collection preference"
 ```
 
@@ -753,7 +753,7 @@ git commit -m "feat(search): add keyword-based intent classification with DOCS c
 ## Task 2.3: Query Enhancement with Synonyms
 
 **Files:**
-- Create: `code_search/search/enhance.py`
+- Create: `clew/search/enhance.py`
 - Create: `tests/unit/test_enhance.py`
 
 **Key design spec:** Terminology YAML has BOTH `abbreviations` AND `synonyms` sections. Enhancement appends expansions to the query.
@@ -766,7 +766,7 @@ git commit -m "feat(search): add keyword-based intent classification with DOCS c
 
 from pathlib import Path
 
-from code_search.search.enhance import QueryEnhancer, should_skip_enhancement
+from clew.search.enhance import QueryEnhancer, should_skip_enhancement
 
 
 class TestShouldSkipEnhancement:
@@ -867,7 +867,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/search/enhance.py
+# clew/search/enhance.py
 """Query enhancement with terminology expansion and skip logic.
 
 Supports both abbreviation expansion and synonym expansion
@@ -957,14 +957,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/search/enhance.py tests/unit/test_enhance.py
-mypy code_search/search/enhance.py
+ruff check clew/search/enhance.py tests/unit/test_enhance.py
+mypy clew/search/enhance.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/search/enhance.py tests/unit/test_enhance.py
+git add clew/search/enhance.py tests/unit/test_enhance.py
 git commit -m "feat(search): add query enhancement with abbreviation and synonym expansion"
 ```
 
@@ -973,7 +973,7 @@ git commit -m "feat(search): add query enhancement with abbreviation and synonym
 ## Task 2.4: Metadata Extraction
 
 **Files:**
-- Create: `code_search/indexer/metadata.py`
+- Create: `clew/indexer/metadata.py`
 - Create: `tests/unit/test_metadata.py`
 
 **Key design specs:**
@@ -990,7 +990,7 @@ git commit -m "feat(search): add query enhancement with abbreviation and synonym
 
 import hashlib
 
-from code_search.indexer.metadata import build_chunk_id, classify_layer, detect_app_name, extract_signature
+from clew.indexer.metadata import build_chunk_id, classify_layer, detect_app_name, extract_signature
 
 
 class TestClassifyLayer:
@@ -1114,7 +1114,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/indexer/metadata.py
+# clew/indexer/metadata.py
 """Metadata extraction for indexed chunks.
 
 Extracts app_name, layer, signature, and builds structured chunk IDs
@@ -1224,14 +1224,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/indexer/metadata.py tests/unit/test_metadata.py
-mypy code_search/indexer/metadata.py
+ruff check clew/indexer/metadata.py tests/unit/test_metadata.py
+mypy clew/indexer/metadata.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/metadata.py tests/unit/test_metadata.py
+git add clew/indexer/metadata.py tests/unit/test_metadata.py
 git commit -m "feat(indexer): add metadata extraction with app_name, layer, signature, chunk IDs"
 ```
 
@@ -1240,7 +1240,7 @@ git commit -m "feat(indexer): add metadata extraction with app_name, layer, sign
 ## Task 2.5: Qdrant Collection Manager
 
 **Files:**
-- Create: `code_search/clients/qdrant.py`
+- Create: `clew/clients/qdrant.py`
 - Create: `tests/unit/test_qdrant_manager.py`
 
 **Key design specs:**
@@ -1259,7 +1259,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from code_search.clients.qdrant import QdrantManager
+from clew.clients.qdrant import QdrantManager
 
 
 @pytest.fixture
@@ -1276,7 +1276,7 @@ def mock_client() -> Mock:
 
 @pytest.fixture
 def manager(mock_client: Mock) -> QdrantManager:
-    with patch("code_search.clients.qdrant.QdrantClient", return_value=mock_client):
+    with patch("clew.clients.qdrant.QdrantClient", return_value=mock_client):
         return QdrantManager(url="http://localhost:6333")
 
 
@@ -1376,7 +1376,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/clients/qdrant.py
+# clew/clients/qdrant.py
 """Qdrant vector database client wrapper.
 
 Collection schema per DESIGN.md:
@@ -1390,7 +1390,7 @@ import logging
 
 from qdrant_client import QdrantClient, models
 
-from code_search.exceptions import QdrantConnectionError
+from clew.exceptions import QdrantConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -1506,14 +1506,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/clients/qdrant.py tests/unit/test_qdrant_manager.py
-mypy code_search/clients/qdrant.py
+ruff check clew/clients/qdrant.py tests/unit/test_qdrant_manager.py
+mypy clew/clients/qdrant.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/clients/qdrant.py tests/unit/test_qdrant_manager.py
+git add clew/clients/qdrant.py tests/unit/test_qdrant_manager.py
 git commit -m "feat(clients): add Qdrant manager with bm25+IDF sparse vectors and delete support"
 ```
 
@@ -1526,7 +1526,7 @@ git commit -m "feat(clients): add Qdrant manager with bm25+IDF sparse vectors an
 ## Task 2.6: Rerank Provider
 
 **Files:**
-- Create: `code_search/search/rerank.py`
+- Create: `clew/search/rerank.py`
 - Create: `tests/unit/test_rerank.py`
 
 **Key design spec:** Configurable candidate limit from SearchConfig (default 30, Tradeoff B). Skip conditions per DESIGN.md lines 574-580.
@@ -1541,7 +1541,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from code_search.search.rerank import RerankProvider, RerankResult, should_skip_rerank
+from clew.search.rerank import RerankProvider, RerankResult, should_skip_rerank
 
 
 class TestShouldSkipRerank:
@@ -1598,7 +1598,7 @@ class TestRerankProvider:
 
     @pytest.fixture
     def provider(self, mock_voyage: Mock) -> RerankProvider:
-        with patch("code_search.search.rerank.voyageai") as mock_module:
+        with patch("clew.search.rerank.voyageai") as mock_module:
             mock_module.Client.return_value = mock_voyage
             return RerankProvider(api_key="test-key")
 
@@ -1639,7 +1639,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/search/rerank.py
+# clew/search/rerank.py
 """Voyage AI reranking integration.
 
 Candidate limit is configurable via SearchConfig (default 30, Tradeoff B).
@@ -1734,14 +1734,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/search/rerank.py tests/unit/test_rerank.py
-mypy code_search/search/rerank.py
+ruff check clew/search/rerank.py tests/unit/test_rerank.py
+mypy clew/search/rerank.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/search/rerank.py tests/unit/test_rerank.py
+git add clew/search/rerank.py tests/unit/test_rerank.py
 git commit -m "feat(search): add Voyage rerank-2.5 provider with configurable skip conditions"
 ```
 
@@ -1750,9 +1750,9 @@ git commit -m "feat(search): add Voyage rerank-2.5 provider with configurable sk
 ## Task 2.7: Git-Aware Change Detection
 
 **Files:**
-- Create: `code_search/indexer/git_tracker.py`
+- Create: `clew/indexer/git_tracker.py`
 - Create: `tests/unit/test_git_tracker.py`
-- Modify: `code_search/indexer/cache.py` (add state table accessor methods)
+- Modify: `clew/indexer/cache.py` (add state table accessor methods)
 - Modify: `tests/unit/test_cache.py` (add tests for state methods)
 
 **Key design spec (Tradeoff D):**
@@ -1788,7 +1788,7 @@ class TestIndexState:
         assert cache.get_last_indexed_commit("docs") == "def456"
 ```
 
-Add methods to `code_search/indexer/cache.py`:
+Add methods to `clew/indexer/cache.py`:
 
 ```python
     def get_last_indexed_commit(self, collection_name: str) -> str | None:
@@ -1830,7 +1830,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from code_search.indexer.git_tracker import GitChangeTracker
+from clew.indexer.git_tracker import GitChangeTracker
 
 
 @pytest.fixture
@@ -1841,13 +1841,13 @@ def project_root(tmp_path: Path) -> Path:
 class TestIsGitRepo:
     def test_is_git_repo_true(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=0, stdout="true\n")
             assert tracker.is_git_repo() is True
 
     def test_is_git_repo_false(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=128, stdout="")
             assert tracker.is_git_repo() is False
 
@@ -1855,13 +1855,13 @@ class TestIsGitRepo:
 class TestGetCurrentCommit:
     def test_returns_commit_hash(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=0, stdout="abc123def\n")
             assert tracker.get_current_commit() == "abc123def"
 
     def test_returns_none_on_error(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=128, stdout="")
             assert tracker.get_current_commit() is None
 
@@ -1870,7 +1870,7 @@ class TestGetChangesSince:
     def test_parses_added_modified_deleted(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
         git_output = "A\tnew_file.py\nM\tmodified.py\nD\tdeleted.py\n"
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=0, stdout=git_output)
             changes = tracker.get_changes_since("abc123")
         assert changes["added"] == ["new_file.py"]
@@ -1880,7 +1880,7 @@ class TestGetChangesSince:
     def test_parses_renamed(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
         git_output = "R100\told_name.py\tnew_name.py\n"
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=0, stdout=git_output)
             changes = tracker.get_changes_since("abc123")
         assert len(changes["renamed"]) == 1
@@ -1888,7 +1888,7 @@ class TestGetChangesSince:
 
     def test_empty_output(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=0, stdout="")
             changes = tracker.get_changes_since("abc123")
         assert changes == {"added": [], "modified": [], "deleted": [], "renamed": []}
@@ -1896,7 +1896,7 @@ class TestGetChangesSince:
     def test_multiple_changes(self, project_root: Path) -> None:
         tracker = GitChangeTracker(project_root)
         git_output = "A\ta.py\nA\tb.py\nM\tc.py\n"
-        with patch("code_search.indexer.git_tracker.subprocess") as mock_sub:
+        with patch("clew.indexer.git_tracker.subprocess") as mock_sub:
             mock_sub.run.return_value = Mock(returncode=0, stdout=git_output)
             changes = tracker.get_changes_since("abc123")
         assert len(changes["added"]) == 2
@@ -1914,7 +1914,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/indexer/git_tracker.py
+# clew/indexer/git_tracker.py
 """Git-aware change detection (primary tier).
 
 Tier 1: git diff --name-status for add/modify/delete/rename detection.
@@ -2008,14 +2008,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/indexer/git_tracker.py tests/unit/test_git_tracker.py
-mypy code_search/indexer/git_tracker.py
+ruff check clew/indexer/git_tracker.py tests/unit/test_git_tracker.py
+mypy clew/indexer/git_tracker.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/git_tracker.py code_search/indexer/cache.py tests/unit/test_git_tracker.py tests/unit/test_cache.py
+git add clew/indexer/git_tracker.py clew/indexer/cache.py tests/unit/test_git_tracker.py tests/unit/test_cache.py
 git commit -m "feat(indexer): add git-aware change detection and CacheDB state accessors"
 ```
 
@@ -2024,7 +2024,7 @@ git commit -m "feat(indexer): add git-aware change detection and CacheDB state a
 ## Task 2.8: Indexing Pipeline
 
 **Files:**
-- Create: `code_search/indexer/pipeline.py`
+- Create: `clew/indexer/pipeline.py`
 - Create: `tests/unit/test_indexing_pipeline.py`
 
 **Key design specs:**
@@ -2045,7 +2045,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from code_search.indexer.pipeline import IndexingPipeline, IndexingResult, _detect_language, _is_test_file
+from clew.indexer.pipeline import IndexingPipeline, IndexingResult, _detect_language, _is_test_file
 
 
 class TestDetectLanguage:
@@ -2207,7 +2207,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/indexer/pipeline.py
+# clew/indexer/pipeline.py
 """Indexing pipeline: file -> chunk -> metadata -> embed -> upsert to Qdrant.
 
 Uses structured chunk IDs, full metadata payload, and BM25 sparse vectors
@@ -2228,14 +2228,14 @@ from qdrant_client import models
 # Namespace for deterministic UUID generation from chunk IDs
 CHUNK_UUID_NAMESPACE = uuid.UUID("a3c0e7d2-b1f4-4c8a-9e6d-5f2a1b3c4d5e")
 
-from code_search.chunker.fallback import Chunk, split_file
-from code_search.chunker.parser import ASTParser
-from code_search.indexer.metadata import build_chunk_id, classify_layer, detect_app_name, extract_signature
-from code_search.search.tokenize import text_to_sparse_vector
+from clew.chunker.fallback import Chunk, split_file
+from clew.chunker.parser import ASTParser
+from clew.indexer.metadata import build_chunk_id, classify_layer, detect_app_name, extract_signature
+from clew.search.tokenize import text_to_sparse_vector
 
 if TYPE_CHECKING:
-    from code_search.clients.base import EmbeddingProvider
-    from code_search.clients.qdrant import QdrantManager
+    from clew.clients.base import EmbeddingProvider
+    from clew.clients.qdrant import QdrantManager
 
 logger = logging.getLogger(__name__)
 
@@ -2415,14 +2415,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/indexer/pipeline.py tests/unit/test_indexing_pipeline.py
-mypy code_search/indexer/pipeline.py
+ruff check clew/indexer/pipeline.py tests/unit/test_indexing_pipeline.py
+mypy clew/indexer/pipeline.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/indexer/pipeline.py tests/unit/test_indexing_pipeline.py
+git add clew/indexer/pipeline.py tests/unit/test_indexing_pipeline.py
 git commit -m "feat(indexer): add indexing pipeline with structured IDs, metadata, and bm25 sparse vectors"
 ```
 
@@ -2435,7 +2435,7 @@ git commit -m "feat(indexer): add indexing pipeline with structured IDs, metadat
 ## Task 2.9: Hybrid Search Engine with Structural Boosting
 
 **Files:**
-- Create: `code_search/search/hybrid.py`
+- Create: `clew/search/hybrid.py`
 - Create: `tests/unit/test_hybrid_search.py`
 
 **Key design specs:**
@@ -2454,8 +2454,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from code_search.search.hybrid import HybridSearchEngine
-from code_search.search.models import QueryIntent, SearchResult
+from clew.search.hybrid import HybridSearchEngine
+from clew.search.models import QueryIntent, SearchResult
 
 
 @pytest.fixture
@@ -2581,7 +2581,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write implementation
 
 ```python
-# code_search/search/hybrid.py
+# clew/search/hybrid.py
 """Hybrid search engine: dense + BM25 with RRF fusion and structural boosting.
 
 Multi-prefetch approach per DESIGN.md:
@@ -2598,14 +2598,14 @@ from typing import TYPE_CHECKING
 
 from qdrant_client import models
 
-from code_search.indexer.metadata import detect_app_name
+from clew.indexer.metadata import detect_app_name
 
 from .models import QueryIntent, SearchResult
 from .tokenize import text_to_sparse_vector
 
 if TYPE_CHECKING:
-    from code_search.clients.base import EmbeddingProvider
-    from code_search.clients.qdrant import QdrantManager
+    from clew.clients.base import EmbeddingProvider
+    from clew.clients.qdrant import QdrantManager
 
 logger = logging.getLogger(__name__)
 
@@ -2737,14 +2737,14 @@ Expected: All tests PASS.
 ### Step 5: Run linters
 
 ```bash
-ruff check code_search/search/hybrid.py tests/unit/test_hybrid_search.py
-mypy code_search/search/hybrid.py
+ruff check clew/search/hybrid.py tests/unit/test_hybrid_search.py
+mypy clew/search/hybrid.py
 ```
 
 ### Step 6: Commit
 
 ```bash
-git add code_search/search/hybrid.py tests/unit/test_hybrid_search.py
+git add clew/search/hybrid.py tests/unit/test_hybrid_search.py
 git commit -m "feat(search): add hybrid search engine with multi-prefetch structural boosting"
 ```
 
@@ -2753,9 +2753,9 @@ git commit -m "feat(search): add hybrid search engine with multi-prefetch struct
 ## Task 2.10: Search Orchestrator & CLI Integration
 
 **Files:**
-- Create: `code_search/search/engine.py`
+- Create: `clew/search/engine.py`
 - Create: `tests/unit/test_search_engine.py`
-- Modify: `code_search/cli.py` (wire search and index commands)
+- Modify: `clew/cli.py` (wire search and index commands)
 
 **Key design specs:**
 - Full pipeline: enhance → classify intent → search → rerank → SearchResponse
@@ -2773,9 +2773,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from code_search.models import SearchConfig
-from code_search.search.engine import SearchEngine
-from code_search.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
+from clew.models import SearchConfig
+from clew.search.engine import SearchEngine
+from clew.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
 
 
 @pytest.fixture
@@ -2798,7 +2798,7 @@ def mock_hybrid() -> Mock:
 
 @pytest.fixture
 def mock_reranker() -> Mock:
-    from code_search.search.rerank import RerankResult
+    from clew.search.rerank import RerankResult
 
     reranker = Mock()
     reranker.rerank.return_value = [
@@ -2924,7 +2924,7 @@ Expected: FAIL — module doesn't exist.
 ### Step 3: Write search engine implementation
 
 ```python
-# code_search/search/engine.py
+# clew/search/engine.py
 """Search orchestrator: enhance -> classify -> search -> rerank -> respond.
 
 Returns SearchResponse with query_enhanced and total_candidates fields.
@@ -2936,16 +2936,16 @@ import logging
 import statistics
 from typing import TYPE_CHECKING
 
-from code_search.models import SearchConfig
+from clew.models import SearchConfig
 
 from .intent import classify_intent, get_intent_collection_preference
 from .models import SearchRequest, SearchResponse, SearchResult
 from .rerank import should_skip_rerank
 
 if TYPE_CHECKING:
-    from code_search.search.enhance import QueryEnhancer
-    from code_search.search.hybrid import HybridSearchEngine
-    from code_search.search.rerank import RerankProvider
+    from clew.search.enhance import QueryEnhancer
+    from clew.search.hybrid import HybridSearchEngine
+    from clew.search.rerank import RerankProvider
 
 logger = logging.getLogger(__name__)
 
@@ -3050,11 +3050,11 @@ class SearchEngine:
 
 ### Step 4: Update CLI
 
-Modify `code_search/cli.py` to wire the search and index commands:
+Modify `clew/cli.py` to wire the search and index commands:
 
 ```python
-# code_search/cli.py
-"""Typer CLI for code-search."""
+# clew/cli.py
+"""Typer CLI for clew."""
 
 from __future__ import annotations
 
@@ -3075,13 +3075,13 @@ def index(
     files: list[str] = typer.Option(None, "--files", "-f"),
 ) -> None:
     """Index the codebase."""
-    console.print("[yellow]Indexing not yet fully wired. Pipeline available at code_search.indexer.pipeline.[/yellow]")
+    console.print("[yellow]Indexing not yet fully wired. Pipeline available at clew.indexer.pipeline.[/yellow]")
 
 
 @app.command()
 def status() -> None:
     """Show system health and index statistics."""
-    console.print("[bold]code-search status[/bold]")
+    console.print("[bold]clew status[/bold]")
     console.print("  Qdrant: [dim]not checked[/dim]")
     console.print("  Collections: [dim]none[/dim]")
 
@@ -3110,14 +3110,14 @@ Expected: All tests PASS.
 ### Step 6: Run linters
 
 ```bash
-ruff check code_search/search/engine.py code_search/cli.py
-mypy code_search/search/engine.py
+ruff check clew/search/engine.py clew/cli.py
+mypy clew/search/engine.py
 ```
 
 ### Step 7: Commit
 
 ```bash
-git add code_search/search/engine.py tests/unit/test_search_engine.py code_search/cli.py
+git add clew/search/engine.py tests/unit/test_search_engine.py clew/cli.py
 git commit -m "feat(search): add search orchestrator with SearchResponse, configurable reranking, and DOCS intent"
 ```
 
@@ -3128,10 +3128,10 @@ git commit -m "feat(search): add search orchestrator with SearchResponse, config
 After all tasks are complete, run the full test suite and linters:
 
 ```bash
-pytest --cov=code_search -v
+pytest --cov=clew -v
 ruff check .
 ruff format --check .
-mypy code_search/
+mypy clew/
 ```
 
 Expected: All tests pass (160+), no linting errors, no type errors.
@@ -3141,7 +3141,7 @@ Expected: All tests pass (160+), no linting errors, no type errors.
 Verify new files added in Phase 2:
 
 ```
-code_search/
+clew/
 ├── search/
 │   ├── __init__.py        (updated)
 │   ├── models.py          (NEW — QueryIntent, SearchResult, SearchRequest, SearchResponse)

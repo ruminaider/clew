@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from code_search.indexer.extractors.base import RelationshipExtractor
-from code_search.indexer.relationships import Relationship
+from clew.indexer.extractors.base import RelationshipExtractor
+from clew.indexer.relationships import Relationship
 
 _TEST_FILE_PATTERNS = [
     re.compile(r"(?:^|/)test_"),

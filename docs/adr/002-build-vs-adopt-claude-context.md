@@ -14,11 +14,11 @@
 We evaluated three options:
 1. **Adopt claude-context directly** — use it as-is
 2. **Fork and adapt** — fork claude-context and modify it for our needs
-3. **Build standalone** — build code-search from scratch, porting specific ideas
+3. **Build standalone** — build clew from scratch, porting specific ideas
 
 ## Decision
 
-**Build code-search as a standalone system**, porting 8 specific patterns from claude-context (documented in [ADR-003](./003-ported-features-from-claude-context.md)).
+**Build clew as a standalone system**, porting 8 specific patterns from claude-context (documented in [ADR-003](./003-ported-features-from-claude-context.md)).
 
 ## Rationale
 
@@ -40,7 +40,7 @@ Porting TS→Python is not a trivial translation — it requires rethinking asyn
 
 claude-context is a generic tool. Our design requires features it does not have:
 
-| Feature | code-search | claude-context |
+| Feature | clew | claude-context |
 |---------|-------------|----------------|
 | Terminology expansion (BV, UTI, STI) | Yes — static YAML + discovery | No |
 | Django layer awareness (model/view/serializer) | Yes — structural boosting | No |

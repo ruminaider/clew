@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING
 
 from qdrant_client import models
 
-from code_search.indexer.metadata import detect_app_name
+from clew.indexer.metadata import detect_app_name
 
 from .models import QueryIntent, SearchResult
 from .tokenize import text_to_sparse_vector
 
 if TYPE_CHECKING:
-    from code_search.clients.base import EmbeddingProvider
-    from code_search.clients.qdrant import QdrantManager
+    from clew.clients.base import EmbeddingProvider
+    from clew.clients.qdrant import QdrantManager
 
 logger = logging.getLogger(__name__)
 

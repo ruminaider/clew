@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from code_search.indexer.relationships import Relationship
+from clew.indexer.relationships import Relationship
 
 
 class RelationshipExtractor(ABC):

@@ -1,4 +1,4 @@
-"""End-to-end integration tests for the code-search pipeline.
+"""End-to-end integration tests for the clew pipeline.
 
 These tests verify the full pipeline: index -> search -> results.
 They mock external services (Qdrant, Voyage) but test real file processing,
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from code_search.indexer.change_detector import ChangeDetector
+from clew.indexer.change_detector import ChangeDetector
 
 
 @pytest.fixture
@@ -74,7 +74,7 @@ class TestIndexThenSearch:
 
     async def test_index_creates_chunks(self, sample_project, mock_qdrant, mock_embedder):
         """Index sample files and verify chunks are created."""
-        from code_search.indexer.pipeline import IndexingPipeline
+        from clew.indexer.pipeline import IndexingPipeline
 
         pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder)
 
@@ -88,10 +88,10 @@ class TestIndexThenSearch:
 
     async def test_index_then_search(self, sample_project, mock_qdrant, mock_embedder):
         """Index files then search returns relevant results."""
-        from code_search.indexer.pipeline import IndexingPipeline
-        from code_search.search.engine import SearchEngine
-        from code_search.search.hybrid import HybridSearchEngine
-        from code_search.search.models import SearchRequest
+        from clew.indexer.pipeline import IndexingPipeline
+        from clew.search.engine import SearchEngine
+        from clew.search.hybrid import HybridSearchEngine
+        from clew.search.models import SearchRequest
 
         # Index
         pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder)
@@ -111,7 +111,7 @@ class TestIndexThenSearch:
 
     async def test_index_typescript_files(self, sample_project, mock_qdrant, mock_embedder):
         """TypeScript files are indexed successfully."""
-        from code_search.indexer.pipeline import IndexingPipeline
+        from clew.indexer.pipeline import IndexingPipeline
 
         pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder)
 
@@ -123,7 +123,7 @@ class TestIndexThenSearch:
 
     async def test_indexed_chunks_have_metadata(self, sample_project, mock_qdrant, mock_embedder):
         """Indexed chunks contain expected metadata fields."""
-        from code_search.indexer.pipeline import IndexingPipeline
+        from clew.indexer.pipeline import IndexingPipeline
 
         pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder)
 
@@ -148,7 +148,7 @@ class TestChangeDetection:
 
     def test_fresh_index_detects_all_as_added(self, sample_project, temp_cache_dir):
         """First-time indexing detects all files as added."""
-        from code_search.indexer.cache import CacheDB
+        from clew.indexer.cache import CacheDB
 
         cache = CacheDB(temp_cache_dir)
         detector = ChangeDetector(sample_project, cache)
@@ -163,8 +163,8 @@ class TestChangeDetection:
 
     def test_unchanged_files_detected(self, sample_project, temp_cache_dir):
         """Files with cached hashes are detected as unchanged."""
-        from code_search.indexer.cache import CacheDB
-        from code_search.indexer.file_hash import FileHashTracker
+        from clew.indexer.cache import CacheDB
+        from clew.indexer.file_hash import FileHashTracker
 
         cache = CacheDB(temp_cache_dir)
         tracker = FileHashTracker(cache)
@@ -186,8 +186,8 @@ class TestChangeDetection:
 
     def test_modified_file_detected(self, sample_project, temp_cache_dir):
         """Modified files are detected after content changes."""
-        from code_search.indexer.cache import CacheDB
-        from code_search.indexer.file_hash import FileHashTracker
+        from clew.indexer.cache import CacheDB
+        from clew.indexer.file_hash import FileHashTracker
 
         cache = CacheDB(temp_cache_dir)
         tracker = FileHashTracker(cache)
@@ -216,8 +216,8 @@ class TestMCPToolsWithMockedBackend:
 
     async def test_mcp_search_tool(self, sample_project):
         """MCP search tool returns structured output."""
-        from code_search.mcp_server import search
-        from code_search.search.models import SearchResult
+        from clew.mcp_server import search
+        from clew.search.models import SearchResult
 
         mock_result = SearchResult(
             file_path="src/auth.py",
@@ -235,7 +235,7 @@ class TestMCPToolsWithMockedBackend:
         mock_components = Mock()
         mock_components.search_engine.search = AsyncMock(return_value=mock_response)
 
-        with patch("code_search.mcp_server._get_components", return_value=mock_components):
+        with patch("clew.mcp_server._get_components", return_value=mock_components):
             results = await search("authenticate")
 
         assert isinstance(results, list)
@@ -245,14 +245,14 @@ class TestMCPToolsWithMockedBackend:
 
     async def test_mcp_get_context_reads_real_file(self, sample_project):
         """MCP get_context reads real files from disk."""
-        from code_search.mcp_server import get_context
+        from clew.mcp_server import get_context
 
         mock_components = Mock()
         mock_components.search_engine.search = AsyncMock(return_value=Mock(results=[]))
 
         file_path = str(sample_project / "src" / "models.py")
 
-        with patch("code_search.mcp_server._get_components", return_value=mock_components):
+        with patch("clew.mcp_server._get_components", return_value=mock_components):
             result = await get_context(file_path)
 
         assert result["file_path"] == file_path
@@ -261,7 +261,7 @@ class TestMCPToolsWithMockedBackend:
 
     async def test_mcp_index_status(self):
         """MCP index_status returns structured status."""
-        from code_search.mcp_server import index_status
+        from clew.mcp_server import index_status
 
         mock_components = Mock()
         mock_components.qdrant.health_check.return_value = True
@@ -269,7 +269,7 @@ class TestMCPToolsWithMockedBackend:
         mock_components.qdrant.collection_count.return_value = 100
         mock_components.cache.get_last_indexed_commit.return_value = "abc123"
 
-        with patch("code_search.mcp_server._get_components", return_value=mock_components):
+        with patch("clew.mcp_server._get_components", return_value=mock_components):
             result = await index_status(action="status")
 
         assert result["qdrant_healthy"] is True
@@ -278,8 +278,8 @@ class TestMCPToolsWithMockedBackend:
 
     async def test_mcp_search_returns_error_on_failure(self):
         """MCP search tool returns error dict on exception."""
-        from code_search.exceptions import QdrantConnectionError
-        from code_search.mcp_server import search
+        from clew.exceptions import QdrantConnectionError
+        from clew.mcp_server import search
 
         mock_components = Mock()
         mock_components.search_engine.search = AsyncMock(
@@ -288,7 +288,7 @@ class TestMCPToolsWithMockedBackend:
             )
         )
 
-        with patch("code_search.mcp_server._get_components", return_value=mock_components):
+        with patch("clew.mcp_server._get_components", return_value=mock_components):
             result = await search("test query")
 
         assert isinstance(result, dict)
@@ -297,11 +297,11 @@ class TestMCPToolsWithMockedBackend:
 
     async def test_mcp_get_context_missing_file(self):
         """MCP get_context returns error for missing file."""
-        from code_search.mcp_server import get_context
+        from clew.mcp_server import get_context
 
         mock_components = Mock()
 
-        with patch("code_search.mcp_server._get_components", return_value=mock_components):
+        with patch("clew.mcp_server._get_components", return_value=mock_components):
             result = await get_context("/nonexistent/file.py")
 
         assert "error" in result

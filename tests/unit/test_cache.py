@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from code_search.indexer.cache import CacheDB
+from clew.indexer.cache import CacheDB
 
 
 class TestCacheDB:
@@ -133,7 +133,7 @@ class TestRelationshipStore:
         return CacheDB(temp_cache_dir)
 
     def test_store_and_get_relationships(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
@@ -144,7 +144,7 @@ class TestRelationshipStore:
         assert len(result) == 2
 
     def test_get_relationships_inbound(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::main", "calls", "b.py::helper", "a.py"),
@@ -155,7 +155,7 @@ class TestRelationshipStore:
         assert result[0].source_entity == "a.py::main"
 
     def test_get_relationships_both_directions(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
@@ -166,7 +166,7 @@ class TestRelationshipStore:
         assert len(result) == 2
 
     def test_delete_relationships_by_file(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
@@ -182,7 +182,7 @@ class TestRelationshipStore:
 
     def test_store_relationships_upserts(self, cache: CacheDB) -> None:
         """Storing same relationship twice doesn't create duplicates."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rel = Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py")
         cache.store_relationships([rel])
@@ -197,7 +197,7 @@ class TestBFSTraversal:
         return CacheDB(temp_cache_dir)
 
     def test_single_hop(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py")]
         cache.store_relationships(rels)
@@ -206,7 +206,7 @@ class TestBFSTraversal:
         assert result[0]["depth"] == 1
 
     def test_multi_hop(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
@@ -220,7 +220,7 @@ class TestBFSTraversal:
         assert depths["c.py::Baz"] == 2
 
     def test_max_depth_limits_traversal(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::A", "calls", "b.py::B", "a.py"),
@@ -232,7 +232,7 @@ class TestBFSTraversal:
         assert len(result) == 1
 
     def test_filter_by_relationship_type(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::Foo", "imports", "b.py::Bar", "a.py"),
@@ -247,7 +247,7 @@ class TestBFSTraversal:
 
     def test_cycle_detection(self, cache: CacheDB) -> None:
         """BFS doesn't loop on circular references."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::A", "calls", "b.py::B", "a.py"),
@@ -258,7 +258,7 @@ class TestBFSTraversal:
         assert len(result) == 2
 
     def test_inbound_traversal(self, cache: CacheDB) -> None:
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::A", "calls", "c.py::C", "a.py"),
@@ -276,7 +276,7 @@ class TestResolveEntity:
 
     def test_exact_match(self, cache: CacheDB) -> None:
         """Returns the entity as-is when it's an exact match."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship(
@@ -292,7 +292,7 @@ class TestResolveEntity:
 
     def test_suffix_match_relative_path(self, cache: CacheDB) -> None:
         """Resolves a relative path to the full absolute entity."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship(
@@ -308,7 +308,7 @@ class TestResolveEntity:
 
     def test_symbol_only_match(self, cache: CacheDB) -> None:
         """Resolves a bare symbol name to the full entity."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship(
@@ -324,7 +324,7 @@ class TestResolveEntity:
 
     def test_no_match_returns_original(self, cache: CacheDB) -> None:
         """Returns the original string when nothing matches."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
@@ -335,7 +335,7 @@ class TestResolveEntity:
 
     def test_prefers_source_entity(self, cache: CacheDB) -> None:
         """When entity suffix appears in both source and target, prefers source."""
-        from code_search.indexer.relationships import Relationship
+        from clew.indexer.relationships import Relationship
 
         rels = [
             Relationship(

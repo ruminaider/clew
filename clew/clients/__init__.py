@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from code_search.exceptions import ConfigError
+from clew.exceptions import ConfigError
 
 if TYPE_CHECKING:
-    from code_search.config import Environment
-    from code_search.models import IndexingConfig
+    from clew.config import Environment
+    from clew.models import IndexingConfig
 
     from .base import EmbeddingProvider
 

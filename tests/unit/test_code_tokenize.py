@@ -1,6 +1,6 @@
 """Tests for code-aware BM25 tokenization."""
 
-from code_search.search.tokenize import (
+from clew.search.tokenize import (
     SparseVector,
     split_identifier,
     text_to_sparse_vector,

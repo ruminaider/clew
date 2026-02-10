@@ -2,13 +2,13 @@
 
 **Status:** Brainstorm — captures future direction, not V1 scope
 **Date:** 2026-02-06
-**Context:** Brainstorm following claude-context evaluation. Explores whether code-search needs knowledge graphs and what it means to combine embeddings with structured relationships.
+**Context:** Brainstorm following claude-context evaluation. Explores whether clew needs knowledge graphs and what it means to combine embeddings with structured relationships.
 
 ---
 
 ## Problem Statement
 
-Vector search (code-search V1) answers: "What code is semantically similar to my question?" But four classes of queries remain hard:
+Vector search (clew V1) answers: "What code is semantically similar to my question?" But four classes of queries remain hard:
 
 | Problem | Why embeddings alone struggle |
 |---------|-------------------------------|
@@ -21,7 +21,7 @@ Vector search (code-search V1) answers: "What code is semantically similar to my
 
 | Layer | Question it answers | Best tool | Timing |
 |-------|-------------------|-----------|--------|
-| **Semantic** | "What code is *about* this topic?" | Vector search (code-search V1) | Now |
+| **Semantic** | "What code is *about* this topic?" | Vector search (clew V1) | Now |
 | **Structural** | "What *calls/depends on/imports* what?" | Graph from AST + imports | V1.2 |
 | **Business** | "What code *implements* this business process step?" | Explicit mapping (blueprint → code) | V2+ |
 
@@ -33,7 +33,7 @@ No single layer answers the hard questions. All three together do.
 
 ## Layer 1: Semantic (V1 — Designed, Ready to Build)
 
-This is code-search as currently designed in DESIGN.md and IMPLEMENTATION.md. Voyage AI embeddings, Qdrant hybrid search, BM25, reranking.
+This is clew as currently designed in DESIGN.md and IMPLEMENTATION.md. Voyage AI embeddings, Qdrant hybrid search, BM25, reranking.
 
 No changes needed. Proceed with implementation.
 
@@ -99,7 +99,7 @@ File → tree-sitter parse → extract chunks (existing)
 No second pass. Same AST, same parse.
 
 ```python
-# code_search/indexer/relationships.py
+# clew/indexer/relationships.py
 class RelationshipExtractor:
     def __init__(self, ast_parser: ASTParser, db: CacheDB):
         self.parser = ast_parser
@@ -160,7 +160,7 @@ Static analysis can't resolve dynamic dispatch, `getattr`, computed method names
 A standalone tool (like GoRules but for service processes) that:
 - Has a visual editor for creating/editing service blueprints
 - Produces YAML files in a custom graph schema (GoRules JDM-inspired)
-- Is usable across organizations (not code-search-specific)
+- Is usable across organizations (not clew-specific)
 - Outputs version-controlled YAML files that live in the project repo
 
 This is a separate project. Code-search does not create blueprints — it consumes them.
@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS blueprint_steps (
 );
 ```
 
-**Reverse lookup:** Developer changes `care/service.py::create_prescription` → code-search answers "this implements Step 3 of Prescription Fulfillment (backstage lane)."
+**Reverse lookup:** Developer changes `care/service.py::create_prescription` → clew answers "this implements Step 3 of Prescription Fulfillment (backstage lane)."
 
 **Config:**
 

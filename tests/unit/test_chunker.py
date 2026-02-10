@@ -1,7 +1,7 @@
 """Tests for AST parsing and entity extraction."""
 
-from code_search.chunker.parser import ASTParser
-from code_search.chunker.strategies import PythonChunker
+from clew.chunker.parser import ASTParser
+from clew.chunker.strategies import PythonChunker
 
 
 class TestASTParser:

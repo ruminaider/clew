@@ -48,16 +48,16 @@ class IgnorePatternLoader:
         if gitignore.exists():
             all_patterns.extend(self._read_pattern_file(gitignore))
 
-        # Source 3: .codesearchignore
-        codesearchignore = self.project_root / ".codesearchignore"
-        if codesearchignore.exists():
-            all_patterns.extend(self._read_pattern_file(codesearchignore))
+        # Source 3: .clewignore
+        clewignore = self.project_root / ".clewignore"
+        if clewignore.exists():
+            all_patterns.extend(self._read_pattern_file(clewignore))
 
         # Source 4: config.yaml exclude patterns
         all_patterns.extend(self.config_excludes)
 
         # Source 5: Environment variable (highest priority)
-        env_excludes = os.environ.get("CODE_SEARCH_EXCLUDE", "")
+        env_excludes = os.environ.get("CLEW_EXCLUDE", "")
         if env_excludes:
             all_patterns.extend(env_excludes.split(","))
 

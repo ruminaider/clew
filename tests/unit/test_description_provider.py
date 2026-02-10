@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from code_search.clients.description import DescriptionProvider
+from clew.clients.description import DescriptionProvider
 
 
 @pytest.fixture()
@@ -27,7 +27,7 @@ def _make_provider(
     max_concurrent: int = 5,
 ) -> AnthropicDescriptionProvider:  # noqa: F821
     """Create an AnthropicDescriptionProvider with the mocked anthropic module."""
-    from code_search.clients.description import AnthropicDescriptionProvider
+    from clew.clients.description import AnthropicDescriptionProvider
 
     kwargs: dict[str, object] = {"api_key": api_key}
     if model is not None:

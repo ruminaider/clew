@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from code_search.discovery import discover_files
-from code_search.models import ProjectConfig, SafetyConfig
+from clew.discovery import discover_files
+from clew.models import ProjectConfig, SafetyConfig
 
 
 class TestDiscoverFiles:
@@ -112,8 +112,8 @@ class TestDiscoverFiles:
 
         assert result == []
 
-    def test_respects_codesearchignore(self, tmp_path: Path) -> None:
-        (tmp_path / ".codesearchignore").write_text("*.generated.py\n")
+    def test_respects_clewignore(self, tmp_path: Path) -> None:
+        (tmp_path / ".clewignore").write_text("*.generated.py\n")
         (tmp_path / "output.generated.py").write_text("x = 1")
         (tmp_path / "app.py").write_text("y = 2")
         config = ProjectConfig()

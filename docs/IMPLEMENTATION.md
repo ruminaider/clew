@@ -3,7 +3,7 @@
 **Status:** Draft
 **Companion Document:** [DESIGN.md](./DESIGN.md)
 
-This guide provides the concrete specifications needed to implement the code-search tool. The DESIGN doc covers *why* we're building it; this doc covers *how*.
+This guide provides the concrete specifications needed to implement the clew tool. The DESIGN doc covers *why* we're building it; this doc covers *how*.
 
 ---
 
@@ -32,10 +32,10 @@ This guide provides the concrete specifications needed to implement the code-sea
 ### Repository Structure
 
 ```
-code-search/                          # https://github.com/ruminaider/code-search
-├── code_search/
+clew/                          # https://github.com/ruminaider/clew
+├── clew/
 │   ├── __init__.py
-│   ├── __main__.py                   # Entry point: python -m code_search
+│   ├── __main__.py                   # Entry point: python -m clew
 │   ├── cli.py                        # typer CLI
 │   ├── mcp_server.py                 # MCP server
 │   ├── config.py                     # Config loading and validation
@@ -108,7 +108,7 @@ Python >= 3.10
 
 ```toml
 [project]
-name = "code-search"
+name = "clew"
 version = "0.1.0"
 description = "Semantic code search with hybrid retrieval and MCP integration"
 readme = "README.md"
@@ -117,7 +117,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "Ruminaider", email = "hello@ruminaider.com"}
 ]
-keywords = ["code-search", "embeddings", "qdrant", "mcp", "claude"]
+keywords = ["clew", "embeddings", "qdrant", "mcp", "claude"]
 
 dependencies = [
     # Core
@@ -164,7 +164,7 @@ dev = [
 ]
 
 [project.scripts]
-code-search = "code_search.cli:app"
+clew = "clew.cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -213,7 +213,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.9.2
-    container_name: code-search-qdrant
+    container_name: clew-qdrant
     ports:
       - "6333:6333"   # REST API
       - "6334:6334"   # gRPC
@@ -246,14 +246,14 @@ VOYAGE_API_KEY=pa-xxxxxxxxxxxxxxxxxxxx
 # Optional (defaults shown)
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=                          # Empty for local, set for cloud
-CODE_SEARCH_CACHE_DIR=.code-search       # SQLite cache location
-CODE_SEARCH_LOG_LEVEL=INFO
+CLEW_CACHE_DIR=.clew       # SQLite cache location
+CLEW_LOG_LEVEL=INFO
 ```
 
 ### Environment Variable Loading
 
 ```python
-# code_search/config.py
+# clew/config.py
 import os
 from pathlib import Path
 
@@ -263,8 +263,8 @@ class Environment:
     VOYAGE_API_KEY: str = os.environ.get("VOYAGE_API_KEY", "")
     QDRANT_URL: str = os.environ.get("QDRANT_URL", "http://localhost:6333")
     QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY") or None
-    CACHE_DIR: Path = Path(os.environ.get("CODE_SEARCH_CACHE_DIR", ".code-search"))
-    LOG_LEVEL: str = os.environ.get("CODE_SEARCH_LOG_LEVEL", "INFO")
+    CACHE_DIR: Path = Path(os.environ.get("CLEW_CACHE_DIR", ".clew"))
+    LOG_LEVEL: str = os.environ.get("CLEW_LOG_LEVEL", "INFO")
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -282,7 +282,7 @@ class Environment:
 ### Database Location
 
 ```
-{project_root}/.code-search/
+{project_root}/.clew/
 ├── cache.db          # Embedding and chunk cache
 ├── state.db          # Indexing state and checkpoints
 └── logs/             # Debug logs (optional)
@@ -369,7 +369,7 @@ CREATE TABLE IF NOT EXISTS safety_state (
 ### Cache Implementation
 
 ```python
-# code_search/indexer/cache.py
+# clew/indexer/cache.py
 import sqlite3
 import json
 from pathlib import Path
@@ -486,7 +486,7 @@ class CacheDB:
 ### Pydantic Models
 
 ```python
-# code_search/models.py
+# clew/models.py
 from enum import Enum
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
@@ -625,7 +625,7 @@ class ProjectConfig(BaseModel):
 Tree-sitter requires language grammars to be compiled. The Python bindings handle this automatically:
 
 ```python
-# code_search/chunker/parser.py
+# clew/chunker/parser.py
 from tree_sitter import Language, Parser
 import tree_sitter_python
 import tree_sitter_typescript
@@ -693,7 +693,7 @@ class ASTParser:
 ### Extracting Code Entities
 
 ```python
-# code_search/chunker/strategies.py
+# clew/chunker/strategies.py
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -790,14 +790,14 @@ class PythonChunker:
 ### Exception Hierarchy
 
 ```python
-# code_search/exceptions.py
+# clew/exceptions.py
 
-class CodeSearchError(Exception):
-    """Base exception for code-search."""
+class ClewError(Exception):
+    """Base exception for clew."""
     pass
 
 # Configuration errors
-class ConfigError(CodeSearchError):
+class ConfigError(ClewError):
     """Configuration-related errors."""
     pass
 
@@ -812,7 +812,7 @@ class ConfigValidationError(ConfigError):
         super().__init__(f"Config validation failed: {', '.join(errors)}")
 
 # Infrastructure errors
-class InfrastructureError(CodeSearchError):
+class InfrastructureError(ClewError):
     """Infrastructure-related errors."""
     pass
 
@@ -852,7 +852,7 @@ class VoyageRateLimitError(VoyageError):
         super().__init__(msg)
 
 # Indexing errors
-class IndexingError(CodeSearchError):
+class IndexingError(ClewError):
     """Indexing-related errors."""
     pass
 
@@ -864,7 +864,7 @@ class ParseError(IndexingError):
         super().__init__(f"Failed to parse {file_path}: {errors}")
 
 # Search errors
-class SearchError(CodeSearchError):
+class SearchError(ClewError):
     """Search-related errors."""
     pass
 
@@ -933,7 +933,7 @@ def mock_qdrant_client():
 @pytest.fixture
 def temp_cache_dir(tmp_path):
     """Temporary directory for SQLite caches."""
-    cache_dir = tmp_path / ".code-search"
+    cache_dir = tmp_path / ".clew"
     cache_dir.mkdir()
     return cache_dir
 ```
@@ -1014,7 +1014,7 @@ jobs:
         env:
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           QDRANT_URL: http://localhost:6333
-        run: pytest --cov=code_search
+        run: pytest --cov=clew
 ```
 
 ---
@@ -1041,7 +1041,7 @@ curl -s http://localhost:6333/ | jq .title
 
 **Implementation:**
 ```python
-# code_search/chunker/tokenizer.py
+# clew/chunker/tokenizer.py
 from functools import lru_cache
 from transformers import AutoTokenizer
 
@@ -1071,7 +1071,7 @@ See Section 4 for full implementation.
 #### Task 1.5: Minimal CLI
 
 ```python
-# code_search/cli.py
+# clew/cli.py
 import typer
 from rich.console import Console
 
@@ -1183,7 +1183,7 @@ loader = IgnorePatternLoader(project_root, config_excludes=["**/migrations/**"])
 assert loader.should_ignore("backend/app/migrations/0001.py")
 
 # Env var override
-os.environ["CODE_SEARCH_EXCLUDE"] = "*.generated.py"
+os.environ["CLEW_EXCLUDE"] = "*.generated.py"
 loader = IgnorePatternLoader(project_root)
 loader.load()
 assert loader.should_ignore("output.generated.py")
@@ -1213,18 +1213,18 @@ Phase 2 delivers the search pipeline and completes the indexing flow. All module
 
 | Module | Description |
 |--------|-------------|
-| `code_search/models.py` | `SearchConfig` added to `ProjectConfig` (rerank thresholds, candidate counts) |
-| `code_search/search/models.py` | `QueryIntent`, `SearchResult`, `SearchRequest`, `SearchResponse` dataclasses |
-| `code_search/search/tokenize.py` | BM25 tokenization: camelCase/snake_case splitting, raw term-count sparse vectors |
-| `code_search/search/engine.py` | `SearchEngine` — top-level orchestrator: enhance -> classify -> hybrid search -> rerank |
-| `code_search/search/hybrid.py` | `HybridSearchEngine` — dense + BM25 multi-prefetch with structural boosting |
-| `code_search/search/rerank.py` | `RerankProvider` — Voyage rerank-2.5 with configurable skip conditions |
-| `code_search/search/enhance.py` | `QueryEnhancer` — terminology expansion from YAML |
-| `code_search/search/intent.py` | `classify_intent` — keyword heuristic intent routing |
-| `code_search/indexer/metadata.py` | `detect_app_name`, `classify_layer`, `extract_signature`, `build_chunk_id` |
-| `code_search/indexer/pipeline.py` | `IndexingPipeline` — file -> chunk -> metadata -> embed -> upsert (batch embedding inline) |
-| `code_search/indexer/git_tracker.py` | `GitChangeTracker` — `git diff --name-status` parsing (A/M/D/R) |
-| `code_search/clients/qdrant.py` | `QdrantManager` — collection CRUD, hybrid query with RRF fusion, delete by file_path |
+| `clew/models.py` | `SearchConfig` added to `ProjectConfig` (rerank thresholds, candidate counts) |
+| `clew/search/models.py` | `QueryIntent`, `SearchResult`, `SearchRequest`, `SearchResponse` dataclasses |
+| `clew/search/tokenize.py` | BM25 tokenization: camelCase/snake_case splitting, raw term-count sparse vectors |
+| `clew/search/engine.py` | `SearchEngine` — top-level orchestrator: enhance -> classify -> hybrid search -> rerank |
+| `clew/search/hybrid.py` | `HybridSearchEngine` — dense + BM25 multi-prefetch with structural boosting |
+| `clew/search/rerank.py` | `RerankProvider` — Voyage rerank-2.5 with configurable skip conditions |
+| `clew/search/enhance.py` | `QueryEnhancer` — terminology expansion from YAML |
+| `clew/search/intent.py` | `classify_intent` — keyword heuristic intent routing |
+| `clew/indexer/metadata.py` | `detect_app_name`, `classify_layer`, `extract_signature`, `build_chunk_id` |
+| `clew/indexer/pipeline.py` | `IndexingPipeline` — file -> chunk -> metadata -> embed -> upsert (batch embedding inline) |
+| `clew/indexer/git_tracker.py` | `GitChangeTracker` — `git diff --name-status` parsing (A/M/D/R) |
+| `clew/clients/qdrant.py` | `QdrantManager` — collection CRUD, hybrid query with RRF fusion, delete by file_path |
 
 ### Phase 3: MCP Integration & CLI Wiring
 
@@ -1234,10 +1234,10 @@ Phase 3 wires the search pipeline into a usable product: MCP server (4 tools for
 
 | Module | Description |
 |--------|-------------|
-| `code_search/factory.py` | `create_components()` — centralized wiring, returns `Components` dataclass with all services |
-| `code_search/mcp_server.py` | FastMCP server with 4 tools: `search`, `get_context`, `explain`, `index_status` |
-| `code_search/indexer/change_detector.py` | `ChangeDetector` — unified interface: git-first, file-hash fallback; `ChangeResult` dataclass |
-| `code_search/cli.py` | Fully wired Typer CLI: `index`, `search`, `status`, `serve` commands |
+| `clew/factory.py` | `create_components()` — centralized wiring, returns `Components` dataclass with all services |
+| `clew/mcp_server.py` | FastMCP server with 4 tools: `search`, `get_context`, `explain`, `index_status` |
+| `clew/indexer/change_detector.py` | `ChangeDetector` — unified interface: git-first, file-hash fallback; `ChangeResult` dataclass |
+| `clew/cli.py` | Fully wired Typer CLI: `index`, `search`, `status`, `serve` commands |
 
 #### MCP Tools
 
@@ -1274,14 +1274,14 @@ V1.1 adds LLM-generated natural language descriptions for code chunks that lack 
 
 | Module | Description |
 |--------|-------------|
-| `code_search/clients/description.py` | `DescriptionProvider` ABC + `AnthropicDescriptionProvider` — async LLM descriptions with semaphore throttling |
-| `code_search/chunker/strategies.py` | Added `docstring` field to `CodeEntity`, `_extract_docstring()` to `PythonChunker` |
-| `code_search/indexer/cache.py` | Added `description_cache` table, `get_description()` / `set_description()` |
-| `code_search/indexer/pipeline.py` | Added `_generate_descriptions()`, prepend logic in `_embed_and_upsert()` |
-| `code_search/models.py` | Added `nl_description_enabled`, `nl_description_model`, `nl_description_max_concurrent` to `IndexingConfig` |
-| `code_search/config.py` | Added `ANTHROPIC_API_KEY` to `Environment` |
-| `code_search/factory.py` | Conditional `AnthropicDescriptionProvider` creation, `nl_descriptions` override parameter |
-| `code_search/cli.py` | Added `--nl-descriptions` flag to `index` command |
+| `clew/clients/description.py` | `DescriptionProvider` ABC + `AnthropicDescriptionProvider` — async LLM descriptions with semaphore throttling |
+| `clew/chunker/strategies.py` | Added `docstring` field to `CodeEntity`, `_extract_docstring()` to `PythonChunker` |
+| `clew/indexer/cache.py` | Added `description_cache` table, `get_description()` / `set_description()` |
+| `clew/indexer/pipeline.py` | Added `_generate_descriptions()`, prepend logic in `_embed_and_upsert()` |
+| `clew/models.py` | Added `nl_description_enabled`, `nl_description_model`, `nl_description_max_concurrent` to `IndexingConfig` |
+| `clew/config.py` | Added `ANTHROPIC_API_KEY` to `Environment` |
+| `clew/factory.py` | Conditional `AnthropicDescriptionProvider` creation, `nl_descriptions` override parameter |
+| `clew/cli.py` | Added `--nl-descriptions` flag to `index` command |
 
 #### Configuration
 
@@ -1293,7 +1293,7 @@ indexing:
   nl_description_max_concurrent: 5
 ```
 
-Or via CLI flag: `code-search index --nl-descriptions`
+Or via CLI flag: `clew index --nl-descriptions`
 
 Requires `ANTHROPIC_API_KEY` environment variable.
 
@@ -1319,8 +1319,8 @@ Requires `ANTHROPIC_API_KEY` environment variable.
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/ruminaider/code-search.git
-cd code-search
+git clone https://github.com/ruminaider/clew.git
+cd clew
 
 # 2. Create virtual environment
 python -m venv .venv
@@ -1337,7 +1337,7 @@ cp .env.example .env
 docker compose up -d qdrant
 
 # 6. Verify setup
-code-search status
+clew status
 
 # 7. Run tests
 pytest
@@ -1346,8 +1346,8 @@ pytest
 ### Using with a Project
 
 ```bash
-# 1. Install code-search
-pip install code-search
+# 1. Install clew
+pip install clew
 
 # 2. Create project config
 cat > indexer/config.yaml << 'EOF'
@@ -1367,7 +1367,7 @@ EOF
 docker compose up -d qdrant
 
 # 4. Full index
-code-search index --config indexer/config.yaml --full
+clew index --config indexer/config.yaml --full
 
 # 5. Add MCP configuration to .mcp.json
 ```
@@ -1385,19 +1385,19 @@ code-search index --config indexer/config.yaml --full
 
 ```bash
 # Full reindex
-code-search index --full
+clew index --full
 
 # Index specific files
-code-search index --files src/models.py src/views.py
+clew index --files src/models.py src/views.py
 
 # Debug search
-code-search search "prescription expiry" --raw
+clew search "prescription expiry" --raw
 
 # Inspect chunks for a file
-code-search inspect --file src/models.py
+clew inspect --file src/models.py
 
 # Start MCP server
-code-search serve --config config.yaml
+clew serve --config config.yaml
 ```
 
 ---
@@ -1409,7 +1409,7 @@ The embedding provider is abstracted behind a Python ABC, allowing the system to
 ### EmbeddingProvider ABC
 
 ```python
-# code_search/clients/base.py
+# clew/clients/base.py
 from abc import ABC, abstractmethod
 
 class EmbeddingProvider(ABC):
@@ -1452,7 +1452,7 @@ class EmbeddingProvider(ABC):
 ### VoyageEmbeddingProvider
 
 ```python
-# code_search/clients/voyage.py (updated)
+# clew/clients/voyage.py (updated)
 import voyageai
 
 class VoyageEmbeddingProvider(EmbeddingProvider):
@@ -1488,7 +1488,7 @@ class VoyageEmbeddingProvider(EmbeddingProvider):
 ### Provider Factory
 
 ```python
-# code_search/clients/__init__.py
+# clew/clients/__init__.py
 def create_embedding_provider(config: IndexingConfig, env: Environment) -> EmbeddingProvider:
     """Create embedding provider from configuration."""
     if config.embedding_provider == "voyage":
@@ -1513,7 +1513,7 @@ Three-tier fallback for chunking files when AST parsing fails. No LangChain depe
 ### Token-Recursive Splitter
 
 ```python
-# code_search/chunker/fallback.py
+# clew/chunker/fallback.py
 from dataclasses import dataclass, field
 from typing import Any
 from .tokenizer import count_tokens
@@ -1638,7 +1638,7 @@ def _get_overlap_lines(lines: list[str], overlap_tokens: int) -> list[str]:
 ### Fallback Chain Entry Point
 
 ```python
-# code_search/chunker/fallback.py (continued)
+# clew/chunker/fallback.py (continued)
 
 def split_file(
     file_path: str,
@@ -1675,7 +1675,7 @@ def split_file(
 Secondary change detection when git-diff is unavailable. Uses the existing `chunk_cache` table in SQLite. See [ADR-003](./adr/003-ported-features-from-claude-context.md#2-change-detection-hybrid-strategy).
 
 ```python
-# code_search/indexer/file_hash.py
+# clew/indexer/file_hash.py
 import hashlib
 from pathlib import Path
 from .cache import CacheDB
@@ -1727,7 +1727,7 @@ class FileHashTracker:
 ### Integration with Pipeline
 
 ```python
-# In code_search/indexer/pipeline.py
+# In clew/indexer/pipeline.py
 def detect_changes(self, file_paths: list[str]) -> dict:
     """Detect changes using git-diff (primary) or file-hash (secondary)."""
     try:
@@ -1744,7 +1744,7 @@ def detect_changes(self, file_paths: list[str]) -> dict:
 Five-source hierarchy for file exclusion patterns, using `pathspec` for `.gitignore`-compatible matching. See [ADR-003](./adr/003-ported-features-from-claude-context.md#6-ignore-pattern-hierarchy).
 
 ```python
-# code_search/indexer/ignore.py
+# clew/indexer/ignore.py
 import os
 from pathlib import Path
 from pathspec import PathSpec
@@ -1786,16 +1786,16 @@ class IgnorePatternLoader:
         if gitignore.exists():
             all_patterns.extend(self._read_pattern_file(gitignore))
 
-        # Source 3: .codesearchignore
-        codesearchignore = self.project_root / ".codesearchignore"
-        if codesearchignore.exists():
-            all_patterns.extend(self._read_pattern_file(codesearchignore))
+        # Source 3: .clewignore
+        clewignore = self.project_root / ".clewignore"
+        if clewignore.exists():
+            all_patterns.extend(self._read_pattern_file(clewignore))
 
         # Source 4: config.yaml exclude patterns
         all_patterns.extend(self.config_excludes)
 
         # Source 5: Environment variable (highest priority)
-        env_excludes = os.environ.get("CODE_SEARCH_EXCLUDE", "")
+        env_excludes = os.environ.get("CLEW_EXCLUDE", "")
         if env_excludes:
             all_patterns.extend(env_excludes.split(","))
 
@@ -1826,7 +1826,7 @@ class IgnorePatternLoader:
 Batch embedding with configurable batch size and `rich` progress bars. Adapted from claude-context's 100-chunk batching with callbacks. See [ADR-003](./adr/003-ported-features-from-claude-context.md#3-batch-embedding-with-progress).
 
 ```python
-# code_search/indexer/batch.py (updated)
+# clew/indexer/batch.py (updated)
 from dataclasses import dataclass, field
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from ..clients.base import EmbeddingProvider

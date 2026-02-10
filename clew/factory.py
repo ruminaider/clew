@@ -1,4 +1,4 @@
-"""Component factory -- centralized wiring for all code-search components."""
+"""Component factory -- centralized wiring for all clew components."""
 
 from __future__ import annotations
 
@@ -6,20 +6,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from code_search.clients import create_embedding_provider
-from code_search.clients.qdrant import QdrantManager
-from code_search.config import Environment
-from code_search.indexer.cache import CacheDB
-from code_search.indexer.pipeline import IndexingPipeline
-from code_search.models import ProjectConfig
-from code_search.search.engine import SearchEngine
-from code_search.search.enhance import QueryEnhancer
-from code_search.search.hybrid import HybridSearchEngine
-from code_search.search.rerank import RerankProvider
+from clew.clients import create_embedding_provider
+from clew.clients.qdrant import QdrantManager
+from clew.config import Environment
+from clew.indexer.cache import CacheDB
+from clew.indexer.pipeline import IndexingPipeline
+from clew.models import ProjectConfig
+from clew.search.engine import SearchEngine
+from clew.search.enhance import QueryEnhancer
+from clew.search.hybrid import HybridSearchEngine
+from clew.search.rerank import RerankProvider
 
 if TYPE_CHECKING:
-    from code_search.clients.base import EmbeddingProvider
-    from code_search.clients.description import DescriptionProvider
+    from clew.clients.base import EmbeddingProvider
+    from clew.clients.description import DescriptionProvider
 
 
 @dataclass
@@ -91,7 +91,7 @@ def create_components(
     # NL Description provider (optional)
     description_provider: DescriptionProvider | None = None
     if config.indexing.nl_description_enabled and env.ANTHROPIC_API_KEY:
-        from code_search.clients.description import AnthropicDescriptionProvider
+        from clew.clients.description import AnthropicDescriptionProvider
 
         description_provider = AnthropicDescriptionProvider(
             api_key=env.ANTHROPIC_API_KEY,

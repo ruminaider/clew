@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from qdrant_client import models
 
-from code_search.exceptions import InvalidFilterError
+from clew.exceptions import InvalidFilterError
 
 FILTERABLE_FIELDS: set[str] = {"language", "chunk_type", "app_name", "layer", "is_test"}
 

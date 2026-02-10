@@ -109,7 +109,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Replaced LangChain with a lightweight token-recursive splitter (~100 lines Python). Our splitter is token-aware (uses Voyage tokenizer) rather than character-based, preventing chunks that exceed embedding model token limits.
 
-**Implementation:** `code_search/chunker/fallback.py`
+**Implementation:** `clew/chunker/fallback.py`
 
 ### 3.2 Hybrid Change Detection
 
@@ -119,7 +119,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Made git-diff the primary detection method (faster, provides change classification) and file-hashing a secondary fallback for edge cases (shallow clones, squashed merges).
 
-**Implementation:** `code_search/indexer/git.py` (primary), `code_search/indexer/file_hash.py` (secondary)
+**Implementation:** `clew/indexer/git.py` (primary), `clew/indexer/file_hash.py` (secondary)
 
 ### 3.3 Batch Embedding
 
@@ -129,7 +129,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Configurable batch size (default 100) with `rich` progress bars instead of callbacks.
 
-**Implementation:** `code_search/indexer/batch.py`
+**Implementation:** `clew/indexer/batch.py`
 
 ### 3.4 Embedding Provider Abstraction
 
@@ -139,7 +139,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Python ABC with `embed()`, `embed_query()`, `dimensions`, and `model_name`. Defaults to Voyage AI; OpenAI and Ollama as optional providers.
 
-**Implementation:** `code_search/clients/base.py`
+**Implementation:** `clew/clients/base.py`
 
 ### 3.5 Chunk Overlap
 
@@ -149,7 +149,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Reduced to 200 tokens (token-based, not character-based) and restricted to non-AST fallback chunks only. AST-parsed entities (functions, classes) are self-contained and should not bleed into adjacent chunks.
 
-**Implementation:** `code_search/chunker/fallback.py`
+**Implementation:** `clew/chunker/fallback.py`
 
 ### 3.6 Ignore Pattern Hierarchy
 
@@ -157,9 +157,9 @@ claude-context exposes 8 MCP tools:
 
 **Why adopted:** A single ignore list is too rigid. Different levels of configuration allow defaults, project, and runtime overrides.
 
-**How we adapted:** Aligned with `.gitignore` syntax (via `pathspec` library) and integrated with our YAML config system. Our 5 levels: defaults → `.gitignore` → `.codesearchignore` → `config.yaml` → env vars.
+**How we adapted:** Aligned with `.gitignore` syntax (via `pathspec` library) and integrated with our YAML config system. Our 5 levels: defaults → `.gitignore` → `.clewignore` → `config.yaml` → env vars.
 
-**Implementation:** `code_search/indexer/ignore.py`
+**Implementation:** `clew/indexer/ignore.py`
 
 ### 3.7 Dual Chunk ID Strategy
 
@@ -169,7 +169,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Entity-based IDs for named code (stable across content changes that don't rename) + content-hash IDs for anonymous code. Superior to claude-context's offset-based approach, which invalidates chunks when unrelated code shifts offsets.
 
-**Implementation:** `code_search/chunker/identity.py`
+**Implementation:** `clew/chunker/identity.py`
 
 ### 3.8 Safety Limits
 
@@ -179,7 +179,7 @@ claude-context exposes 8 MCP tools:
 
 **How we adapted:** Multi-level configurable limits: 500K total chunks, per-collection limits, 1MB file-size cap, 100 chunks/batch. More granular than claude-context's single hard limit.
 
-**Implementation:** `code_search/models.py` (`SafetyConfig`)
+**Implementation:** `clew/models.py` (`SafetyConfig`)
 
 ---
 
@@ -213,7 +213,7 @@ claude-context exposes 8 MCP tools:
 
 ## 5. Comparative Architecture
 
-| Layer | claude-context | code-search |
+| Layer | claude-context | clew |
 |-------|---------------|-------------|
 | **Language** | TypeScript | Python |
 | **Vector DB** | Milvus (3 containers) | Qdrant (1 container) |

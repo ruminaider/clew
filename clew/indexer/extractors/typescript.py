@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from code_search.indexer.extractors.base import RelationshipExtractor
-from code_search.indexer.relationships import Relationship
+from clew.indexer.extractors.base import RelationshipExtractor
+from clew.indexer.relationships import Relationship
 
 _FETCH_METHODS = {"fetch"}
 _AXIOS_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}

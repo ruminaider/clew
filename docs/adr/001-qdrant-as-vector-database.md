@@ -9,7 +9,7 @@
 
 ## Context
 
-We need a vector database for the code-search system that supports hybrid search (dense + sparse vectors), rich metadata filtering, and lightweight local deployment on developer laptops. Three candidates were evaluated:
+We need a vector database for the clew system that supports hybrid search (dense + sparse vectors), rich metadata filtering, and lightweight local deployment on developer laptops. Three candidates were evaluated:
 
 - **Qdrant** — Rust-based, purpose-built vector database
 - **Milvus** — Go/C++-based, used by [claude-context](https://github.com/zilliztech/claude-context) (Zilliz's code indexing tool)
@@ -31,7 +31,7 @@ Evaluating claude-context revealed that Milvus is deeply embedded in its archite
 
 ## Decision
 
-Use **Qdrant (self-hosted, Docker)** as the vector database for code-search.
+Use **Qdrant (self-hosted, Docker)** as the vector database for clew.
 
 ## Rationale
 

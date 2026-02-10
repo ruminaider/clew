@@ -1,4 +1,4 @@
-# code-search
+# clew
 
 Semantic code search tool with hybrid retrieval and MCP integration for Claude Code.
 
@@ -19,7 +19,7 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 ## Module Inventory
 
 ```
-code_search/
+clew/
 ├── chunker/            # AST parsing (tree-sitter), language strategies, token-aware fallback splitting
 │   ├── parser.py       # ASTParser — tree-sitter wrapper, language detection by extension
 │   ├── strategies.py   # PythonChunker — extracts functions/classes as CodeEntity dataclasses
@@ -42,7 +42,7 @@ code_search/
 │   │   └── api_boundary.py # Cross-language API boundary matching (frontend→backend)
 │   ├── file_hash.py    # FileHashTracker — SHA256-based change detection (added/modified/unchanged)
 │   ├── git_tracker.py  # GitChangeTracker — git diff --name-status change detection (A/M/D/R parsing)
-│   ├── ignore.py       # IgnorePatternLoader — .gitignore + .codesearchignore + defaults
+│   ├── ignore.py       # IgnorePatternLoader — .gitignore + .clewignore + defaults
 │   ├── metadata.py     # detect_app_name, classify_layer, extract_signature, build_chunk_id
 │   ├── pipeline.py     # IndexingPipeline — file -> chunk -> metadata -> embed -> upsert + relationship extraction
 │   └── relationships.py # Relationship dataclass — entity-relationship-entity with confidence
@@ -71,7 +71,7 @@ code_search/
 - **Provider abstraction:** ABC base classes (e.g., `EmbeddingProvider`) with concrete implementations
 - **SQLite access:** `contextmanager` pattern in `CacheDB._connect()` — no ORM
 - **Config:** `Environment` class reads env vars with sensible defaults; `ProjectConfig` loaded from YAML
-- **Exceptions:** Hierarchy rooted in `CodeSearchError`, each with `fix_hint` for user-facing messages
+- **Exceptions:** Hierarchy rooted in `ClewError`, each with `fix_hint` for user-facing messages
 - **Async:** Used for external API calls (Voyage AI, Qdrant hybrid search, embedding); sync for file I/O and SQLite
 - **Deterministic IDs:** Qdrant point IDs are UUID5 derived from structured chunk IDs (format: `file_path::entity_type::qualified_name`)
 
@@ -79,21 +79,21 @@ code_search/
 
 ```bash
 # Dev commands
-pytest --cov=code_search -v    # Run tests with coverage
+pytest --cov=clew -v    # Run tests with coverage
 pytest -m integration          # Run integration tests only
 ruff check .                   # Lint
 ruff format --check .          # Check formatting
-mypy code_search/              # Type check
+mypy clew/              # Type check
 
 # CLI commands
-code-search index [PROJECT_ROOT] --full    # Full reindex
-code-search index [PROJECT_ROOT]           # Incremental (change detection)
-code-search index [PROJECT_ROOT] --nl-descriptions  # Generate NL descriptions (requires ANTHROPIC_API_KEY)
-code-search search "query" --raw           # Search with JSON output
-code-search trace "entity::name"           # Trace code relationships (BFS graph traversal)
-code-search trace "entity" --direction outbound --depth 3  # Directed trace with depth limit
-code-search status                          # Show Qdrant health + index stats
-code-search serve                           # Start MCP server (stdio transport)
+clew index [PROJECT_ROOT] --full    # Full reindex
+clew index [PROJECT_ROOT]           # Incremental (change detection)
+clew index [PROJECT_ROOT] --nl-descriptions  # Generate NL descriptions (requires ANTHROPIC_API_KEY)
+clew search "query" --raw           # Search with JSON output
+clew trace "entity::name"           # Trace code relationships (BFS graph traversal)
+clew trace "entity" --direction outbound --depth 3  # Directed trace with depth limit
+clew status                          # Show Qdrant health + index stats
+clew serve                           # Start MCP server (stdio transport)
 ```
 
 ## Key Files
@@ -120,14 +120,14 @@ Add to Claude Code's `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "code-search": {
-      "command": "code-search",
+    "clew": {
+      "command": "clew",
       "args": ["serve"],
       "env": {
         "VOYAGE_API_KEY": "your-key-here",
         "QDRANT_URL": "http://localhost:6333",
         "ANTHROPIC_API_KEY": "your-key-here (optional, for NL descriptions)",
-        "CODE_SEARCH_CACHE_DIR": "/absolute/path/to/project/.code-search (optional, auto-detected from git root)"
+        "CLEW_CACHE_DIR": "/absolute/path/to/project/.clew (optional, auto-detected from git root)"
       }
     }
   }

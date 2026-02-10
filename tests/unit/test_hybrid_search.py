@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from code_search.search.hybrid import HybridSearchEngine
-from code_search.search.models import QueryIntent, SearchResult
+from clew.search.hybrid import HybridSearchEngine
+from clew.search.models import QueryIntent, SearchResult
 
 
 @pytest.fixture

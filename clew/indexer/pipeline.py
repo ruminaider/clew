@@ -15,28 +15,28 @@ from typing import TYPE_CHECKING
 
 from qdrant_client import models
 
-from code_search.chunker.fallback import Chunk, split_file
-from code_search.chunker.parser import ASTParser
-from code_search.chunker.tokenizer import count_tokens
-from code_search.indexer.extractors.api_boundary import APIBoundaryMatcher
-from code_search.indexer.extractors.django_urls import DjangoURLExtractor
-from code_search.indexer.extractors.python import PythonRelationshipExtractor
-from code_search.indexer.extractors.tests import TestRelationshipExtractor
-from code_search.indexer.extractors.typescript import TypeScriptRelationshipExtractor
-from code_search.indexer.metadata import (
+from clew.chunker.fallback import Chunk, split_file
+from clew.chunker.parser import ASTParser
+from clew.chunker.tokenizer import count_tokens
+from clew.indexer.extractors.api_boundary import APIBoundaryMatcher
+from clew.indexer.extractors.django_urls import DjangoURLExtractor
+from clew.indexer.extractors.python import PythonRelationshipExtractor
+from clew.indexer.extractors.tests import TestRelationshipExtractor
+from clew.indexer.extractors.typescript import TypeScriptRelationshipExtractor
+from clew.indexer.metadata import (
     build_chunk_id,
     classify_layer,
     detect_app_name,
     extract_signature,
 )
-from code_search.search.tokenize import text_to_sparse_vector
+from clew.search.tokenize import text_to_sparse_vector
 
 if TYPE_CHECKING:
-    from code_search.clients.base import EmbeddingProvider
-    from code_search.clients.description import DescriptionProvider
-    from code_search.clients.qdrant import QdrantManager
-    from code_search.indexer.cache import CacheDB
-    from code_search.indexer.extractors.base import RelationshipExtractor
+    from clew.clients.base import EmbeddingProvider
+    from clew.clients.description import DescriptionProvider
+    from clew.clients.qdrant import QdrantManager
+    from clew.indexer.cache import CacheDB
+    from clew.indexer.extractors.base import RelationshipExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,12 @@ class IndexingPipeline:
         for i in range(0, len(all_chunks), self._batch_size):
             batch_num = i // self._batch_size + 1
             batch = all_chunks[i : i + self._batch_size]
-            logger.info("Embedding batch %d/%d (%d chunks)...", batch_num, total_batches, len(batch))
+            logger.info(
+                "Embedding batch %d/%d (%d chunks)...",
+                batch_num,
+                total_batches,
+                len(batch),
+            )
             try:
                 await self._embed_and_upsert(batch, collection)
                 result.chunks_created += len(batch)
@@ -199,7 +204,7 @@ class IndexingPipeline:
         # Delete old relationships for this file before re-extracting
         self._cache.delete_relationships_by_file(file_path)
 
-        from code_search.indexer.relationships import Relationship as _Relationship
+        from clew.indexer.relationships import Relationship as _Relationship
 
         all_rels: list[_Relationship] = []
 
@@ -235,7 +240,7 @@ class IndexingPipeline:
         # by checking outbound relationships of known API-calling entities.
         # Since we can't enumerate all entities, query by relationship type
         # using a direct SQL query.
-        from code_search.indexer.relationships import Relationship as _Relationship
+        from clew.indexer.relationships import Relationship as _Relationship
 
         api_calls: list[_Relationship] = []
         with self._cache._get_state_conn() as conn:

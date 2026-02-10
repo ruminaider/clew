@@ -18,7 +18,7 @@ Build a semantic code search system for developer productivity:
 
 The system consists of two parts:
 
-1. **`code-search`** — Generic, reusable tool (separate repository)
+1. **`clew`** — Generic, reusable tool (separate repository)
 2. **Project configuration** — Evvy-specific settings (in evvy repo)
 
 This separation allows the tool to be used across any codebase.
@@ -168,7 +168,7 @@ def split_file(file_path: str, content: str, max_tokens: int) -> list[Chunk]:
     return line_split(content, max_tokens, overlap_tokens=200)
 ```
 
-**Implementation:** `code_search/chunker/fallback.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
+**Implementation:** `clew/chunker/fallback.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 
 ### Chunk Overlap (Non-AST Only)
 
@@ -286,7 +286,7 @@ This dual strategy improves on claude-context's approach of `SHA256(path:start_o
 ### Git-Aware Change Detection
 
 ```python
-# In code_search/indexer/git_tracker.py
+# In clew/indexer/git_tracker.py
 class GitChangeTracker:
     def get_changes_since(self, last_commit: str) -> dict[str, list[Any]]:
         result = subprocess.run(
@@ -361,13 +361,13 @@ File exclusion follows a 5-source merge hierarchy, adapted from claude-context's
 |----------|--------|---------|
 | 1 (lowest) | Built-in defaults | `__pycache__/`, `node_modules/`, `.git/` |
 | 2 | `.gitignore` | Project-maintained patterns |
-| 3 | `.codesearchignore` | Code-search-specific overrides |
+| 3 | `.clewignore` | Code-search-specific overrides |
 | 4 | `config.yaml` exclude patterns | Per-collection exclusions |
-| 5 (highest) | `CODE_SEARCH_EXCLUDE` env var | Runtime overrides |
+| 5 (highest) | `CLEW_EXCLUDE` env var | Runtime overrides |
 
 Higher-priority sources override lower-priority ones. All patterns use `.gitignore` syntax via the `pathspec` library.
 
-**Implementation:** `code_search/indexer/ignore.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
+**Implementation:** `clew/indexer/ignore.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 
 ---
 
@@ -546,7 +546,7 @@ synonyms:
 
 ```bash
 # Scheduled: weekly
-code-search extract-terms --output indexer/terminology_candidates.yaml
+clew extract-terms --output indexer/terminology_candidates.yaml
 ```
 
 **Process:**
@@ -606,7 +606,7 @@ def build_prefetch(query: str, active_file: str | None, intent: QueryIntent) -> 
 
     # Structural boost: same module gets extra candidates
     if active_file:
-        module = detect_app_name(active_file)  # from code_search.indexer.metadata
+        module = detect_app_name(active_file)  # from clew.indexer.metadata
         prefetches.append(
             Prefetch(
                 query=dense_vector,
@@ -754,13 +754,13 @@ def build_prefetch(query: str, active_file: str | None, intent: QueryIntent) -> 
 
 ## 13. Project Structure
 
-### Generic Tool: `ruminaider/code-search`
+### Generic Tool: `ruminaider/clew`
 
-Open source repository: `https://github.com/ruminaider/code-search`
+Open source repository: `https://github.com/ruminaider/clew`
 
 ```
-code-search/
-├── code_search/
+clew/
+├── clew/
 │   ├── __init__.py
 │   ├── cli.py              # typer CLI (index, search, status, inspect)
 │   ├── mcp_server.py       # MCP server implementation
@@ -810,7 +810,7 @@ evvy/
 │   ├── terminology_candidates.yaml  # Auto-extracted, pending review
 │   └── .qdrant/              # Local Qdrant data (gitignored)
 ├── docker-compose.yml        # Add Qdrant service
-└── .mcp.json                 # Add code-search server
+└── .mcp.json                 # Add clew server
 ```
 
 ### Evvy Config Example
@@ -871,8 +871,8 @@ security:
 ```json
 // .mcp.json addition
 {
-  "evvy-code-search": {
-    "command": "code-search",
+  "evvy-clew": {
+    "command": "clew",
     "args": ["serve", "--config", "./indexer/config.yaml"],
     "env": {
       "VOYAGE_API_KEY": "${VOYAGE_API_KEY}",
@@ -890,24 +890,24 @@ security:
 
 ```bash
 # Indexing
-code-search index                      # Incremental (git-aware)
-code-search index --full               # Full reindex
-code-search index --files path/to.py   # Specific files
+clew index                      # Incremental (git-aware)
+clew index --full               # Full reindex
+clew index --files path/to.py   # Specific files
 
 # Search (debugging only - use Claude Code for normal queries)
-code-search search "query" --raw       # See scores, metadata (placeholder — wiring deferred)
+clew search "query" --raw       # See scores, metadata (placeholder — wiring deferred)
 
 # Status
-code-search status                     # Health, chunk counts, last indexed
+clew status                     # Health, chunk counts, last indexed
 
 # Inspect
-code-search inspect --file care/models.py  # Show chunks for a file
+clew inspect --file care/models.py  # Show chunks for a file
 
 # Terminology
-code-search extract-terms              # Extract candidates for review
+clew extract-terms              # Extract candidates for review
 
 # MCP Server
-code-search serve --config config.yaml # Start MCP server
+clew serve --config config.yaml # Start MCP server
 ```
 
 ---
@@ -986,7 +986,7 @@ Run these queries before and after implementation to measure quality.
 | Basic AST chunker | Parses Python file with tree-sitter; outputs chunks with identity, content, metadata |
 | Embedding pipeline | Embeds list of chunks; returns 1024-dim vectors; retries on rate limit |
 | SQLite caching | Stores file hashes, chunk identities, embeddings; lookup by content hash works |
-| Minimal CLI | `code-search index --file path.py` works; `code-search status` shows chunk count |
+| Minimal CLI | `clew index --file path.py` works; `clew status` shows chunk count |
 | Splitter fallback chain | tree-sitter → token-recursive → line split; all three tiers produce valid chunks within token limits |
 | Embedding provider ABC | `EmbeddingProvider` ABC with Voyage implementation; `embed()` returns correct dimensions; provider switchable via config |
 | File-hash change detection | `FileHashTracker` detects added/modified/unchanged files; integrates as fallback when git-diff unavailable |
@@ -1114,4 +1114,4 @@ safety:
     docs: 100000
 ```
 
-**Implementation:** `code_search/models.py` (`SafetyConfig`), `code_search/indexer/pipeline.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)
+**Implementation:** `clew/models.py` (`SafetyConfig`), `clew/indexer/pipeline.py` — See [IMPLEMENTATION.md](./IMPLEMENTATION.md)

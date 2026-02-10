@@ -4,8 +4,8 @@ import logging
 
 import pytest
 
-from code_search.models import SafetyConfig
-from code_search.safety import SafetyChecker
+from clew.models import SafetyConfig
+from clew.safety import SafetyChecker
 
 
 class TestSafetyCheckerFileSize:

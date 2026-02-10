@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from typer.testing import CliRunner
 
-from code_search.cli import app
+from clew.cli import app
 
 runner = CliRunner()
 
@@ -32,7 +32,7 @@ class TestHelpCommands:
 
 
 class TestSearchCommand:
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_search_returns_results(self, mock_factory: Mock) -> None:
         """Search command displays results."""
         mock_result = Mock(
@@ -57,7 +57,7 @@ class TestSearchCommand:
         result = runner.invoke(app, ["search", "hello"])
         assert result.exit_code == 0
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_search_raw_json(self, mock_factory: Mock) -> None:
         """Search --raw outputs valid JSON."""
         mock_result = Mock(
@@ -85,7 +85,7 @@ class TestSearchCommand:
         assert isinstance(data, list)
         assert data[0]["file_path"] == "src/main.py"
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_search_no_results(self, mock_factory: Mock) -> None:
         """Search with no results shows message."""
         mock_response = Mock(
@@ -99,17 +99,17 @@ class TestSearchCommand:
         result = runner.invoke(app, ["search", "xyz"])
         assert result.exit_code == 0
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_search_connection_error(self, mock_factory: Mock) -> None:
         """Search shows error on connection failure."""
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         mock_factory.side_effect = QdrantConnectionError("http://localhost:6333")
 
         result = runner.invoke(app, ["search", "hello"])
         assert result.exit_code == 1
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_search_with_intent_flag(self, mock_factory: Mock) -> None:
         mock_response = Mock(
             results=[],
@@ -123,18 +123,18 @@ class TestSearchCommand:
         assert result.exit_code == 0
 
         call_args = mock_factory.return_value.search_engine.search.call_args[0][0]
-        from code_search.search.models import QueryIntent
+        from clew.search.models import QueryIntent
 
         assert call_args.intent == QueryIntent.DEBUG
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_search_invalid_intent_exits(self, mock_factory: Mock) -> None:
         result = runner.invoke(app, ["search", "test", "--intent", "invalid"])
         assert result.exit_code == 1
 
 
 class TestStatusCommand:
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_status_shows_info(self, mock_factory: Mock) -> None:
         """Status command displays component info."""
         mock_components = mock_factory.return_value
@@ -148,9 +148,9 @@ class TestStatusCommand:
 
 
 class TestIndexCommand:
-    @patch("code_search.discovery.discover_files")
-    @patch("code_search.indexer.change_detector.ChangeDetector")
-    @patch("code_search.factory.create_components")
+    @patch("clew.discovery.discover_files")
+    @patch("clew.indexer.change_detector.ChangeDetector")
+    @patch("clew.factory.create_components")
     def test_index_with_full_flag(
         self, mock_factory: Mock, mock_detector_cls: Mock, mock_discover: Mock, tmp_path: Path
     ) -> None:
@@ -169,10 +169,10 @@ class TestIndexCommand:
         # With --full, detect_changes should NOT be called (change detection skipped)
         mock_detector_cls.return_value.detect_changes.assert_not_called()
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_index_connection_error(self, mock_factory: Mock) -> None:
         """Index shows error on connection failure."""
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         mock_factory.side_effect = QdrantConnectionError("http://localhost:6333")
 
@@ -181,8 +181,8 @@ class TestIndexCommand:
 
 
 class TestIndexNLDescriptions:
-    @patch("code_search.discovery.discover_files")
-    @patch("code_search.factory.create_components")
+    @patch("clew.discovery.discover_files")
+    @patch("clew.factory.create_components")
     def test_index_with_nl_descriptions_flag(
         self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
     ) -> None:
@@ -200,8 +200,8 @@ class TestIndexNLDescriptions:
         # Verify nl_descriptions=True was passed to create_components
         mock_factory.assert_called_once_with(config_path=None, nl_descriptions=True)
 
-    @patch("code_search.discovery.discover_files")
-    @patch("code_search.factory.create_components")
+    @patch("clew.discovery.discover_files")
+    @patch("clew.factory.create_components")
     def test_index_without_nl_descriptions_flag(
         self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
     ) -> None:
@@ -226,7 +226,7 @@ class TestIndexNLDescriptions:
 
 
 class TestTraceCommand:
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_trace_displays_relationships(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
         mock_components.cache.traverse_relationships.return_value = [
@@ -241,14 +241,14 @@ class TestTraceCommand:
         result = runner.invoke(app, ["trace", "app/main.py::Foo"])
         assert result.exit_code == 0
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_trace_no_relationships(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
         mock_components.cache.traverse_relationships.return_value = []
         result = runner.invoke(app, ["trace", "app/main.py::Foo"])
         assert result.exit_code == 0
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_trace_with_direction_flag(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
         mock_components.cache.traverse_relationships.return_value = []
@@ -256,7 +256,7 @@ class TestTraceCommand:
         assert result.exit_code == 0
         mock_components.cache.traverse_relationships.assert_called_once()
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_trace_raw_json(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
         mock_components.cache.traverse_relationships.return_value = [
@@ -274,9 +274,9 @@ class TestTraceCommand:
         assert isinstance(data, dict)
         assert "relationships" in data
 
-    @patch("code_search.factory.create_components")
+    @patch("clew.factory.create_components")
     def test_trace_connection_error(self, mock_factory: Mock) -> None:
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         mock_factory.side_effect = QdrantConnectionError("http://localhost:6333")
         result = runner.invoke(app, ["trace", "a.py::Foo"])
@@ -284,7 +284,7 @@ class TestTraceCommand:
 
 
 class TestServeCommand:
-    @patch("code_search.mcp_server.mcp")
+    @patch("clew.mcp_server.mcp")
     def test_serve_calls_mcp_run(self, mock_mcp: Mock) -> None:
         """Serve command starts MCP server."""
         result = runner.invoke(app, ["serve"])

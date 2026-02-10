@@ -1,12 +1,12 @@
-"""Custom exception hierarchy for code-search."""
+"""Custom exception hierarchy for clew."""
 
 
-class CodeSearchError(Exception):
-    """Base exception for code-search."""
+class ClewError(Exception):
+    """Base exception for clew."""
 
 
 # Configuration errors
-class ConfigError(CodeSearchError):
+class ConfigError(ClewError):
     """Configuration-related errors."""
 
 
@@ -23,7 +23,7 @@ class ConfigValidationError(ConfigError):
 
 
 # Infrastructure errors
-class InfrastructureError(CodeSearchError):
+class InfrastructureError(ClewError):
     """Infrastructure-related errors."""
 
 
@@ -68,7 +68,7 @@ class VoyageRateLimitError(VoyageError):
 
 
 # Indexing errors
-class IndexingError(CodeSearchError):
+class IndexingError(ClewError):
     """Indexing-related errors."""
 
 
@@ -82,7 +82,7 @@ class ParseError(IndexingError):
 
 
 # Search errors
-class SearchError(CodeSearchError):
+class SearchError(ClewError):
     """Search-related errors."""
 
 

@@ -1,6 +1,6 @@
 """Tests for search pipeline data models."""
 
-from code_search.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
+from clew.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
 
 
 class TestQueryIntent:

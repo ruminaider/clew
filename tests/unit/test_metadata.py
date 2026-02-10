@@ -2,7 +2,7 @@
 
 import hashlib
 
-from code_search.indexer.metadata import (
+from clew.indexer.metadata import (
     build_chunk_id,
     classify_layer,
     detect_app_name,

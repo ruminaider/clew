@@ -2,8 +2,8 @@
 
 import pytest
 
-from code_search.chunker.parser import ASTParser
-from code_search.chunker.strategies import PythonChunker
+from clew.chunker.parser import ASTParser
+from clew.chunker.strategies import PythonChunker
 
 
 @pytest.fixture

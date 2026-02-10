@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from code_search.search.enhance import QueryEnhancer, should_skip_enhancement
+from clew.search.enhance import QueryEnhancer, should_skip_enhancement
 
 
 class TestShouldSkipEnhancement:

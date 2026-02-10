@@ -1,4 +1,4 @@
-"""MCP server exposing code-search tools for Claude Code."""
+"""MCP server exposing clew tools for Claude Code."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from code_search.exceptions import (
-    CodeSearchError,
+from clew.exceptions import (
+    ClewError,
     InvalidFilterError,
     QdrantConnectionError,
     VoyageAuthError,
 )
-from code_search.factory import Components, create_components
-from code_search.indexer.pipeline import detect_language
-from code_search.search.models import SearchRequest
+from clew.factory import Components, create_components
+from clew.indexer.pipeline import detect_language
+from clew.search.models import SearchRequest
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("code-search")
+mcp = FastMCP("clew")
 
 # Lazy singleton for components
 _components: Components | None = None
@@ -109,7 +109,7 @@ async def search(
         detail: Response detail level — "compact" (default) or "full"
     """
     try:
-        from code_search.search.models import QueryIntent
+        from clew.search.models import QueryIntent
 
         parsed_intent = None
         if intent:
@@ -137,7 +137,7 @@ async def search(
             "error": str(e),
             "fix": "Valid filters: language, chunk_type, app_name, layer, is_test",
         }
-    except CodeSearchError as e:
+    except ClewError as e:
         return _error_response(e)
     except Exception as e:
         logger.exception("Unexpected error in search")
@@ -196,7 +196,7 @@ async def get_context(
             result_dict["related_chunks"] = [_compact_result_to_dict(r) for r in response.results]
 
         return result_dict
-    except CodeSearchError as e:
+    except ClewError as e:
         return _error_response(e)
     except Exception as e:
         logger.exception("Unexpected error in get_context")
@@ -228,10 +228,7 @@ async def explain(
         # Post-filter: prefer same language, keep high-confidence cross-language results
         source_lang = detect_language(file_path)
         if source_lang != "unknown":
-            filtered = [
-                r for r in response.results
-                if r.language == source_lang or r.score >= 0.6
-            ]
+            filtered = [r for r in response.results if r.language == source_lang or r.score >= 0.6]
         else:
             filtered = response.results
 
@@ -244,7 +241,7 @@ async def explain(
             "question": question,
             "related_chunks": [_result_to_dict(r, detail) for r in filtered],
         }
-    except CodeSearchError as e:
+    except ClewError as e:
         return _error_response(e)
     except Exception as e:
         logger.exception("Unexpected error in explain")
@@ -294,7 +291,7 @@ async def trace(
         logger.exception("Unexpected error in trace")
         return {
             "error": f"Failed to trace relationships: {e}",
-            "fix": "Ensure the codebase has been indexed. Run: code-search index --full",
+            "fix": "Ensure the codebase has been indexed. Run: clew index --full",
         }
 
 
@@ -343,7 +340,7 @@ async def index_status(
                 }
 
             # Discover files
-            from code_search.discovery import discover_files
+            from clew.discovery import discover_files
 
             files = discover_files(root, components.config)
 
@@ -360,7 +357,7 @@ async def index_status(
 
         return {"error": f"Unknown action: {action}", "fix": "Use 'status' or 'trigger'"}
 
-    except CodeSearchError as e:
+    except ClewError as e:
         return _error_response(e)
     except Exception as e:
         logger.exception("Unexpected error in index_status")

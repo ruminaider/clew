@@ -37,6 +37,6 @@ def mock_qdrant_client() -> Mock:
 @pytest.fixture
 def temp_cache_dir(tmp_path: Path) -> Path:
     """Temporary directory for SQLite caches."""
-    cache_dir = tmp_path / ".code-search"
+    cache_dir = tmp_path / ".clew"
     cache_dir.mkdir()
     return cache_dir

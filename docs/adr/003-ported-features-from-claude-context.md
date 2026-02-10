@@ -9,7 +9,7 @@
 
 ## Context
 
-After deciding to build code-search as a standalone system ([ADR-002](./002-build-vs-adopt-claude-context.md)), we identified 8 patterns from [claude-context](https://github.com/zilliztech/claude-context) worth porting. These are proven approaches that solve real problems in code indexing systems, adapted to fit our Python/Qdrant stack.
+After deciding to build clew as a standalone system ([ADR-002](./002-build-vs-adopt-claude-context.md)), we identified 8 patterns from [claude-context](https://github.com/zilliztech/claude-context) worth porting. These are proven approaches that solve real problems in code indexing systems, adapted to fit our Python/Qdrant stack.
 
 ## Decision
 
@@ -25,7 +25,7 @@ Port the following 8 features from claude-context, each adapted to our architect
 
 **Rationale:** LangChain's text splitter is character-based, not token-aware, which can produce chunks that exceed embedding model limits. Our token-recursive splitter respects Voyage's tokenizer directly. Additionally, LangChain is a heavy dependency (~50+ transitive packages) for a single text-splitting function.
 
-**Implementation:** `code_search/chunker/fallback.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
+**Implementation:** `clew/chunker/fallback.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
 
 ### 2. Change Detection (Hybrid Strategy)
 
@@ -35,7 +35,7 @@ Port the following 8 features from claude-context, each adapted to our architect
 
 **Rationale:** Our target deployment always has git available (it's a developer tool for git repositories). Git diff is faster and more informative than computing a full Merkle DAG (provides add/modify/delete/rename classification). The file-hash fallback from claude-context's approach is valuable for edge cases.
 
-**Implementation:** `code_search/indexer/git.py` (primary), `code_search/indexer/file_hash.py` (secondary) — See [DESIGN.md Section 5](../DESIGN.md)
+**Implementation:** `clew/indexer/git.py` (primary), `clew/indexer/file_hash.py` (secondary) — See [DESIGN.md Section 5](../DESIGN.md)
 
 ### 3. Batch Embedding with Progress
 
@@ -45,7 +45,7 @@ Port the following 8 features from claude-context, each adapted to our architect
 
 **Rationale:** The batch size of 100 is well-tested in claude-context and balances API throughput with memory usage. We replace callbacks with rich progress bars for better developer experience in a CLI tool.
 
-**Implementation:** `code_search/indexer/batch.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
+**Implementation:** `clew/indexer/batch.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
 
 ### 4. Embedding Provider Abstraction
 
@@ -59,7 +59,7 @@ Port the following 8 features from claude-context, each adapted to our architect
 - Local-only indexing with Ollama for air-gapped environments
 - Future provider changes without refactoring
 
-**Implementation:** `code_search/clients/base.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
+**Implementation:** `clew/clients/base.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
 
 ### 5. Chunk Overlap (Non-AST Only)
 
@@ -69,7 +69,7 @@ Port the following 8 features from claude-context, each adapted to our architect
 
 **Rationale:** claude-context applies overlap universally. This can cause a method's context to bleed into the next method's chunk, degrading search precision. By limiting overlap to fallback-split chunks (where we've lost semantic boundaries), we maintain clean chunk boundaries for the common case while improving continuity for the uncommon case.
 
-**Implementation:** `code_search/chunker/fallback.py` — See [DESIGN.md Section 3](../DESIGN.md)
+**Implementation:** `clew/chunker/fallback.py` — See [DESIGN.md Section 3](../DESIGN.md)
 
 ### 6. Ignore Pattern Hierarchy
 
@@ -78,15 +78,15 @@ Port the following 8 features from claude-context, each adapted to our architect
 **Our adaptation:** 5-source merge hierarchy with different sources:
 1. Built-in defaults (common non-code files)
 2. `.gitignore` patterns (already maintained by developers)
-3. `.codesearchignore` (project-specific overrides)
+3. `.clewignore` (project-specific overrides)
 4. `config.yaml` exclude patterns (per-collection configuration)
-5. `CODE_SEARCH_EXCLUDE` environment variable (runtime overrides)
+5. `CLEW_EXCLUDE` environment variable (runtime overrides)
 
 Uses the `pathspec` library for `.gitignore`-compatible pattern matching.
 
 **Rationale:** claude-context's hierarchy is sensible but uses its own pattern format. We align with `.gitignore` syntax (which developers already know) and integrate with the project config system. The env var level enables CI/CD customization without config changes.
 
-**Implementation:** `code_search/indexer/ignore.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
+**Implementation:** `clew/indexer/ignore.py` — See [IMPLEMENTATION.md](../IMPLEMENTATION.md)
 
 ### 7. Dual Chunk ID Strategy
 
@@ -98,7 +98,7 @@ Uses the `pathspec` library for `.gitignore`-compatible pattern matching.
 
 **Rationale:** Entity-based IDs are stable across content changes (adding a docstring doesn't invalidate the chunk ID — only the content hash triggers re-embedding). This is superior to claude-context's offset-based approach, which invalidates chunks when unrelated code above them changes. The content-hash fallback handles code that lacks named entities.
 
-**Implementation:** `code_search/chunker/identity.py` — See [DESIGN.md Section 3](../DESIGN.md)
+**Implementation:** `clew/chunker/identity.py` — See [DESIGN.md Section 3](../DESIGN.md)
 
 ### 8. Safety Limits
 
@@ -112,7 +112,7 @@ Uses the `pathspec` library for `.gitignore`-compatible pattern matching.
 
 **Rationale:** claude-context's single hard limit is a blunt instrument. Our multi-level approach catches problems earlier (large files before they're parsed, collection limits before total is reached) and is configurable for different project sizes.
 
-**Implementation:** `code_search/models.py` (`SafetyConfig`), `code_search/indexer/pipeline.py` — See [DESIGN.md Section 19](../DESIGN.md), [IMPLEMENTATION.md](../IMPLEMENTATION.md)
+**Implementation:** `clew/models.py` (`SafetyConfig`), `clew/indexer/pipeline.py` — See [DESIGN.md Section 19](../DESIGN.md), [IMPLEMENTATION.md](../IMPLEMENTATION.md)
 
 ## Consequences
 

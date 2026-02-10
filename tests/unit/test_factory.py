@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_search.exceptions import QdrantConnectionError
-from code_search.factory import Components, create_components
+from clew.exceptions import QdrantConnectionError
+from clew.factory import Components, create_components
 
 
 @pytest.fixture
@@ -25,14 +25,14 @@ def mock_env() -> MagicMock:
 def _patch_all(mock_env: MagicMock) -> dict[str, MagicMock]:
     """Patch all external dependencies and return dict of mocks."""
     with (
-        patch("code_search.factory.Environment", return_value=mock_env) as m_env,
-        patch("code_search.factory.QdrantManager") as m_qdrant,
-        patch("code_search.factory.create_embedding_provider") as m_embedder,
-        patch("code_search.factory.CacheDB") as m_cache,
-        patch("code_search.factory.HybridSearchEngine") as m_hybrid,
-        patch("code_search.factory.RerankProvider") as m_rerank,
-        patch("code_search.factory.IndexingPipeline") as m_pipeline,
-        patch("code_search.factory.SearchEngine") as m_search_engine,
+        patch("clew.factory.Environment", return_value=mock_env) as m_env,
+        patch("clew.factory.QdrantManager") as m_qdrant,
+        patch("clew.factory.create_embedding_provider") as m_embedder,
+        patch("clew.factory.CacheDB") as m_cache,
+        patch("clew.factory.HybridSearchEngine") as m_hybrid,
+        patch("clew.factory.RerankProvider") as m_rerank,
+        patch("clew.factory.IndexingPipeline") as m_pipeline,
+        patch("clew.factory.SearchEngine") as m_search_engine,
     ):
         yield {
             "Environment": m_env,
@@ -93,7 +93,7 @@ class TestCreateComponentsFromYaml:
     """Test create_components with a config_path."""
 
     def test_loads_config_from_yaml(self, _patch_all: dict[str, MagicMock]) -> None:
-        with patch("code_search.factory.ProjectConfig") as mock_config_cls:
+        with patch("clew.factory.ProjectConfig") as mock_config_cls:
             mock_config = MagicMock()
             mock_config.terminology_file = None
             mock_config.indexing = MagicMock()
@@ -133,8 +133,8 @@ class TestTerminologyFileExistsCreatesEnhancer:
         terminology_file.write_text("abbreviations: {}")
 
         with (
-            patch("code_search.factory.ProjectConfig") as mock_config_cls,
-            patch("code_search.factory.QueryEnhancer") as mock_enhancer_cls,
+            patch("clew.factory.ProjectConfig") as mock_config_cls,
+            patch("clew.factory.QueryEnhancer") as mock_enhancer_cls,
         ):
             mock_config = MagicMock()
             mock_config.terminology_file = str(terminology_file)
@@ -183,9 +183,7 @@ class TestNLDescriptionsOverride:
         """nl_descriptions=True overrides config to enable descriptions."""
         _patch_all["env"].ANTHROPIC_API_KEY = "test-key"
 
-        with patch(
-            "code_search.clients.description.AnthropicDescriptionProvider"
-        ) as mock_provider_cls:
+        with patch("clew.clients.description.AnthropicDescriptionProvider") as mock_provider_cls:
             result = create_components(nl_descriptions=True)
 
             assert result.config.indexing.nl_description_enabled is True
@@ -200,10 +198,8 @@ class TestDescriptionProviderCreatedWhenEnabled:
         _patch_all["env"].ANTHROPIC_API_KEY = "test-anthropic-key"
 
         with (
-            patch("code_search.factory.ProjectConfig") as mock_config_cls,
-            patch(
-                "code_search.clients.description.AnthropicDescriptionProvider"
-            ) as mock_provider_cls,
+            patch("clew.factory.ProjectConfig") as mock_config_cls,
+            patch("clew.clients.description.AnthropicDescriptionProvider") as mock_provider_cls,
         ):
             mock_config = MagicMock()
             mock_config.terminology_file = None
@@ -230,7 +226,7 @@ class TestDescriptionProviderCreatedWhenEnabled:
         """Even with nl_description_enabled=True, None if no ANTHROPIC_API_KEY."""
         _patch_all["env"].ANTHROPIC_API_KEY = ""
 
-        with patch("code_search.factory.ProjectConfig") as mock_config_cls:
+        with patch("clew.factory.ProjectConfig") as mock_config_cls:
             mock_config = MagicMock()
             mock_config.terminology_file = None
             mock_config.search = MagicMock()
@@ -250,10 +246,8 @@ class TestIndexingPipelineReceivesDescriptionProvider:
         _patch_all["env"].ANTHROPIC_API_KEY = "test-key"
 
         with (
-            patch("code_search.factory.ProjectConfig") as mock_config_cls,
-            patch(
-                "code_search.clients.description.AnthropicDescriptionProvider"
-            ) as mock_provider_cls,
+            patch("clew.factory.ProjectConfig") as mock_config_cls,
+            patch("clew.clients.description.AnthropicDescriptionProvider") as mock_provider_cls,
         ):
             mock_config = MagicMock()
             mock_config.terminology_file = None

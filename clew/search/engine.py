@@ -9,7 +9,7 @@ import logging
 import statistics
 from typing import TYPE_CHECKING
 
-from code_search.models import SearchConfig
+from clew.models import SearchConfig
 
 from .filters import build_qdrant_filter
 from .intent import classify_intent
@@ -17,9 +17,9 @@ from .models import SearchRequest, SearchResponse, SearchResult
 from .rerank import should_skip_rerank
 
 if TYPE_CHECKING:
-    from code_search.search.enhance import QueryEnhancer
-    from code_search.search.hybrid import HybridSearchEngine
-    from code_search.search.rerank import RerankProvider
+    from clew.search.enhance import QueryEnhancer
+    from clew.search.hybrid import HybridSearchEngine
+    from clew.search.rerank import RerankProvider
 
 logger = logging.getLogger(__name__)
 

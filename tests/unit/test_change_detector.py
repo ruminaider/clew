@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from code_search.indexer.change_detector import ChangeDetector
+from clew.indexer.change_detector import ChangeDetector
 
 
 @pytest.fixture
@@ -13,8 +13,8 @@ def mock_cache() -> Mock:
     return Mock()
 
 
-@patch("code_search.indexer.file_hash.FileHashTracker")
-@patch("code_search.indexer.git_tracker.GitChangeTracker")
+@patch("clew.indexer.file_hash.FileHashTracker")
+@patch("clew.indexer.git_tracker.GitChangeTracker")
 class TestDetectChangesGitPath:
     def test_git_path_with_last_commit(
         self, mock_git_cls: Mock, mock_hash_cls: Mock, mock_cache: Mock
@@ -103,8 +103,8 @@ class TestDetectChangesGitPath:
         assert "new.py" not in result.unchanged
 
 
-@patch("code_search.indexer.file_hash.FileHashTracker")
-@patch("code_search.indexer.git_tracker.GitChangeTracker")
+@patch("clew.indexer.file_hash.FileHashTracker")
+@patch("clew.indexer.git_tracker.GitChangeTracker")
 class TestDetectChangesHashFallback:
     def test_hash_fallback_not_git_repo(
         self, mock_git_cls: Mock, mock_hash_cls: Mock, mock_cache: Mock
@@ -153,8 +153,8 @@ class TestDetectChangesHashFallback:
         mock_hash.detect_changes.assert_called_once_with(["a.py", "b.py"])
 
 
-@patch("code_search.indexer.file_hash.FileHashTracker")
-@patch("code_search.indexer.git_tracker.GitChangeTracker")
+@patch("clew.indexer.file_hash.FileHashTracker")
+@patch("clew.indexer.git_tracker.GitChangeTracker")
 class TestGetCurrentCommit:
     def test_get_current_commit_returns_hash(
         self, mock_git_cls: Mock, mock_hash_cls: Mock, mock_cache: Mock

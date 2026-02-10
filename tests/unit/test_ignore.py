@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from code_search.indexer.ignore import DEFAULT_IGNORE_PATTERNS, IgnorePatternLoader
+from clew.indexer.ignore import DEFAULT_IGNORE_PATTERNS, IgnorePatternLoader
 
 
 class TestDefaultPatterns:
@@ -36,8 +36,8 @@ class TestIgnorePatternLoader:
         assert loader.should_ignore("app.log")
         assert loader.should_ignore("build/output.js")
 
-    def test_codesearchignore_loaded(self, project_root: Path) -> None:
-        (project_root / ".codesearchignore").write_text("*.generated.py\n")
+    def test_clewignore_loaded(self, project_root: Path) -> None:
+        (project_root / ".clewignore").write_text("*.generated.py\n")
         loader = IgnorePatternLoader(project_root)
         loader.load()
         assert loader.should_ignore("output.generated.py")
@@ -48,7 +48,7 @@ class TestIgnorePatternLoader:
         assert loader.should_ignore("backend/app/migrations/0001.py")
 
     def test_env_var_override(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CODE_SEARCH_EXCLUDE", "*.tmp,*.bak")
+        monkeypatch.setenv("CLEW_EXCLUDE", "*.tmp,*.bak")
         loader = IgnorePatternLoader(project_root)
         loader.load()
         assert loader.should_ignore("data.tmp")

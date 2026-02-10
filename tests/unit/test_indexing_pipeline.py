@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from code_search.indexer.cache import CacheDB
-from code_search.indexer.pipeline import (
+from clew.indexer.cache import CacheDB
+from clew.indexer.pipeline import (
     IndexingPipeline,
     IndexingResult,
     _is_test_file,
@@ -392,7 +392,7 @@ class TestPipelineDescriptions:
         f.write_text("x = 1\n")
 
         # Patch text_to_sparse_vector to capture what gets passed
-        with patch("code_search.indexer.pipeline.text_to_sparse_vector") as mock_sparse:
+        with patch("clew.indexer.pipeline.text_to_sparse_vector") as mock_sparse:
             mock_sparse.return_value = Mock(indices=[1], values=[1.0])
             await pipeline.index_files([f], collection="code")
 

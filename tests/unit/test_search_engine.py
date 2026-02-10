@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from code_search.models import SearchConfig
-from code_search.search.engine import SearchEngine
-from code_search.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
+from clew.models import SearchConfig
+from clew.search.engine import SearchEngine
+from clew.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def mock_hybrid() -> Mock:
 
 @pytest.fixture
 def mock_reranker() -> Mock:
-    from code_search.search.rerank import RerankResult
+    from clew.search.rerank import RerankResult
 
     reranker = Mock()
     reranker.rerank.return_value = [
@@ -178,7 +178,7 @@ class TestSearchEngine:
         assert qf.must[0].key == "language"
 
     async def test_invalid_filter_raises(self, engine: SearchEngine) -> None:
-        from code_search.exceptions import InvalidFilterError
+        from clew.exceptions import InvalidFilterError
 
         request = SearchRequest(query="test", filters={"invalid_key": "val"})
         with pytest.raises(InvalidFilterError):
@@ -192,7 +192,7 @@ class TestPointToResultDocstring:
         """Verify docstring is pulled from Qdrant payload into SearchResult."""
         from unittest.mock import Mock
 
-        from code_search.search.hybrid import HybridSearchEngine
+        from clew.search.hybrid import HybridSearchEngine
 
         point = Mock()
         point.score = 0.9
@@ -210,7 +210,7 @@ class TestPointToResultDocstring:
         """Verify docstring defaults to empty string when not in payload."""
         from unittest.mock import Mock
 
-        from code_search.search.hybrid import HybridSearchEngine
+        from clew.search.hybrid import HybridSearchEngine
 
         point = Mock()
         point.score = 0.9

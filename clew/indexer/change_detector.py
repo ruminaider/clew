@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from code_search.indexer.cache import CacheDB
+    from clew.indexer.cache import CacheDB
 
 
 @dataclass
@@ -25,8 +25,8 @@ class ChangeDetector:
     """Unified change detection: try git first, fall back to file-hash."""
 
     def __init__(self, project_root: Path, cache: CacheDB) -> None:
-        from code_search.indexer.file_hash import FileHashTracker
-        from code_search.indexer.git_tracker import GitChangeTracker
+        from clew.indexer.file_hash import FileHashTracker
+        from clew.indexer.git_tracker import GitChangeTracker
 
         self._git = GitChangeTracker(project_root)
         self._hash = FileHashTracker(cache)

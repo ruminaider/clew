@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from code_search.search.rerank import RerankProvider, RerankResult, should_skip_rerank
+from clew.search.rerank import RerankProvider, RerankResult, should_skip_rerank
 
 
 class TestShouldSkipRerank:
@@ -103,7 +103,7 @@ class TestRerankProvider:
 
     @pytest.fixture
     def provider(self, mock_voyage: Mock) -> RerankProvider:
-        with patch("code_search.search.rerank.voyageai") as mock_module:
+        with patch("clew.search.rerank.voyageai") as mock_module:
             mock_module.Client.return_value = mock_voyage
             return RerankProvider(api_key="test-key")
 

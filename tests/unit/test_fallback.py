@@ -1,12 +1,12 @@
 """Tests for the three-tier splitter fallback chain."""
 
-from code_search.chunker.fallback import (
+from clew.chunker.fallback import (
     line_split,
     split_file,
     token_recursive_split,
 )
-from code_search.chunker.parser import ASTParser
-from code_search.chunker.tokenizer import count_tokens
+from clew.chunker.parser import ASTParser
+from clew.chunker.tokenizer import count_tokens
 
 
 class TestTokenRecursiveSplit:

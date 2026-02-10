@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from code_search.indexer.cache import CacheDB
-from code_search.indexer.file_hash import FileHashTracker
+from clew.indexer.cache import CacheDB
+from clew.indexer.file_hash import FileHashTracker
 
 
 class TestFileHashTracker:

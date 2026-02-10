@@ -30,71 +30,71 @@ class TestResolveCacheDir:
     """Test _resolve_cache_dir() resolution order."""
 
     def test_env_var_takes_priority(self) -> None:
-        """CODE_SEARCH_CACHE_DIR env var overrides all other resolution."""
-        with patch.dict(os.environ, {"CODE_SEARCH_CACHE_DIR": "/tmp/custom-cache"}):
-            from code_search.config import _resolve_cache_dir
+        """CLEW_CACHE_DIR env var overrides all other resolution."""
+        with patch.dict(os.environ, {"CLEW_CACHE_DIR": "/tmp/custom-cache"}):
+            from clew.config import _resolve_cache_dir
 
             result = _resolve_cache_dir()
             assert result == Path("/tmp/custom-cache")
 
     def test_git_root_used_when_no_env_var(self) -> None:
-        """Falls back to {git_root}/.code-search/ when no env var set."""
-        env_copy = {k: v for k, v in os.environ.items() if k != "CODE_SEARCH_CACHE_DIR"}
+        """Falls back to {git_root}/.clew/ when no env var set."""
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLEW_CACHE_DIR"}
         with patch.dict(os.environ, env_copy, clear=True):
-            with patch("code_search.config.subprocess") as mock_subprocess:
+            with patch("clew.config.subprocess") as mock_subprocess:
                 mock_result = MagicMock()
                 mock_result.returncode = 0
                 mock_result.stdout = "/Users/me/myproject\n"
                 mock_subprocess.run.return_value = mock_result
 
-                from code_search.config import _resolve_cache_dir
+                from clew.config import _resolve_cache_dir
 
                 result = _resolve_cache_dir()
-                assert result == Path("/Users/me/myproject/.code-search")
+                assert result == Path("/Users/me/myproject/.clew")
 
     def test_cwd_fallback_when_not_in_git_repo(self) -> None:
-        """Falls back to CWD-relative .code-search/ when not in a git repo."""
-        env_copy = {k: v for k, v in os.environ.items() if k != "CODE_SEARCH_CACHE_DIR"}
+        """Falls back to CWD-relative .clew/ when not in a git repo."""
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLEW_CACHE_DIR"}
         with patch.dict(os.environ, env_copy, clear=True):
-            with patch("code_search.config.subprocess") as mock_subprocess:
+            with patch("clew.config.subprocess") as mock_subprocess:
                 mock_result = MagicMock()
                 mock_result.returncode = 128  # git error: not a repo
                 mock_result.stdout = ""
                 mock_subprocess.run.return_value = mock_result
 
-                from code_search.config import _resolve_cache_dir
+                from clew.config import _resolve_cache_dir
 
                 result = _resolve_cache_dir()
-                assert result == Path(".code-search")
+                assert result == Path(".clew")
 
     def test_cwd_fallback_when_git_not_installed(self) -> None:
-        """Falls back to CWD-relative .code-search/ when git is not installed."""
-        env_copy = {k: v for k, v in os.environ.items() if k != "CODE_SEARCH_CACHE_DIR"}
+        """Falls back to CWD-relative .clew/ when git is not installed."""
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLEW_CACHE_DIR"}
         with patch.dict(os.environ, env_copy, clear=True):
-            with patch("code_search.config.subprocess") as mock_subprocess:
+            with patch("clew.config.subprocess") as mock_subprocess:
                 mock_subprocess.run.side_effect = FileNotFoundError("git not found")
 
-                from code_search.config import _resolve_cache_dir
+                from clew.config import _resolve_cache_dir
 
                 result = _resolve_cache_dir()
-                assert result == Path(".code-search")
+                assert result == Path(".clew")
 
     def test_cwd_fallback_when_git_times_out(self) -> None:
-        """Falls back to CWD-relative .code-search/ when git times out."""
+        """Falls back to CWD-relative .clew/ when git times out."""
         import subprocess as real_subprocess
 
-        env_copy = {k: v for k, v in os.environ.items() if k != "CODE_SEARCH_CACHE_DIR"}
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLEW_CACHE_DIR"}
         with patch.dict(os.environ, env_copy, clear=True):
-            with patch("code_search.config.subprocess") as mock_subprocess:
+            with patch("clew.config.subprocess") as mock_subprocess:
                 mock_subprocess.run.side_effect = real_subprocess.TimeoutExpired(
                     cmd="git", timeout=5
                 )
                 mock_subprocess.TimeoutExpired = real_subprocess.TimeoutExpired
 
-                from code_search.config import _resolve_cache_dir
+                from clew.config import _resolve_cache_dir
 
                 result = _resolve_cache_dir()
-                assert result == Path(".code-search")
+                assert result == Path(".clew")
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -114,11 +114,11 @@ git commit -m "test: add failing tests for cache dir resolution"
 ### Task 2: CACHE_DIR Resolution — Implementation
 
 **Files:**
-- Modify: `code_search/config.py`
+- Modify: `clew/config.py`
 
 **Step 1: Implement `_resolve_cache_dir()` and update Environment**
 
-Replace `code_search/config.py` contents with:
+Replace `clew/config.py` contents with:
 
 ```python
 """Config loading and validation."""
@@ -132,11 +132,11 @@ def _resolve_cache_dir() -> Path:
     """Resolve cache directory: env var > git root > CWD fallback.
 
     Resolution order:
-    1. CODE_SEARCH_CACHE_DIR env var (absolute path)
-    2. {git_root}/.code-search/ (auto-detected)
-    3. .code-search/ relative to CWD (fallback)
+    1. CLEW_CACHE_DIR env var (absolute path)
+    2. {git_root}/.clew/ (auto-detected)
+    3. .clew/ relative to CWD (fallback)
     """
-    env_val = os.environ.get("CODE_SEARCH_CACHE_DIR")
+    env_val = os.environ.get("CLEW_CACHE_DIR")
     if env_val:
         return Path(env_val)
 
@@ -148,11 +148,11 @@ def _resolve_cache_dir() -> Path:
             timeout=5,
         )
         if result.returncode == 0:
-            return Path(result.stdout.strip()) / ".code-search"
+            return Path(result.stdout.strip()) / ".clew"
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    return Path(".code-search")
+    return Path(".clew")
 
 
 class Environment:
@@ -162,7 +162,7 @@ class Environment:
     QDRANT_URL: str = os.environ.get("QDRANT_URL", "http://localhost:6333")
     QDRANT_API_KEY: str | None = os.environ.get("QDRANT_API_KEY") or None
     CACHE_DIR: Path = _resolve_cache_dir()
-    LOG_LEVEL: str = os.environ.get("CODE_SEARCH_LOG_LEVEL", "INFO")
+    LOG_LEVEL: str = os.environ.get("CLEW_LOG_LEVEL", "INFO")
     ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
 
     @classmethod
@@ -187,7 +187,7 @@ Expected: All existing tests still pass
 **Step 4: Commit**
 
 ```bash
-git add code_search/config.py
+git add clew/config.py
 git commit -m "fix: resolve CACHE_DIR from git root so MCP server finds state.db"
 ```
 
@@ -207,7 +207,7 @@ Find the existing test file for hybrid search. Add a test that verifies `docstri
 def test_point_to_result_extracts_docstring(self) -> None:
     """Verify docstring is pulled from Qdrant payload into SearchResult."""
     from unittest.mock import Mock
-    from code_search.search.hybrid import HybridSearchEngine
+    from clew.search.hybrid import HybridSearchEngine
 
     point = Mock()
     point.score = 0.9
@@ -225,7 +225,7 @@ def test_point_to_result_extracts_docstring(self) -> None:
 def test_point_to_result_docstring_defaults_empty(self) -> None:
     """Verify docstring defaults to empty string when not in payload."""
     from unittest.mock import Mock
-    from code_search.search.hybrid import HybridSearchEngine
+    from clew.search.hybrid import HybridSearchEngine
 
     point = Mock()
     point.score = 0.9
@@ -255,12 +255,12 @@ git commit -m "test: add failing tests for docstring in SearchResult"
 ### Task 4: Add `docstring` to SearchResult Pipeline — Implementation
 
 **Files:**
-- Modify: `code_search/search/models.py`
-- Modify: `code_search/search/hybrid.py`
+- Modify: `clew/search/models.py`
+- Modify: `clew/search/hybrid.py`
 
 **Step 1: Add `docstring` field to SearchResult**
 
-In `code_search/search/models.py`, add after the `chunk_id` field:
+In `clew/search/models.py`, add after the `chunk_id` field:
 
 ```python
     docstring: str = ""
@@ -268,7 +268,7 @@ In `code_search/search/models.py`, add after the `chunk_id` field:
 
 **Step 2: Extract `docstring` from Qdrant payload**
 
-In `code_search/search/hybrid.py`, in `_point_to_result()`, add after the `chunk_id` line:
+In `clew/search/hybrid.py`, in `_point_to_result()`, add after the `chunk_id` line:
 
 ```python
             docstring=payload.get("docstring", ""),
@@ -287,7 +287,7 @@ Expected: All pass
 **Step 5: Commit**
 
 ```bash
-git add code_search/search/models.py code_search/search/hybrid.py
+git add clew/search/models.py clew/search/hybrid.py
 git commit -m "feat: pull docstring from Qdrant payload into SearchResult"
 ```
 
@@ -331,7 +331,7 @@ Then add these test classes:
 class TestCompactResponse:
     """Test compact vs full response modes."""
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_compact_by_default(self, mock_get) -> None:
         """search() returns compact results (no content field) by default."""
         components = _mock_components()
@@ -347,7 +347,7 @@ class TestCompactResponse:
         assert "file_path" in results[0]
         assert "score" in results[0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_full_detail(self, mock_get) -> None:
         """search(detail='full') returns content field."""
         components = _mock_components()
@@ -360,7 +360,7 @@ class TestCompactResponse:
         assert "content" in results[0]
         assert "snippet" in results[0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_default_limit_is_5(self, mock_get) -> None:
         """search() defaults to limit=5."""
         components = _mock_components()
@@ -378,7 +378,7 @@ class TestSnippetBuilding:
 
     def test_snippet_with_signature_and_docstring(self) -> None:
         """Signature + docstring used when both available."""
-        from code_search.mcp_server import _build_snippet
+        from clew.mcp_server import _build_snippet
 
         result = _mock_search_result(
             signature="def hello():",
@@ -390,7 +390,7 @@ class TestSnippetBuilding:
 
     def test_snippet_with_signature_only(self) -> None:
         """Just signature when no docstring."""
-        from code_search.mcp_server import _build_snippet
+        from clew.mcp_server import _build_snippet
 
         result = _mock_search_result(signature="def hello():", docstring="")
         snippet = _build_snippet(result)
@@ -398,7 +398,7 @@ class TestSnippetBuilding:
 
     def test_snippet_fallback_to_content_lines(self) -> None:
         """First N lines of content when no signature."""
-        from code_search.mcp_server import _build_snippet
+        from clew.mcp_server import _build_snippet
 
         result = _mock_search_result(
             signature="",
@@ -414,7 +414,7 @@ class TestSnippetBuilding:
 class TestGetContextIncludeRelated:
     """Test get_context include_related parameter."""
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_get_context_no_related_by_default(self, mock_get) -> None:
         """get_context() returns no related_chunks by default."""
         components = _mock_components()
@@ -428,7 +428,7 @@ class TestGetContextIncludeRelated:
 
         assert "related_chunks" not in result
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_get_context_with_related(self, mock_get) -> None:
         """get_context(include_related=True) returns compact related_chunks."""
         components = _mock_components()
@@ -451,7 +451,7 @@ class TestGetContextIncludeRelated:
 class TestExplainCompact:
     """Test explain tool compact response."""
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_compact_by_default(self, mock_get) -> None:
         """explain() returns compact related_chunks by default."""
         components = _mock_components()
@@ -464,7 +464,7 @@ class TestExplainCompact:
         assert "content" not in result["related_chunks"][0]
         assert "snippet" in result["related_chunks"][0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_full_detail(self, mock_get) -> None:
         """explain(detail='full') returns content in related_chunks."""
         components = _mock_components()
@@ -475,7 +475,7 @@ class TestExplainCompact:
         result = await explain("src/main.py", symbol="hello", detail="full")
         assert "content" in result["related_chunks"][0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_limit_is_5(self, mock_get) -> None:
         """explain() uses limit=5 internally."""
         components = _mock_components()
@@ -505,7 +505,7 @@ git commit -m "test: add failing tests for compact response mode"
 ### Task 6: Compact Response Mode — Implementation
 
 **Files:**
-- Modify: `code_search/mcp_server.py`
+- Modify: `clew/mcp_server.py`
 
 **Step 1: Add snippet builder and compact result formatter**
 
@@ -664,13 +664,13 @@ Expected: All pass
 
 **Step 7: Lint and type check**
 
-Run: `ruff check . && ruff format --check . && mypy code_search/`
+Run: `ruff check . && ruff format --check . && mypy clew/`
 Expected: Clean
 
 **Step 8: Commit**
 
 ```bash
-git add code_search/mcp_server.py
+git add clew/mcp_server.py
 git commit -m "feat: compact MCP responses by default, opt-in full detail"
 ```
 
@@ -698,7 +698,7 @@ Fix any remaining failures.
 
 **Step 3: Final full suite run**
 
-Run: `pytest --tb=short -q && ruff check . && ruff format --check . && mypy code_search/`
+Run: `pytest --tb=short -q && ruff check . && ruff format --check . && mypy clew/`
 Expected: All green
 
 **Step 4: Commit**

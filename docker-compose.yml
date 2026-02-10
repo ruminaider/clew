@@ -1,7 +1,7 @@
 services:
   qdrant:
     image: qdrant/qdrant:v1.16.1
-    container_name: code-search-qdrant
+    container_name: clew-qdrant
     ports:
       - "6333:6333"
       - "6334:6334"

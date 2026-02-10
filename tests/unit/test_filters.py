@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from code_search.exceptions import InvalidFilterError
-from code_search.search.filters import FILTERABLE_FIELDS, build_qdrant_filter
+from clew.exceptions import InvalidFilterError
+from clew.search.filters import FILTERABLE_FIELDS, build_qdrant_filter
 
 
 class TestBuildQdrantFilter:

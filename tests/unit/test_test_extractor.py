@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from code_search.chunker.parser import ASTParser
-from code_search.indexer.extractors.tests import TestRelationshipExtractor
+from clew.chunker.parser import ASTParser
+from clew.indexer.extractors.tests import TestRelationshipExtractor
 
 
 @pytest.fixture

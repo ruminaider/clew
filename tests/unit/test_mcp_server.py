@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, Mock, patch
 
-from code_search.indexer.pipeline import detect_language
-from code_search.mcp_server import (
+from clew.mcp_server import (
     _error_response,
     _result_to_dict,
     explain,
@@ -20,7 +19,7 @@ def _mock_search_result(**overrides):
     """Create a mock SearchResult with defaults."""
     defaults = {
         "file_path": "src/main.py",
-        "content": "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True",
+        "content": 'def hello():\n    """Say hello."""\n    print(\'hello\')\n    return True',
         "score": 0.95,
         "chunk_type": "function",
         "line_start": 1,
@@ -57,7 +56,7 @@ class TestResultToDict:
         result = _mock_search_result()
         d = _result_to_dict(result, detail="full")
         assert d["file_path"] == "src/main.py"
-        expected = "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True"
+        expected = 'def hello():\n    """Say hello."""\n    print(\'hello\')\n    return True'
         assert d["content"] == expected
         assert d["score"] == 0.95
         assert d["chunk_type"] == "function"
@@ -93,7 +92,7 @@ class TestResultToDict:
 
 class TestErrorResponse:
     def test_qdrant_connection_error(self):
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         err = QdrantConnectionError("http://localhost:6333")
         resp = _error_response(err)
@@ -101,7 +100,7 @@ class TestErrorResponse:
         assert resp["fix"] == "Run: docker compose up -d qdrant"
 
     def test_voyage_auth_error(self):
-        from code_search.exceptions import VoyageAuthError
+        from clew.exceptions import VoyageAuthError
 
         err = VoyageAuthError()
         resp = _error_response(err)
@@ -115,17 +114,17 @@ class TestErrorResponse:
         assert "something broke" in resp["error"]
         assert resp["fix"] == "Check logs for details"
 
-    def test_generic_code_search_error(self):
-        from code_search.exceptions import CodeSearchError
+    def test_generic_clew_error(self):
+        from clew.exceptions import ClewError
 
-        err = CodeSearchError("generic problem")
+        err = ClewError("generic problem")
         resp = _error_response(err)
         assert "generic problem" in resp["error"]
         assert resp["fix"] == "Check logs for details"
 
 
 class TestSearchTool:
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_returns_results(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -138,7 +137,7 @@ class TestSearchTool:
         assert output[0]["file_path"] == "src/main.py"
         assert output[0]["score"] == 0.95
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_with_custom_params(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -152,7 +151,7 @@ class TestSearchTool:
         assert call_args.collection == "docs"
         assert call_args.active_file == "src/app.py"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_default_params(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -166,7 +165,7 @@ class TestSearchTool:
         assert call_args.collection == "code"
         assert call_args.active_file is None
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_empty_results(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -176,7 +175,7 @@ class TestSearchTool:
         assert isinstance(output, list)
         assert len(output) == 0
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_multiple_results(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -193,9 +192,9 @@ class TestSearchTool:
         assert output[1]["file_path"] == "b.py"
         assert output[2]["file_path"] == "c.py"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_qdrant_error(self, mock_get):
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         mock_get.return_value = _mock_components()
         mock_get.return_value.search_engine.search = AsyncMock(
@@ -207,9 +206,9 @@ class TestSearchTool:
         assert "error" in output
         assert output["fix"] == "Run: docker compose up -d qdrant"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_voyage_auth_error(self, mock_get):
-        from code_search.exceptions import VoyageAuthError
+        from clew.exceptions import VoyageAuthError
 
         mock_get.return_value = _mock_components()
         mock_get.return_value.search_engine.search = AsyncMock(side_effect=VoyageAuthError())
@@ -219,7 +218,7 @@ class TestSearchTool:
         assert "error" in output
         assert "VOYAGE_API_KEY" in output["fix"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_unexpected_error(self, mock_get):
         mock_get.return_value = _mock_components()
         mock_get.return_value.search_engine.search = AsyncMock(
@@ -231,7 +230,7 @@ class TestSearchTool:
         assert "error" in output
         assert output["fix"] == "Check logs for details"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_with_intent(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -240,11 +239,11 @@ class TestSearchTool:
         await search("hello", intent="debug")
 
         call_args = components.search_engine.search.call_args[0][0]
-        from code_search.search.models import QueryIntent
+        from clew.search.models import QueryIntent
 
         assert call_args.intent == QueryIntent.DEBUG
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_invalid_intent(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -254,7 +253,7 @@ class TestSearchTool:
         assert "error" in output
         assert "Invalid intent" in output["error"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_with_filters(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -267,7 +266,7 @@ class TestSearchTool:
 
 
 class TestGetContextTool:
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_reads_full_file(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -284,7 +283,7 @@ class TestGetContextTool:
         assert output["language"] == "python"
         assert "related_chunks" not in output
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_with_line_range(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -299,7 +298,7 @@ class TestGetContextTool:
         assert "line1" not in output["content"]
         assert "line4" not in output["content"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_with_only_line_start(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -313,7 +312,7 @@ class TestGetContextTool:
         assert "line2" in output["content"]
         assert "line3" in output["content"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_with_only_line_end(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -333,7 +332,7 @@ class TestGetContextTool:
         assert "fix" in output
         assert "File not found" in output["error"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_detects_typescript_language(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -345,7 +344,7 @@ class TestGetContextTool:
         output = await get_context(str(test_file))
         assert output["language"] == "typescript"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_detects_javascript_language(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -357,7 +356,7 @@ class TestGetContextTool:
         output = await get_context(str(test_file))
         assert output["language"] == "javascript"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_detects_markdown_language(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -369,7 +368,7 @@ class TestGetContextTool:
         output = await get_context(str(test_file))
         assert output["language"] == "markdown"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_unknown_extension_uses_raw(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -381,7 +380,7 @@ class TestGetContextTool:
         output = await get_context(str(test_file))
         assert output["language"] == "toml"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_includes_related_chunks(self, mock_get, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -395,9 +394,9 @@ class TestGetContextTool:
         assert len(output["related_chunks"]) == 1
         assert output["related_chunks"][0]["file_path"] == "src/main.py"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_error_during_context(self, mock_get, tmp_path):
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         components = _mock_components()
         mock_get.return_value = components
@@ -414,7 +413,7 @@ class TestGetContextTool:
 
 
 class TestExplainTool:
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_searches_symbol(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -432,7 +431,7 @@ class TestExplainTool:
         assert call_args.query == "MyClass"
         assert call_args.active_file == "src/main.py"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_searches_question(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -445,7 +444,7 @@ class TestExplainTool:
         call_args = components.search_engine.search.call_args[0][0]
         assert call_args.query == "How does auth work?"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_falls_back_to_file_path(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -459,7 +458,7 @@ class TestExplainTool:
         assert call_args.query == "src/main.py"
         assert call_args.active_file == "src/main.py"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_symbol_takes_priority_over_question(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -472,7 +471,7 @@ class TestExplainTool:
         call_args = components.search_engine.search.call_args[0][0]
         assert call_args.query == "MyClass"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_limit_is_ten(self, mock_get):
         """explain() fetches 10 results internally (filters down to 5)."""
         components = _mock_components()
@@ -484,9 +483,9 @@ class TestExplainTool:
         call_args = components.search_engine.search.call_args[0][0]
         assert call_args.limit == 10
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_filters_by_language(self, mock_get):
-        """When file_path is a Python file, low-score results from other languages are filtered out."""
+        """Low-score results from other languages are filtered out."""
         components = _mock_components()
         mock_get.return_value = components
         results = [
@@ -504,7 +503,7 @@ class TestExplainTool:
         assert "src/utils.py" in file_paths
         assert "src/models.py" in file_paths
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_keeps_high_score_cross_language(self, mock_get):
         """Cross-language results with score >= 0.6 are kept."""
         components = _mock_components()
@@ -522,7 +521,7 @@ class TestExplainTool:
         assert "src/auth.ts" in file_paths  # high score, kept despite different language
         assert "tailwind.config.js" not in file_paths  # low score + different language, filtered
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_no_filter_for_unknown_language(self, mock_get):
         """When language can't be detected from file_path, all results are kept."""
         components = _mock_components()
@@ -538,9 +537,9 @@ class TestExplainTool:
         # All results should be kept since Makefile has unknown language
         assert len(output["related_chunks"]) == 3
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_handles_error(self, mock_get):
-        from code_search.exceptions import VoyageAuthError
+        from clew.exceptions import VoyageAuthError
 
         mock_get.return_value = _mock_components()
         mock_get.return_value.search_engine.search = AsyncMock(side_effect=VoyageAuthError())
@@ -552,7 +551,7 @@ class TestExplainTool:
 
 
 class TestIndexStatusTool:
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_status_returns_info(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -564,7 +563,7 @@ class TestIndexStatusTool:
         assert output["collections"]["docs"] == 42
         assert output["last_commit"] == "abc123"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_status_no_collections(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -574,7 +573,7 @@ class TestIndexStatusTool:
         assert output["indexed"] is False
         assert output["collections"] == {}
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_status_unhealthy_qdrant(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -583,7 +582,7 @@ class TestIndexStatusTool:
         output = await index_status(action="status")
         assert output["qdrant_healthy"] is False
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_status_no_last_commit(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -592,8 +591,8 @@ class TestIndexStatusTool:
         output = await index_status(action="status")
         assert output["last_commit"] is None
 
-    @patch("code_search.discovery.discover_files")
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.discovery.discover_files")
+    @patch("clew.mcp_server._get_components")
     async def test_trigger_runs_pipeline(self, mock_get, mock_discover, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -617,7 +616,7 @@ class TestIndexStatusTool:
         components.indexing_pipeline.index_files.assert_called_once()
         components.qdrant.ensure_collection.assert_called_once_with("code", dense_dim=1024)
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trigger_missing_project_root(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -626,7 +625,7 @@ class TestIndexStatusTool:
         assert "error" in output
         assert "project_root" in output["error"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trigger_invalid_directory(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -635,7 +634,7 @@ class TestIndexStatusTool:
         assert "error" in output
         assert "Not a directory" in output["error"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_unknown_action(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
@@ -645,9 +644,9 @@ class TestIndexStatusTool:
         assert "Unknown action" in output["error"]
         assert output["fix"] == "Use 'status' or 'trigger'"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_voyage_auth_error(self, mock_get):
-        from code_search.exceptions import VoyageAuthError
+        from clew.exceptions import VoyageAuthError
 
         mock_get.side_effect = VoyageAuthError()
 
@@ -656,9 +655,9 @@ class TestIndexStatusTool:
         assert "error" in output
         assert "VOYAGE_API_KEY" in output["fix"]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_qdrant_error_on_status(self, mock_get):
-        from code_search.exceptions import QdrantConnectionError
+        from clew.exceptions import QdrantConnectionError
 
         mock_get.side_effect = QdrantConnectionError("http://localhost:6333")
 
@@ -667,8 +666,8 @@ class TestIndexStatusTool:
         assert "error" in output
         assert output["fix"] == "Run: docker compose up -d qdrant"
 
-    @patch("code_search.discovery.discover_files")
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.discovery.discover_files")
+    @patch("clew.mcp_server._get_components")
     async def test_trigger_discovers_supported_extensions(self, mock_get, mock_discover, tmp_path):
         components = _mock_components()
         mock_get.return_value = components
@@ -699,7 +698,7 @@ class TestIndexStatusTool:
 
 
 class TestTraceTool:
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trace_outbound(self, mock_get_components) -> None:
         mock_components = _mock_components()
         mock_components.cache.traverse_relationships.return_value = [
@@ -718,7 +717,7 @@ class TestTraceTool:
         assert len(result["relationships"]) == 1
         assert result["relationships"][0]["target_entity"] == "app/utils.py::helper"
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trace_with_max_depth(self, mock_get_components) -> None:
         mock_components = _mock_components()
         mock_components.cache.traverse_relationships.return_value = []
@@ -729,7 +728,7 @@ class TestTraceTool:
             "a.py::Foo", direction="both", max_depth=3, relationship_types=None
         )
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trace_with_relationship_filter(self, mock_get_components) -> None:
         mock_components = _mock_components()
         mock_components.cache.traverse_relationships.return_value = []
@@ -746,7 +745,7 @@ class TestTraceTool:
             relationship_types=["imports", "calls"],
         )
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trace_max_depth_clamped(self, mock_get_components) -> None:
         """max_depth is clamped to 5."""
         mock_components = _mock_components()
@@ -758,7 +757,7 @@ class TestTraceTool:
             "a.py::Foo", direction="both", max_depth=5, relationship_types=None
         )
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trace_error_handling(self, mock_get_components) -> None:
         mock_components = _mock_components()
         mock_components.cache.traverse_relationships.side_effect = Exception("DB error")
@@ -768,7 +767,7 @@ class TestTraceTool:
         assert "error" in result
         assert "fix" in result
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_trace_includes_resolved_entity(self, mock_get_components) -> None:
         """When entity is resolved to a different name, resolved_entity is in the response."""
         mock_components = _mock_components()
@@ -796,7 +795,7 @@ class TestTraceTool:
 class TestCompactResponse:
     """Test compact vs full response modes."""
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_compact_by_default(self, mock_get) -> None:
         """search() returns compact results (no content field) by default."""
         components = _mock_components()
@@ -812,7 +811,7 @@ class TestCompactResponse:
         assert "file_path" in results[0]
         assert "score" in results[0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_full_detail(self, mock_get) -> None:
         """search(detail='full') returns content field."""
         components = _mock_components()
@@ -825,7 +824,7 @@ class TestCompactResponse:
         assert "content" in results[0]
         assert "snippet" in results[0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_search_default_limit_is_5(self, mock_get) -> None:
         """search() defaults to limit=5."""
         components = _mock_components()
@@ -843,7 +842,7 @@ class TestSnippetBuilding:
 
     def test_snippet_with_signature_and_docstring(self) -> None:
         """Signature + docstring used when both available."""
-        from code_search.mcp_server import _build_snippet
+        from clew.mcp_server import _build_snippet
 
         result = _mock_search_result(
             signature="def hello():",
@@ -855,7 +854,7 @@ class TestSnippetBuilding:
 
     def test_snippet_with_signature_only(self) -> None:
         """Just signature when no docstring."""
-        from code_search.mcp_server import _build_snippet
+        from clew.mcp_server import _build_snippet
 
         result = _mock_search_result(signature="def hello():", docstring="")
         snippet = _build_snippet(result)
@@ -863,7 +862,7 @@ class TestSnippetBuilding:
 
     def test_snippet_fallback_to_content_lines(self) -> None:
         """First N lines of content when no signature."""
-        from code_search.mcp_server import _build_snippet
+        from clew.mcp_server import _build_snippet
 
         result = _mock_search_result(
             signature="",
@@ -879,7 +878,7 @@ class TestSnippetBuilding:
 class TestGetContextIncludeRelated:
     """Test get_context include_related parameter."""
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_get_context_no_related_by_default(self, mock_get) -> None:
         """get_context() returns no related_chunks by default."""
         components = _mock_components()
@@ -894,7 +893,7 @@ class TestGetContextIncludeRelated:
 
         assert "related_chunks" not in result
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_get_context_with_related(self, mock_get) -> None:
         """get_context(include_related=True) returns compact related_chunks."""
         components = _mock_components()
@@ -918,7 +917,7 @@ class TestGetContextIncludeRelated:
 class TestExplainCompact:
     """Test explain tool compact response."""
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_compact_by_default(self, mock_get) -> None:
         """explain() returns compact related_chunks by default."""
         components = _mock_components()
@@ -931,7 +930,7 @@ class TestExplainCompact:
         assert "content" not in result["related_chunks"][0]
         assert "snippet" in result["related_chunks"][0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_full_detail(self, mock_get) -> None:
         """explain(detail='full') returns content in related_chunks."""
         components = _mock_components()
@@ -942,7 +941,7 @@ class TestExplainCompact:
         result = await explain("src/main.py", symbol="hello", detail="full")
         assert "content" in result["related_chunks"][0]
 
-    @patch("code_search.mcp_server._get_components")
+    @patch("clew.mcp_server._get_components")
     async def test_explain_limit_is_10(self, mock_get) -> None:
         """explain() fetches limit=10 internally (filters down to 5)."""
         components = _mock_components()

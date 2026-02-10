@@ -1,6 +1,6 @@
 """Tests for Voyage tokenizer wrapper."""
 
-from code_search.chunker.tokenizer import chunk_fits, count_tokens
+from clew.chunker.tokenizer import chunk_fits, count_tokens
 
 
 class TestCountTokens:

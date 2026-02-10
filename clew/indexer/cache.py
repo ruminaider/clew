@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from code_search.indexer.relationships import Relationship
+    from clew.indexer.relationships import Relationship
 
 CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -260,7 +260,7 @@ class CacheDB:
             direction: "inbound", "outbound", or "both"
             relationship_types: Optional filter by relationship type
         """
-        from code_search.indexer.relationships import Relationship as _Relationship
+        from clew.indexer.relationships import Relationship as _Relationship
 
         results: list[_Relationship] = []
         with self._get_state_conn() as conn:
@@ -345,8 +345,7 @@ class CacheDB:
         with self._get_state_conn() as conn:
             # 1. Exact match on source_entity
             row = conn.execute(
-                "SELECT source_entity FROM code_relationships "
-                "WHERE source_entity = ? LIMIT 1",
+                "SELECT source_entity FROM code_relationships WHERE source_entity = ? LIMIT 1",
                 (entity,),
             ).fetchone()
             if row:
@@ -354,8 +353,7 @@ class CacheDB:
 
             # Exact match on target_entity
             row = conn.execute(
-                "SELECT target_entity FROM code_relationships "
-                "WHERE target_entity = ? LIMIT 1",
+                "SELECT target_entity FROM code_relationships WHERE target_entity = ? LIMIT 1",
                 (entity,),
             ).fetchone()
             if row:
