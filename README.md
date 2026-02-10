@@ -251,28 +251,28 @@ index_status(action="status", project_root=None)
 
 ```
                     ┌──────────────┐
-                    │  Claude Code  │
-                    │  (MCP client) │
+                    │ Claude Code  │
+                    │ (MCP client) │
                     └──────┬───────┘
                            │ stdio
                     ┌──────▼───────┐
-                    │  MCP Server   │  search, get_context, explain, trace, index_status
+                    │  MCP Server  │  search, get_context, explain, trace, index_status
                     └──────┬───────┘
                            │
               ┌────────────▼────────────┐
-              │     Search Pipeline      │
-              │  enhance → classify →    │
-              │  hybrid search → rerank  │
+              │     Search Pipeline     │
+              │  enhance → classify →   │
+              │  hybrid search → rerank │
               └────────────┬────────────┘
                            │
               ┌────────────▼────────────┐
-              │    Qdrant Collections    │
-              │  code: py/ts/tsx/js/jsx  │
-              │  docs: markdown          │
+              │    Qdrant Collections   │
+              │  code: py/ts/tsx/js/jsx │
+              │  docs: markdown         │
               └────────────┬────────────┘
                            │
               ┌────────────▼────────────┐
-              │   Indexing Pipeline      │
+              │   Indexing Pipeline     │
               │  discover → chunk →     │
               │  enrich → embed →       │
               │  upsert + relationships │
