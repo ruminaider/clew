@@ -1902,3 +1902,75 @@ async def embed_in_batches(
 
     return all_embeddings, progress_stats
 ```
+
+---
+
+## V1.2 Structural Layer
+
+### Delivered Modules
+
+| Module | Description |
+|--------|-------------|
+| `indexer/relationships.py` | `Relationship` dataclass: source_entity, relationship, target_entity, file_path, confidence |
+| `indexer/extractors/base.py` | `RelationshipExtractor` ABC |
+| `indexer/extractors/python.py` | Python: imports, from-imports, inheritance, decorators, function/method calls |
+| `indexer/extractors/typescript.py` | TypeScript/JS: ES6 imports, require, extends, JSX renders, calls, fetch/axios API calls |
+| `indexer/extractors/tests.py` | Test file detection: maps test files to tested modules via import analysis |
+| `indexer/extractors/django_urls.py` | Django URL pattern extraction from `urls.py` files |
+| `indexer/extractors/api_boundary.py` | Cross-language API boundary matching (frontend fetch → Django URL) |
+
+### Relationship Types
+
+| Type | Confidence | Source |
+|------|-----------|--------|
+| `imports` | static | Python `import`/`from`, TS/JS `import`/`require` |
+| `inherits` | static | Python class bases, TS/JS `extends` |
+| `decorates` | static | Python `@decorator` |
+| `calls` | inferred | Function/method calls |
+| `renders` | static | JSX component references (uppercase-first only) |
+| `tests` | static | Test file → imported module |
+| `calls_api` | inferred | `fetch()`/`axios.*()` with string literal URLs |
+
+### SQLite Schema: code_relationships
+
+```sql
+CREATE TABLE IF NOT EXISTS code_relationships (
+    source_entity TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    target_entity TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    confidence TEXT DEFAULT 'static',
+    PRIMARY KEY (source_entity, relationship, target_entity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rel_source ON code_relationships(source_entity);
+CREATE INDEX IF NOT EXISTS idx_rel_target ON code_relationships(target_entity);
+CREATE INDEX IF NOT EXISTS idx_rel_file ON code_relationships(file_path);
+```
+
+### MCP trace Tool
+
+```
+trace(entity, direction="both", max_depth=2, relationship_types=None)
+```
+
+- BFS traversal of the relationship graph
+- `direction`: "inbound", "outbound", or "both"
+- `max_depth`: clamped to [1, 5]
+- Returns list of `{source_entity, relationship, target_entity, confidence, depth}`
+
+### Test Coverage
+
+| Test File | Tests |
+|-----------|-------|
+| `test_relationships.py` | 2 |
+| `test_cache.py` (relationship + BFS) | 11 |
+| `test_python_extractor.py` | 18 |
+| `test_typescript_extractor.py` | 16 |
+| `test_test_extractor.py` | 4 |
+| `test_django_url_extractor.py` | 4 |
+| `test_api_boundary.py` | 7 |
+| `test_indexing_pipeline.py` (relationship) | 6 |
+| `test_mcp_server.py` (trace) | 5 |
+| `test_cli.py` (trace) | 5 |
+| **Total new** | **78** |

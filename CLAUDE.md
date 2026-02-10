@@ -12,6 +12,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **V1.1 (NL Descriptions) is complete.** 32 source modules, 30 test files, 394 tests passing. LLM-generated descriptions for undocumented code chunks, prepended before embedding to improve semantic search quality.
 
+**V1.2 (Structural Layer) is complete.** 39 source modules, 36 test files, 472 tests passing. Code relationship extraction (imports, inherits, calls, decorates, renders, tests, calls_api) with BFS graph traversal via `trace` MCP tool and CLI command.
+
 ## Module Inventory
 
 ```
@@ -26,14 +28,22 @@ code_search/
 │   ├── description.py  # DescriptionProvider ABC + AnthropicDescriptionProvider — NL descriptions for code
 │   ├── qdrant.py       # QdrantManager — collection CRUD, hybrid query with RRF fusion, delete by file_path
 │   └── voyage.py       # VoyageEmbeddingProvider — httpx async client for Voyage AI
-├── indexer/            # File discovery, caching, change detection, indexing pipeline
-│   ├── cache.py        # CacheDB — SQLite via contextmanager, embedding + chunk caches, state tracking
+├── indexer/            # File discovery, caching, change detection, indexing pipeline, relationship extraction
+│   ├── cache.py        # CacheDB — SQLite via contextmanager, embedding + chunk caches, state tracking, relationship store
 │   ├── change_detector.py # ChangeDetector — unified interface: git-first, file-hash fallback
+│   ├── extractors/     # Pluggable relationship extractors (V1.2)
+│   │   ├── base.py     # RelationshipExtractor ABC
+│   │   ├── python.py   # Python: imports, inherits, decorates, calls
+│   │   ├── typescript.py # TypeScript/JS: imports, inherits, renders (JSX), calls, calls_api (fetch/axios)
+│   │   ├── tests.py    # Test file detection: maps test files to tested modules
+│   │   ├── django_urls.py # Django URL pattern extraction from urls.py
+│   │   └── api_boundary.py # Cross-language API boundary matching (frontend→backend)
 │   ├── file_hash.py    # FileHashTracker — SHA256-based change detection (added/modified/unchanged)
 │   ├── git_tracker.py  # GitChangeTracker — git diff --name-status change detection (A/M/D/R parsing)
 │   ├── ignore.py       # IgnorePatternLoader — .gitignore + .codesearchignore + defaults
 │   ├── metadata.py     # detect_app_name, classify_layer, extract_signature, build_chunk_id
-│   └── pipeline.py     # IndexingPipeline — file -> chunk -> metadata -> embed -> upsert to Qdrant
+│   ├── pipeline.py     # IndexingPipeline — file -> chunk -> metadata -> embed -> upsert + relationship extraction
+│   └── relationships.py # Relationship dataclass — entity-relationship-entity with confidence
 ├── search/             # Search pipeline: enhance -> classify -> hybrid search -> rerank
 │   ├── engine.py       # SearchEngine — top-level orchestrator, full pipeline coordination
 │   ├── enhance.py      # QueryEnhancer — terminology expansion from YAML (abbreviations + synonyms)
@@ -43,12 +53,12 @@ code_search/
 │   ├── filters.py      # build_qdrant_filter() — converts SearchRequest.filters to Qdrant Filter objects
 │   ├── rerank.py       # RerankProvider — Voyage rerank-2.5 integration with configurable skip conditions
 │   └── tokenize.py     # BM25 tokenization — camelCase/snake_case splitting, raw term count sparse vectors
-├── cli.py              # Typer app — index, search, status, serve commands (fully wired)
+├── cli.py              # Typer app — index, search, status, trace, serve commands (fully wired)
 ├── config.py           # Environment class — env var loading with defaults
 ├── discovery.py        # discover_files() — centralized file discovery using IgnorePatternLoader + SafetyChecker
 ├── exceptions.py       # Exception hierarchy with user-facing fix suggestions
 ├── factory.py          # Component factory — centralized wiring, create_components() returns Components dataclass
-├── mcp_server.py       # FastMCP server — 4 tools: search, get_context, explain, index_status
+├── mcp_server.py       # FastMCP server — 5 tools: search, get_context, explain, index_status, trace
 ├── models.py           # Pydantic v2 models — ProjectConfig, SearchConfig, CollectionConfig, SafetyConfig, etc.
 └── safety.py           # SafetyChecker — file size, chunk count, collection limits
 ```
@@ -78,6 +88,8 @@ code-search index [PROJECT_ROOT] --full    # Full reindex
 code-search index [PROJECT_ROOT]           # Incremental (change detection)
 code-search index [PROJECT_ROOT] --nl-descriptions  # Generate NL descriptions (requires ANTHROPIC_API_KEY)
 code-search search "query" --raw           # Search with JSON output
+code-search trace "entity::name"           # Trace code relationships (BFS graph traversal)
+code-search trace "entity" --direction outbound --depth 3  # Directed trace with depth limit
 code-search status                          # Show Qdrant health + index stats
 code-search serve                           # Start MCP server (stdio transport)
 ```
@@ -90,7 +102,8 @@ code-search serve                           # Start MCP server (stdio transport)
 - `docs/plans/2026-02-06-phase1-core-infrastructure.md` — Phase 1 plan (complete)
 - `docs/plans/2026-02-06-phase2-search-pipeline.md` — Phase 2 plan (complete)
 - `docs/plans/2026-02-09-v1.1-nl-descriptions.md` — V1.1 NL Descriptions plan (complete)
-- `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.2+)
+- `docs/plans/2026-02-09-v1.2-structural-layer.md` — V1.2 Structural Layer plan (complete)
+- `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.3+)
 
 ## Tech Stack
 
