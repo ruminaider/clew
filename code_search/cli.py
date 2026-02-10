@@ -234,6 +234,61 @@ def status() -> None:
 
 
 @app.command()
+def trace(
+    entity: str = typer.Argument(..., help="Entity to trace (e.g., 'app/main.py::Foo')"),
+    direction: str = typer.Option("both", "--direction", "-d", help="inbound, outbound, or both"),
+    max_depth: int = typer.Option(2, "--depth", help="Max hops (1-5)"),
+    relationship_types: list[str] | None = typer.Option(
+        None, "--type", "-t", help="Filter relationship types"
+    ),
+    raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
+) -> None:
+    """Trace code relationships for an entity."""
+    from code_search.exceptions import CodeSearchError
+    from code_search.factory import create_components
+
+    try:
+        components = create_components()
+    except CodeSearchError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from None
+
+    clamped_depth = max(1, min(5, max_depth))
+    relationships = components.cache.traverse_relationships(
+        entity,
+        direction=direction,
+        max_depth=clamped_depth,
+        relationship_types=relationship_types,
+    )
+
+    if raw:
+        print(json.dumps({"entity": entity, "relationships": relationships}, indent=2))
+        return
+
+    if not relationships:
+        console.print(f"[yellow]No relationships found for {entity}[/yellow]")
+        return
+
+    table = Table(title=f"Relationships for {entity}")
+    table.add_column("Depth", style="dim")
+    table.add_column("Source")
+    table.add_column("Relationship", style="bold")
+    table.add_column("Target")
+    table.add_column("Confidence", style="dim")
+
+    for rel in relationships:
+        table.add_row(
+            str(rel["depth"]),
+            str(rel["source_entity"]),
+            str(rel["relationship"]),
+            str(rel["target_entity"]),
+            str(rel["confidence"]),
+        )
+
+    console.print(table)
+
+
+@app.command()
 def serve() -> None:
     """Start the MCP server for Claude Code integration."""
     from code_search.mcp_server import mcp as mcp_server

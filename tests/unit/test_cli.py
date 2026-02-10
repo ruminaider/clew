@@ -225,6 +225,66 @@ class TestIndexNLDescriptions:
         assert "--nl-descriptions" in result.stdout
 
 
+class TestTraceCommand:
+    @patch("code_search.factory.create_components")
+    def test_trace_displays_relationships(self, mock_factory: Mock) -> None:
+        mock_components = mock_factory.return_value
+        mock_components.cache.traverse_relationships.return_value = [
+            {
+                "source_entity": "app/main.py::Foo",
+                "relationship": "calls",
+                "target_entity": "app/utils.py::helper",
+                "confidence": "inferred",
+                "depth": 1,
+            }
+        ]
+        result = runner.invoke(app, ["trace", "app/main.py::Foo"])
+        assert result.exit_code == 0
+
+    @patch("code_search.factory.create_components")
+    def test_trace_no_relationships(self, mock_factory: Mock) -> None:
+        mock_components = mock_factory.return_value
+        mock_components.cache.traverse_relationships.return_value = []
+        result = runner.invoke(app, ["trace", "app/main.py::Foo"])
+        assert result.exit_code == 0
+
+    @patch("code_search.factory.create_components")
+    def test_trace_with_direction_flag(self, mock_factory: Mock) -> None:
+        mock_components = mock_factory.return_value
+        mock_components.cache.traverse_relationships.return_value = []
+        result = runner.invoke(
+            app, ["trace", "app/main.py::Foo", "--direction", "inbound"]
+        )
+        assert result.exit_code == 0
+        mock_components.cache.traverse_relationships.assert_called_once()
+
+    @patch("code_search.factory.create_components")
+    def test_trace_raw_json(self, mock_factory: Mock) -> None:
+        mock_components = mock_factory.return_value
+        mock_components.cache.traverse_relationships.return_value = [
+            {
+                "source_entity": "a.py::Foo",
+                "relationship": "imports",
+                "target_entity": "b.py::Bar",
+                "confidence": "static",
+                "depth": 1,
+            }
+        ]
+        result = runner.invoke(app, ["trace", "a.py::Foo", "--raw"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, dict)
+        assert "relationships" in data
+
+    @patch("code_search.factory.create_components")
+    def test_trace_connection_error(self, mock_factory: Mock) -> None:
+        from code_search.exceptions import QdrantConnectionError
+
+        mock_factory.side_effect = QdrantConnectionError("http://localhost:6333")
+        result = runner.invoke(app, ["trace", "a.py::Foo"])
+        assert result.exit_code == 1
+
+
 class TestServeCommand:
     @patch("code_search.mcp_server.mcp")
     def test_serve_calls_mcp_run(self, mock_mcp: Mock) -> None:
