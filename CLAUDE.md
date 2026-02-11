@@ -14,6 +14,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **V1.2 (Structural Layer) is complete.** 39 source modules, 36 test files, 472 tests passing. Code relationship extraction (imports, inherits, calls, decorates, renders, tests, calls_api) with BFS graph traversal via `trace` MCP tool and CLI command.
 
+**V1.3 (Compact Responses & Cache Fix) is complete.** 39 source modules, 36 test files, 491 tests passing. Compact MCP responses by default (~20x token reduction), opt-in full content via `detail="full"`. CACHE_DIR now resolves from git root so MCP server and indexer share the same state.db.
+
 ## Module Inventory
 
 ```
@@ -103,7 +105,8 @@ code-search serve                           # Start MCP server (stdio transport)
 - `docs/plans/2026-02-06-phase2-search-pipeline.md` — Phase 2 plan (complete)
 - `docs/plans/2026-02-09-v1.1-nl-descriptions.md` — V1.1 NL Descriptions plan (complete)
 - `docs/plans/2026-02-09-v1.2-structural-layer.md` — V1.2 Structural Layer plan (complete)
-- `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.3+)
+- `docs/plans/2026-02-10-compact-responses-and-cache-fix.md` — V1.3 Compact Responses & Cache Fix plan (complete)
+- `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.4+)
 
 ## Tech Stack
 
@@ -123,12 +126,24 @@ Add to Claude Code's `.mcp.json`:
       "env": {
         "VOYAGE_API_KEY": "your-key-here",
         "QDRANT_URL": "http://localhost:6333",
-        "ANTHROPIC_API_KEY": "your-key-here (optional, for NL descriptions)"
+        "ANTHROPIC_API_KEY": "your-key-here (optional, for NL descriptions)",
+        "CODE_SEARCH_CACHE_DIR": "/absolute/path/to/project/.code-search (optional, auto-detected from git root)"
       }
     }
   }
 }
 ```
+
+## MCP Tool Response Modes
+
+MCP tools default to **compact** responses to minimize context window usage:
+
+- **`search`** — Returns `snippet` (signature + docstring preview) instead of full source. Default `limit=5`. Pass `detail="full"` for complete content.
+- **`explain`** — Same compact/full behavior. Default `limit=5`.
+- **`get_context`** — Returns file content only. Pass `include_related=True` to also get related code chunks (compact format).
+- **`trace`** and **`index_status`** — Already compact, no changes needed.
+
+The agent can always use the `Read` tool to fetch specific lines from results that look promising.
 
 ## Conventions
 
