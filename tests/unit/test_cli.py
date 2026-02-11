@@ -229,6 +229,7 @@ class TestTraceCommand:
     @patch("clew.factory.create_components")
     def test_trace_displays_relationships(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
+        mock_components.cache.resolve_entity.side_effect = lambda x: x
         mock_components.cache.traverse_relationships.return_value = [
             {
                 "source_entity": "app/main.py::Foo",
@@ -244,6 +245,7 @@ class TestTraceCommand:
     @patch("clew.factory.create_components")
     def test_trace_no_relationships(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
+        mock_components.cache.resolve_entity.side_effect = lambda x: x
         mock_components.cache.traverse_relationships.return_value = []
         result = runner.invoke(app, ["trace", "app/main.py::Foo"])
         assert result.exit_code == 0
@@ -251,6 +253,7 @@ class TestTraceCommand:
     @patch("clew.factory.create_components")
     def test_trace_with_direction_flag(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
+        mock_components.cache.resolve_entity.side_effect = lambda x: x
         mock_components.cache.traverse_relationships.return_value = []
         result = runner.invoke(app, ["trace", "app/main.py::Foo", "--direction", "inbound"])
         assert result.exit_code == 0
@@ -259,6 +262,7 @@ class TestTraceCommand:
     @patch("clew.factory.create_components")
     def test_trace_raw_json(self, mock_factory: Mock) -> None:
         mock_components = mock_factory.return_value
+        mock_components.cache.resolve_entity.side_effect = lambda x: x
         mock_components.cache.traverse_relationships.return_value = [
             {
                 "source_entity": "a.py::Foo",

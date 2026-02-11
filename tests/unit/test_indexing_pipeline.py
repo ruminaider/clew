@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from clew.indexer.cache import CacheDB
+from clew.indexer.metadata import is_test_file
 from clew.indexer.pipeline import (
     IndexingPipeline,
     IndexingResult,
-    _is_test_file,
     detect_language,
 )
 
@@ -36,16 +36,16 @@ class TestDetectLanguage:
 
 class TestIsTestFile:
     def test_test_prefix(self) -> None:
-        assert _is_test_file("tests/test_auth.py") is True
+        assert is_test_file("tests/test_auth.py") is True
 
     def test_test_directory(self) -> None:
-        assert _is_test_file("tests/unit/test_models.py") is True
+        assert is_test_file("tests/unit/test_models.py") is True
 
     def test_spec_suffix(self) -> None:
-        assert _is_test_file("src/auth.spec.ts") is True
+        assert is_test_file("src/auth.spec.ts") is True
 
     def test_not_test(self) -> None:
-        assert _is_test_file("src/models.py") is False
+        assert is_test_file("src/models.py") is False
 
 
 class TestIndexingResult:
@@ -208,9 +208,26 @@ class TestPipelineDescriptions:
 
     @pytest.fixture
     def mock_cache(self, tmp_path: Path) -> Mock:
+        from unittest.mock import MagicMock
+        from contextlib import contextmanager
+
         cache = Mock()
         cache.get_description = Mock(return_value=None)
         cache.set_description = Mock()
+        cache.get_last_checkpoint = Mock(return_value=-1)
+        cache.save_checkpoint = Mock()
+        cache.clear_checkpoints = Mock()
+        cache.record_failed_file = Mock()
+
+        # Mock the _get_state_conn context manager for _normalize_relationship_targets
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = []
+
+        @contextmanager
+        def fake_state_conn():
+            yield mock_conn
+
+        cache._get_state_conn = fake_state_conn
         return cache
 
     async def test_pipeline_without_description_provider(

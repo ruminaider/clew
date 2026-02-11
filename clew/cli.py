@@ -233,6 +233,23 @@ def status() -> None:
     last_commit = components.cache.get_last_indexed_commit("code")
     table.add_row("Last commit", last_commit or "[dim]none[/dim]")
 
+    # Staleness detection
+    from clew.indexer.git_tracker import GitChangeTracker
+
+    tracker = GitChangeTracker(Path(".").resolve())
+    staleness = tracker.check_staleness(last_commit)
+    if staleness.is_stale:
+        stale_msg = "[yellow]stale[/yellow]"
+        if staleness.commits_behind > 0:
+            stale_msg += f" ({staleness.commits_behind} commits behind)"
+        elif staleness.commits_behind == -1:
+            stale_msg += " (unknown distance)"
+        if staleness.has_uncommitted_changes:
+            stale_msg += " + uncommitted changes"
+    else:
+        stale_msg = "[green]up to date[/green]"
+    table.add_row("Index freshness", stale_msg)
+
     console.print(table)
 
 
@@ -257,8 +274,11 @@ def trace(
         raise typer.Exit(1) from None
 
     clamped_depth = max(1, min(5, max_depth))
+    resolved = components.cache.resolve_entity(entity)
+    if resolved != entity:
+        console.print(f"[dim]Resolved: {entity} → {resolved}[/dim]")
     relationships = components.cache.traverse_relationships(
-        entity,
+        resolved,
         direction=direction,
         max_depth=clamped_depth,
         relationship_types=relationship_types,

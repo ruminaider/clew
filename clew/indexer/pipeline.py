@@ -28,6 +28,7 @@ from clew.indexer.metadata import (
     classify_layer,
     detect_app_name,
     extract_signature,
+    is_test_file,
 )
 from clew.search.tokenize import text_to_sparse_vector
 
@@ -61,22 +62,6 @@ def detect_language(file_path: str) -> str:
     """Detect language from file extension."""
     ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
     return LANGUAGE_MAP.get(ext, "unknown")
-
-
-def _is_test_file(file_path: str) -> bool:
-    """Check if a file is a test file."""
-    parts = file_path.replace("\\", "/").split("/")
-    name = parts[-1] if parts else ""
-    return (
-        name.startswith("test_")
-        or name.endswith("_test.py")
-        or name.endswith(".spec.ts")
-        or name.endswith(".spec.js")
-        or name.endswith(".test.ts")
-        or name.endswith(".test.js")
-        or "tests/" in file_path
-        or "test/" in file_path
-    )
 
 
 @dataclass
@@ -126,8 +111,13 @@ class IndexingPipeline:
         files: list[Path],
         collection: str = "code",
         delete_before_upsert: bool = False,
+        resume: bool = True,
     ) -> IndexingResult:
-        """Index a list of files into a Qdrant collection."""
+        """Index a list of files into a Qdrant collection.
+
+        Args:
+            resume: If True and a checkpoint exists, skip already-completed batches.
+        """
         result = IndexingResult()
         all_chunks: list[Chunk] = []
         all_url_patterns: list[dict[str, str]] = []
@@ -139,6 +129,10 @@ class IndexingPipeline:
                 logger.warning("Cannot read %s: %s", file_path, e)
                 result.files_skipped += 1
                 result.errors.append(f"{file_path}: {e}")
+                if self._cache:
+                    self._cache.record_failed_file(
+                        str(file_path), type(e).__name__, str(e)
+                    )
                 continue
 
             if not content.strip():
@@ -167,14 +161,35 @@ class IndexingPipeline:
         if self._cache and all_url_patterns:
             self._match_api_boundaries(all_url_patterns)
 
+        # Post-extraction normalization: resolve remaining bare target_entity values
+        if self._cache:
+            self._normalize_relationship_targets()
+
         if not all_chunks:
             return result
 
+        # Check for resume checkpoint
+        last_checkpoint = -1
+        if resume and self._cache:
+            last_checkpoint = self._cache.get_last_checkpoint(collection)
+            if last_checkpoint >= 0:
+                logger.info("Resuming from checkpoint: batch %d", last_checkpoint + 1)
+
         # Batch embed and upsert
         total_batches = (len(all_chunks) + self._batch_size - 1) // self._batch_size
+        had_errors = False
         for i in range(0, len(all_chunks), self._batch_size):
             batch_num = i // self._batch_size + 1
             batch = all_chunks[i : i + self._batch_size]
+
+            # Skip already-completed batches
+            if batch_num - 1 <= last_checkpoint:
+                logger.debug(
+                    "Skipping batch %d/%d (checkpointed)", batch_num, total_batches
+                )
+                result.chunks_created += len(batch)
+                continue
+
             logger.info(
                 "Embedding batch %d/%d (%d chunks)...",
                 batch_num,
@@ -184,9 +199,18 @@ class IndexingPipeline:
             try:
                 await self._embed_and_upsert(batch, collection)
                 result.chunks_created += len(batch)
+                # Save checkpoint on success
+                if self._cache:
+                    batch_files = list({c.file_path for c in batch})
+                    self._cache.save_checkpoint(collection, batch_num - 1, batch_files)
             except Exception as e:
                 logger.warning("Batch %d/%d failed: %s — skipping", batch_num, total_batches, e)
                 result.errors.append(f"Batch {batch_num}: {e}")
+                had_errors = True
+
+        # Clear checkpoints on full success (no errors)
+        if not had_errors and self._cache:
+            self._cache.clear_checkpoints(collection)
 
         return result
 
@@ -263,6 +287,59 @@ class IndexingPipeline:
             matches = self._api_boundary_matcher.match(url_patterns, api_calls)
             if matches:
                 self._cache.store_relationships(matches)
+
+    def _normalize_relationship_targets(self) -> None:
+        """Post-extraction normalization: resolve bare target_entity values.
+
+        Builds a symbol index from source_entity values, then resolves
+        remaining bare target_entity values where the match is unambiguous
+        (exactly 1 source_entity matches the bare name).
+        """
+        assert self._cache is not None
+
+        with self._cache._get_state_conn() as conn:
+            # Build symbol index: bare_name → [fully_qualified_names]
+            rows = conn.execute(
+                "SELECT DISTINCT source_entity FROM code_relationships"
+            ).fetchall()
+
+            symbol_index: dict[str, list[str]] = {}
+            for (source_entity,) in rows:
+                if "::" in source_entity:
+                    # Extract the symbol part after last ::
+                    symbol = source_entity.rsplit("::", 1)[1]
+                    symbol_index.setdefault(symbol, []).append(source_entity)
+
+            # Find bare target_entity values (no :: and no / — not file paths)
+            bare_targets = conn.execute(
+                "SELECT DISTINCT target_entity FROM code_relationships "
+                "WHERE target_entity NOT LIKE '%::%' AND target_entity NOT LIKE '%/%'"
+            ).fetchall()
+
+            updates: list[tuple[str, str]] = []
+            for (target,) in bare_targets:
+                # Check if exactly 1 match exists in the symbol index
+                # Also check dotted names: `Foo.bar` → try `Foo`
+                base_name = target.split(".")[0]
+                candidates = symbol_index.get(base_name, [])
+                if len(candidates) == 1:
+                    resolved = candidates[0]
+                    if base_name != target:
+                        # Preserve the dotted suffix: Foo.bar → resolved::Foo.bar
+                        suffix = target[len(base_name):]
+                        resolved = f"{resolved}{suffix}"
+                    updates.append((resolved, target))
+
+            if updates:
+                logger.info(
+                    "Post-extraction normalization: resolved %d bare target entities",
+                    len(updates),
+                )
+                conn.executemany(
+                    "UPDATE code_relationships SET target_entity = ? "
+                    "WHERE target_entity = ?",
+                    updates,
+                )
 
     async def _generate_descriptions(self, chunks: list[Chunk]) -> list[str | None] | None:
         """Generate NL descriptions for chunks that lack docstrings.
@@ -398,7 +475,7 @@ class IndexingPipeline:
                 "layer": layer,
                 "line_start": chunk.metadata.get("line_start", 0),
                 "line_end": chunk.metadata.get("line_end", 0),
-                "is_test": _is_test_file(file_path_str),
+                "is_test": is_test_file(file_path_str),
                 "source_type": collection,
                 "embedding_model": self._embedder.model_name,
                 "indexed_at": datetime.now(tz=timezone.utc).isoformat(),
