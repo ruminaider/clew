@@ -19,14 +19,19 @@ def _mock_search_result(**overrides):
     """Create a mock SearchResult with defaults."""
     defaults = {
         "file_path": "src/main.py",
-        "content": "def hello(): pass",
+        "content": "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True",
         "score": 0.95,
         "chunk_type": "function",
         "line_start": 1,
-        "line_end": 1,
+        "line_end": 4,
         "language": "python",
         "class_name": "",
         "function_name": "hello",
+        "signature": "def hello():",
+        "docstring": "Say hello.",
+        "app_name": "",
+        "layer": "",
+        "chunk_id": "src/main.py::function::hello",
     }
     defaults.update(overrides)
     return Mock(**defaults)
@@ -50,11 +55,11 @@ class TestResultToDict:
         result = _mock_search_result()
         d = _result_to_dict(result)
         assert d["file_path"] == "src/main.py"
-        assert d["content"] == "def hello(): pass"
+        assert d["content"] == "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True"
         assert d["score"] == 0.95
         assert d["chunk_type"] == "function"
         assert d["line_start"] == 1
-        assert d["line_end"] == 1
+        assert d["line_end"] == 4
         assert d["language"] == "python"
         assert d["class_name"] == ""
         assert d["function_name"] == "hello"
@@ -704,3 +709,165 @@ class TestTraceTool:
         result = await trace(entity="a.py::Foo")
         assert "error" in result
         assert "fix" in result
+
+
+class TestCompactResponse:
+    """Test compact vs full response modes."""
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_search_compact_by_default(self, mock_get) -> None:
+        """search() returns compact results (no content field) by default."""
+        components = _mock_components()
+        result = _mock_search_result()
+        components.search_engine.search.return_value = Mock(results=[result])
+        mock_get.return_value = components
+
+        results = await search("test query")
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert "snippet" in results[0]
+        assert "content" not in results[0]
+        assert "file_path" in results[0]
+        assert "score" in results[0]
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_search_full_detail(self, mock_get) -> None:
+        """search(detail='full') returns content field."""
+        components = _mock_components()
+        result = _mock_search_result()
+        components.search_engine.search.return_value = Mock(results=[result])
+        mock_get.return_value = components
+
+        results = await search("test query", detail="full")
+        assert isinstance(results, list)
+        assert "content" in results[0]
+        assert "snippet" in results[0]
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_search_default_limit_is_5(self, mock_get) -> None:
+        """search() defaults to limit=5."""
+        components = _mock_components()
+        components.search_engine.search.return_value = Mock(results=[])
+        mock_get.return_value = components
+
+        await search("test query")
+        call_args = components.search_engine.search.call_args
+        request = call_args[0][0]
+        assert request.limit == 5
+
+
+class TestSnippetBuilding:
+    """Test _build_snippet logic."""
+
+    def test_snippet_with_signature_and_docstring(self) -> None:
+        """Signature + docstring used when both available."""
+        from code_search.mcp_server import _build_snippet
+
+        result = _mock_search_result(
+            signature="def hello():",
+            docstring="Say hello.\n\nGreets the user warmly.",
+        )
+        snippet = _build_snippet(result)
+        assert snippet.startswith("def hello():")
+        assert "Say hello." in snippet
+
+    def test_snippet_with_signature_only(self) -> None:
+        """Just signature when no docstring."""
+        from code_search.mcp_server import _build_snippet
+
+        result = _mock_search_result(signature="def hello():", docstring="")
+        snippet = _build_snippet(result)
+        assert snippet == "def hello():"
+
+    def test_snippet_fallback_to_content_lines(self) -> None:
+        """First N lines of content when no signature."""
+        from code_search.mcp_server import _build_snippet
+
+        result = _mock_search_result(
+            signature="",
+            docstring="",
+            content="line1\nline2\nline3\nline4\nline5\nline6",
+        )
+        snippet = _build_snippet(result)
+        lines = snippet.splitlines()
+        assert len(lines) == 5
+        assert lines[0] == "line1"
+
+
+class TestGetContextIncludeRelated:
+    """Test get_context include_related parameter."""
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_get_context_no_related_by_default(self, mock_get) -> None:
+        """get_context() returns no related_chunks by default."""
+        components = _mock_components()
+        mock_get.return_value = components
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write("x = 1\n")
+            f.flush()
+            result = await get_context(f.name)
+
+        assert "related_chunks" not in result
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_get_context_with_related(self, mock_get) -> None:
+        """get_context(include_related=True) returns compact related_chunks."""
+        components = _mock_components()
+        sr = _mock_search_result()
+        components.search_engine.search.return_value = Mock(results=[sr])
+        mock_get.return_value = components
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write("x = 1\n")
+            f.flush()
+            result = await get_context(f.name, include_related=True)
+
+        assert "related_chunks" in result
+        assert len(result["related_chunks"]) == 1
+        assert "content" not in result["related_chunks"][0]
+        assert "snippet" in result["related_chunks"][0]
+
+
+class TestExplainCompact:
+    """Test explain tool compact response."""
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_explain_compact_by_default(self, mock_get) -> None:
+        """explain() returns compact related_chunks by default."""
+        components = _mock_components()
+        sr = _mock_search_result()
+        components.search_engine.search.return_value = Mock(results=[sr])
+        mock_get.return_value = components
+
+        result = await explain("src/main.py", symbol="hello")
+        assert "related_chunks" in result
+        assert "content" not in result["related_chunks"][0]
+        assert "snippet" in result["related_chunks"][0]
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_explain_full_detail(self, mock_get) -> None:
+        """explain(detail='full') returns content in related_chunks."""
+        components = _mock_components()
+        sr = _mock_search_result()
+        components.search_engine.search.return_value = Mock(results=[sr])
+        mock_get.return_value = components
+
+        result = await explain("src/main.py", symbol="hello", detail="full")
+        assert "content" in result["related_chunks"][0]
+
+    @patch("code_search.mcp_server._get_components")
+    async def test_explain_limit_is_5(self, mock_get) -> None:
+        """explain() uses limit=5 internally."""
+        components = _mock_components()
+        components.search_engine.search.return_value = Mock(results=[])
+        mock_get.return_value = components
+
+        await explain("src/main.py", symbol="hello")
+        call_args = components.search_engine.search.call_args
+        request = call_args[0][0]
+        assert request.limit == 5
