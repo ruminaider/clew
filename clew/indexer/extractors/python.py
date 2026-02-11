@@ -276,6 +276,23 @@ class PythonRelationshipExtractor(RelationshipExtractor):
             )
         )
 
+        # Emit an additional class-level edge for attribute access chains.
+        # e.g., care.models::PrescriptionFill.objects.create → care.models::PrescriptionFill
+        if "::" in resolved_target:
+            module, symbol_chain = resolved_target.split("::", 1)
+            if "." in symbol_chain:
+                class_name = symbol_chain.split(".")[0]
+                class_target = f"{module}::{class_name}"
+                rels.append(
+                    Relationship(
+                        source_entity=source_entity,
+                        relationship="calls",
+                        target_entity=class_target,
+                        file_path=file_path,
+                        confidence="inferred",
+                    )
+                )
+
     def _resolve_call_target(self, func_node: Any, called_name: str) -> str:
         """Resolve a call target using the import table.
 

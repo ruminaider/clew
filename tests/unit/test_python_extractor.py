@@ -195,3 +195,30 @@ class TestCallExtraction:
             and r.target_entity == "print"
             for r in rels
         )
+
+    def test_class_level_edge_for_attribute_chain(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """Attribute access chains emit both the full target and a class-level edge."""
+        source = "from care.models import PrescriptionFill\ndef save():\n    PrescriptionFill.objects.create(name='x')\n"
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/views.py")
+        calls = [r for r in rels if r.relationship == "calls"]
+        # Full resolved target
+        assert any(
+            r.target_entity == "care.models::PrescriptionFill.objects.create" for r in calls
+        )
+        # Class-level edge
+        assert any(r.target_entity == "care.models::PrescriptionFill" for r in calls)
+
+    def test_simple_call_no_duplicate_class_edge(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """A simple call with no dot in the symbol should NOT produce a class edge."""
+        source = "from utils import helper\ndef main():\n    helper()\n"
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/main.py")
+        calls = [r for r in rels if r.relationship == "calls"]
+        # Only one call edge — no duplicate class-level edge
+        assert len(calls) == 1
+        assert calls[0].target_entity == "utils::helper"
