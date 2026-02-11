@@ -321,6 +321,58 @@ class TestBFSTraversal:
         result = cache.traverse_relationships("c.py::C", direction="inbound", max_depth=1)
         assert len(result) == 2
 
+    def test_bfs_uses_resolution_cache(self, cache: CacheDB) -> None:
+        """BFS uses resolve_entity with caching as defense-in-depth.
+
+        When a target entity is a non-canonical form, resolve_entity is called
+        to attempt resolution. Results are cached so repeated lookups for the
+        same entity don't incur additional LIKE queries.
+        """
+        from unittest.mock import patch
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships([
+            Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
+            Relationship("b.py::Bar", "calls", "c.py::Baz", "b.py"),
+        ])
+
+        with patch.object(cache, "resolve_entity", wraps=cache.resolve_entity) as mock_resolve:
+            result = cache.traverse_relationships(
+                "a.py::Foo", direction="outbound", max_depth=2
+            )
+            assert len(result) == 2
+
+            # resolve_entity should be called for each unique next_entity
+            # (b.py::Bar at depth 1, c.py::Baz at depth 2)
+            assert mock_resolve.call_count == 2
+            mock_resolve.assert_any_call("b.py::Bar")
+            mock_resolve.assert_any_call("c.py::Baz")
+
+    def test_bfs_resolution_cache_deduplicates(self, cache: CacheDB) -> None:
+        """Resolution cache avoids calling resolve_entity multiple times for same entity."""
+        from unittest.mock import patch
+        from clew.indexer.relationships import Relationship
+
+        # Create a diamond: A -> B, A -> C, B -> D, C -> D
+        # D appears as target_entity twice but resolve_entity should only be called once for it
+        cache.store_relationships([
+            Relationship("a.py::A", "calls", "b.py::B", "a.py"),
+            Relationship("a.py::A", "calls", "c.py::C", "a.py"),
+            Relationship("b.py::B", "calls", "d.py::D", "b.py"),
+            Relationship("c.py::C", "calls", "d.py::D", "c.py"),
+        ])
+
+        with patch.object(cache, "resolve_entity", wraps=cache.resolve_entity) as mock_resolve:
+            result = cache.traverse_relationships(
+                "a.py::A", direction="outbound", max_depth=2
+            )
+            # Should find B, C at depth 1, and D at depth 2
+            assert len(result) >= 3
+
+            # D should only be resolved once (cached on second encounter)
+            d_calls = [c for c in mock_resolve.call_args_list if c[0][0] == "d.py::D"]
+            assert len(d_calls) == 1
+
 
 class TestResolveEntity:
     @pytest.fixture

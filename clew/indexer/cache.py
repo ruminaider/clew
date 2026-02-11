@@ -182,6 +182,29 @@ class CacheDB:
         finally:
             conn.close()
 
+    def clear_all_state(self, collection: str) -> None:
+        """Clear all indexing state for a collection (for --full reindex).
+
+        Clears: code_relationships, failed_files, checkpoints (filtered),
+        index_state (filtered), safety_state (filtered), and chunk_cache.
+        Preserves: embedding_cache, description_cache (content-addressed, reusable).
+        """
+        with self._get_state_conn() as conn:
+            conn.execute("DELETE FROM code_relationships")
+            conn.execute("DELETE FROM failed_files")
+            conn.execute(
+                "DELETE FROM checkpoints WHERE collection_name = ?", (collection,)
+            )
+            conn.execute(
+                "DELETE FROM index_state WHERE collection_name = ?", (collection,)
+            )
+            conn.execute(
+                "DELETE FROM safety_state WHERE collection_name = ?", (collection,)
+            )
+        with self._get_cache_conn() as conn:
+            conn.execute("DELETE FROM chunk_cache")
+        logger.info("Cleared all indexing state for collection '%s'", collection)
+
     def get_embedding(self, content_hash: str, model: str) -> bytes | None:
         """Get cached embedding or None if not found."""
         with self._get_cache_conn() as conn:
@@ -587,6 +610,7 @@ class CacheDB:
         queue: deque[tuple[str, int]] = deque([(entity, 0)])
         results: list[dict[str, object]] = []
         seen_edges: set[tuple[str, str, str]] = set()
+        resolution_cache: dict[str, str] = {}  # avoid repeated LIKE queries
 
         while queue:
             current, depth = queue.popleft()
@@ -615,11 +639,17 @@ class CacheDB:
 
                 # Determine the next entity to follow
                 if direction != "inbound" and rel.source_entity == current:
-                    next_entity = rel.target_entity
+                    next_raw = rel.target_entity
                 elif direction != "outbound" and rel.target_entity == current:
-                    next_entity = rel.source_entity
+                    next_raw = rel.source_entity
                 else:
                     continue
+
+                # Resolve module-qualified names to file-qualified (cached)
+                if next_raw not in resolution_cache:
+                    resolved = self.resolve_entity(next_raw)
+                    resolution_cache[next_raw] = resolved
+                next_entity = resolution_cache[next_raw]
 
                 if next_entity not in visited:
                     visited.add(next_entity)

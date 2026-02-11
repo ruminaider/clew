@@ -341,6 +341,55 @@ class IndexingPipeline:
                     updates,
                 )
 
+            # Second pass: resolve module-qualified targets
+            # These have :: but use dots in the module path (not slashes)
+            # e.g., "ecomm.tasks::void_order" → "/abs/path/backend/ecomm/tasks.py::void_order"
+            module_qualified = conn.execute(
+                "SELECT DISTINCT target_entity FROM code_relationships "
+                "WHERE target_entity LIKE '%::%' AND target_entity NOT LIKE '%/%'"
+            ).fetchall()
+
+            # Build file-path index: symbol → [file-qualified entities]
+            file_entities_by_symbol: dict[str, list[str]] = {}
+            for (source_entity,) in rows:
+                if "::" in source_entity and "/" in source_entity:
+                    symbol = source_entity.rsplit("::", 1)[1]
+                    file_entities_by_symbol.setdefault(symbol, []).append(source_entity)
+
+            module_updates: list[tuple[str, str]] = []
+            for (target,) in module_qualified:
+                # Split into module part and symbol part
+                module_part, symbol_part = target.split("::", 1)
+                # Get the base symbol (before any dots, e.g., "PrescriptionFill" from "PrescriptionFill.objects.create")
+                base_symbol = symbol_part.split(".")[0]
+                candidates = file_entities_by_symbol.get(base_symbol, [])
+
+                # Filter candidates: the file path should end with the module path
+                # e.g., module_part "ecomm.tasks" → file should contain "ecomm/tasks"
+                module_as_path = module_part.replace(".", "/")
+                matching = [c for c in candidates if module_as_path in c.split("::")[0]]
+
+                if len(matching) == 1:
+                    # Unambiguous match — resolve
+                    resolved_file = matching[0].split("::")[0]
+                    if base_symbol != symbol_part:
+                        # Preserve dotted suffix: ecomm.tasks::Foo.bar → /path/ecomm/tasks.py::Foo.bar
+                        resolved = f"{resolved_file}::{symbol_part}"
+                    else:
+                        resolved = f"{resolved_file}::{base_symbol}"
+                    module_updates.append((resolved, target))
+
+            if module_updates:
+                logger.info(
+                    "Post-extraction normalization: resolved %d module-qualified targets",
+                    len(module_updates),
+                )
+                conn.executemany(
+                    "UPDATE code_relationships SET target_entity = ? "
+                    "WHERE target_entity = ?",
+                    module_updates,
+                )
+
     async def _generate_descriptions(self, chunks: list[Chunk]) -> list[str | None] | None:
         """Generate NL descriptions for chunks that lack docstrings.
 

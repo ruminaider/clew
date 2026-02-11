@@ -559,3 +559,143 @@ class TestAPIBoundaryIntegration:
         py_file.write_text("import os\n")
         result = await pipeline.index_files([py_file], collection="code")
         assert result.files_processed == 1
+
+
+class TestModuleQualifiedNormalization:
+    """Tests for resolving module-qualified targets at index time."""
+
+    @pytest.fixture
+    def mock_qdrant(self) -> Mock:
+        qdrant = Mock()
+        qdrant.ensure_collection = Mock()
+        qdrant.upsert_points = Mock()
+        qdrant.delete_by_file_path = Mock()
+        return qdrant
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        embedder = Mock()
+        embedder.embed = AsyncMock(side_effect=lambda texts, **kwargs: [[0.1] * 1024] * len(texts))
+        embedder.model_name = "voyage-code-3"
+        embedder.dimensions = 1024
+        return embedder
+
+    def test_normalize_resolves_module_qualified_targets(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> None:
+        """Module-qualified targets should be resolved to file-qualified at index time."""
+        from clew.indexer.relationships import Relationship
+
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(
+            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
+        )
+
+        # Setup: insert relationships with module-qualified targets
+        cache.store_relationships([
+            Relationship(
+                source_entity="/project/backend/ecomm/utils.py::process_order",
+                relationship="calls",
+                target_entity="ecomm.tasks::void_order",  # module-qualified
+                file_path="/project/backend/ecomm/utils.py",
+                confidence="inferred",
+            ),
+            Relationship(
+                source_entity="/project/backend/ecomm/tasks.py::void_order",
+                relationship="calls",
+                target_entity="some_lib::send_email",
+                file_path="/project/backend/ecomm/tasks.py",
+                confidence="inferred",
+            ),
+        ])
+
+        # Act: run normalization
+        pipeline._normalize_relationship_targets()
+
+        # Assert: module-qualified target should now be file-qualified
+        rels = cache.get_relationships(
+            "/project/backend/ecomm/utils.py::process_order", direction="outbound"
+        )
+        targets = [r.target_entity for r in rels]
+        assert "/project/backend/ecomm/tasks.py::void_order" in targets
+
+    def test_normalize_preserves_dotted_symbol_suffix(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> None:
+        """Dotted symbol suffixes (e.g., Foo.bar) should be preserved after resolution."""
+        from clew.indexer.relationships import Relationship
+
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(
+            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
+        )
+
+        cache.store_relationships([
+            Relationship(
+                source_entity="/project/backend/ecomm/utils.py::process",
+                relationship="calls",
+                target_entity="ecomm.tasks::Order.save",  # dotted symbol
+                file_path="/project/backend/ecomm/utils.py",
+                confidence="inferred",
+            ),
+            Relationship(
+                source_entity="/project/backend/ecomm/tasks.py::Order",
+                relationship="calls",
+                target_entity="some_lib::helper",
+                file_path="/project/backend/ecomm/tasks.py",
+                confidence="inferred",
+            ),
+        ])
+
+        pipeline._normalize_relationship_targets()
+
+        rels = cache.get_relationships(
+            "/project/backend/ecomm/utils.py::process", direction="outbound"
+        )
+        targets = [r.target_entity for r in rels]
+        assert "/project/backend/ecomm/tasks.py::Order.save" in targets
+
+    def test_normalize_skips_ambiguous_module_qualified(
+        self, mock_qdrant: Mock, mock_embedder: Mock, tmp_path: Path
+    ) -> None:
+        """Ambiguous module-qualified targets (multiple matches) should be left unchanged."""
+        from clew.indexer.relationships import Relationship
+
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(
+            qdrant=mock_qdrant, embedder=mock_embedder, cache=cache
+        )
+
+        cache.store_relationships([
+            Relationship(
+                source_entity="/project/backend/ecomm/utils.py::process",
+                relationship="calls",
+                target_entity="ecomm.tasks::send",  # module-qualified
+                file_path="/project/backend/ecomm/utils.py",
+                confidence="inferred",
+            ),
+            # Two source entities with same symbol but different paths
+            Relationship(
+                source_entity="/project/backend/ecomm/tasks.py::send",
+                relationship="calls",
+                target_entity="email::deliver",
+                file_path="/project/backend/ecomm/tasks.py",
+                confidence="inferred",
+            ),
+            Relationship(
+                source_entity="/project/backend/ecomm/tasks_v2.py::send",
+                relationship="calls",
+                target_entity="email::deliver",
+                file_path="/project/backend/ecomm/tasks_v2.py",
+                confidence="inferred",
+            ),
+        ])
+
+        pipeline._normalize_relationship_targets()
+
+        rels = cache.get_relationships(
+            "/project/backend/ecomm/utils.py::process", direction="outbound"
+        )
+        targets = [r.target_entity for r in rels]
+        # Should be unchanged — two candidates match "ecomm/tasks" pattern
+        assert "ecomm.tasks::send" in targets
