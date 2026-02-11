@@ -47,7 +47,8 @@ def _mock_components():
     components.qdrant.collection_count.return_value = 42
     components.qdrant.ensure_collection = Mock()
     components.cache.get_last_indexed_commit.return_value = "abc123"
-    components.cache.resolve_entity.side_effect = lambda e: e
+    components.cache.resolve_entity.side_effect = lambda e, **kwargs: e
+    components.cache.traverse_relationships.return_value = []
     return components
 
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from clew.clients.circuit_breaker import CircuitBreaker
 from clew.exceptions import (
     ClewError,
     InvalidFilterError,
@@ -19,6 +22,9 @@ from clew.indexer.pipeline import detect_language
 from clew.search.models import SearchRequest
 
 logger = logging.getLogger(__name__)
+
+_EXPLAIN_PROMPT_VERSION = "v1"
+_explain_breaker = CircuitBreaker("explain_llm", failure_threshold=3, cooldown_seconds=60.0)
 
 mcp = FastMCP("clew")
 
@@ -65,6 +71,7 @@ def _compact_result_to_dict(result: Any) -> dict[str, Any]:
         "function_name": result.function_name,
         "class_name": result.class_name,
         "snippet": _build_snippet(result),
+        "is_test": getattr(result, "is_test", False),
     }
 
 
@@ -203,6 +210,148 @@ async def get_context(
         return _error_response(e)
 
 
+def _heuristic_explain(
+    file_path: str,
+    symbol: str | None,
+    question: str | None,
+    search_results: list[Any],
+    trace_data: list[dict[str, object]] | None = None,
+) -> str:
+    """Build a structured explanation from search results and trace data.
+
+    Always returns a non-empty string — this is the final fallback.
+    """
+    parts: list[str] = []
+    subject = symbol or question or file_path
+    parts.append(f"## {subject}\n")
+
+    for result in search_results[:3]:
+        loc = result.file_path
+        if result.line_start:
+            loc += f":{result.line_start}"
+            if result.line_end:
+                loc += f"-{result.line_end}"
+
+        sig = getattr(result, "signature", "")
+        doc = getattr(result, "docstring", "")
+
+        parts.append(f"**{loc}** ({result.chunk_type or 'code'})")
+        if sig:
+            parts.append(f"```\n{sig}\n```")
+        if doc:
+            doc_truncated = doc[:300] + ("..." if len(doc) > 300 else "")
+            parts.append(doc_truncated)
+        parts.append("")
+
+    if trace_data and symbol:
+        inbound = [r for r in trace_data if str(r.get("target_entity", "")).endswith(symbol)]
+        outbound = [r for r in trace_data if str(r.get("source_entity", "")).endswith(symbol)]
+
+        if inbound:
+            parts.append("### Used by")
+            for r in inbound[:5]:
+                parts.append(f"- `{r['source_entity']}` ({r['relationship']})")
+
+        if outbound:
+            parts.append("### Depends on")
+            for r in outbound[:5]:
+                parts.append(f"- `{r['target_entity']}` ({r['relationship']})")
+
+    return "\n".join(parts) if parts else f"No additional context found for {subject}."
+
+
+async def _llm_explain(
+    file_path: str,
+    symbol: str | None,
+    question: str | None,
+    search_results: list[Any],
+    cache: Any,
+) -> str | None:
+    """Generate an LLM explanation with content-hash caching and circuit breaker.
+
+    Returns None if LLM is unavailable or fails — caller should fall back to heuristic.
+    """
+    # Build cache key from inputs
+    content_parts = [file_path, symbol or "", question or "", _EXPLAIN_PROMPT_VERSION]
+    for r in search_results[:3]:
+        content_parts.append(f"{r.file_path}:{r.line_start}")
+    cache_key = hashlib.sha256("|".join(content_parts).encode()).hexdigest()
+
+    # 1. Check cache (0ms fast path)
+    cached = cache.get_description(cache_key, "explain")
+    if cached:
+        logger.debug("Explain cache hit: %s", cache_key[:12])
+        return cached
+
+    # 2. Check circuit breaker
+    if _explain_breaker.is_open:
+        logger.debug("Explain LLM circuit breaker is open")
+        return None
+
+    # 3. Check API key availability
+    from clew.config import Environment
+
+    env = Environment()
+    if not env.ANTHROPIC_API_KEY:
+        return None
+
+    # 4. Build prompt
+    snippets: list[str] = []
+    for r in search_results[:3]:
+        content = getattr(r, "content", "")[:500]
+        lang = r.language or ""
+        snippets.append(f"```{lang}\n# {r.file_path}:{r.line_start or ''}\n{content}\n```")
+
+    context = "\n\n".join(snippets)
+    query = question or (f"What does `{symbol}` do?" if symbol else f"Explain {file_path}")
+
+    prompt = (
+        f"{query}\n\n"
+        f"Context file: {file_path}\n\n"
+        f"Relevant code:\n{context}\n\n"
+        "Provide a concise explanation (2-4 sentences). "
+        "Focus on what the code does and why, not implementation details."
+    )
+
+    # 5. Call LLM with timeout
+    try:
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(api_key=env.ANTHROPIC_API_KEY)
+        response = await asyncio.wait_for(
+            client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            ),
+            timeout=8.0,
+        )
+
+        block = response.content[0]
+        if not hasattr(block, "text"):
+            _explain_breaker.record_failure()
+            return None
+
+        text: str = block.text.strip()
+        if not text:
+            _explain_breaker.record_failure()
+            return None
+
+        _explain_breaker.record_success()
+        cache.set_description(cache_key, "explain", text)
+        logger.debug("Explain LLM response cached: %s", cache_key[:12])
+        return text
+
+    except asyncio.TimeoutError:
+        logger.warning("Explain LLM timed out (8s)")
+        _explain_breaker.record_failure()
+        return None
+    except Exception:
+        logger.warning("Explain LLM call failed", exc_info=True)
+        _explain_breaker.record_failure()
+        return None
+
+
 @mcp.tool()
 async def explain(
     file_path: str,
@@ -210,7 +359,11 @@ async def explain(
     question: str | None = None,
     detail: str = "compact",
 ) -> dict[str, Any]:
-    """Search for context about a symbol or question in a file.
+    """Explain a symbol or answer a question about code in a file.
+
+    Uses a fallback cascade: cached LLM response → live LLM call → heuristic
+    explanation from search results and relationship graph. Always returns
+    an explanation.
 
     Args:
         file_path: Path to the file for context
@@ -220,25 +373,51 @@ async def explain(
     """
     try:
         query = symbol or question or file_path
-
         components = _get_components()
+
+        # Search for relevant chunks
         request = SearchRequest(query=query, limit=10, active_file=file_path)
         response = await components.search_engine.search(request)
 
-        # Post-filter: prefer same language, keep high-confidence cross-language results
+        # Post-filter: prefer same language, keep high-confidence cross-language
         source_lang = detect_language(file_path)
         if source_lang != "unknown":
             filtered = [r for r in response.results if r.language == source_lang or r.score >= 0.6]
         else:
             filtered = response.results
-
-        # Limit back down to 5
         filtered = filtered[:5]
+
+        # Get trace data for richer heuristic explanations
+        trace_data: list[dict[str, object]] | None = None
+        if symbol:
+            entity = f"{file_path}::{symbol}"
+            resolved = components.cache.resolve_entity(entity, context_file=file_path)
+            trace_rels = components.cache.traverse_relationships(resolved, max_depth=1)
+            if trace_rels:
+                trace_data = trace_rels
+
+        # Fallback cascade: LLM → heuristic
+        explanation: str | None = None
+        explanation_source = "heuristic"
+
+        if components.config.search.explain_llm_enabled:
+            explanation = await _llm_explain(
+                file_path, symbol, question, filtered, components.cache
+            )
+            if explanation:
+                explanation_source = "llm"
+
+        if not explanation:
+            explanation = _heuristic_explain(
+                file_path, symbol, question, filtered, trace_data
+            )
 
         return {
             "file_path": file_path,
             "symbol": symbol,
             "question": question,
+            "explanation": explanation,
+            "explanation_source": explanation_source,
             "related_chunks": [_result_to_dict(r, detail) for r in filtered],
         }
     except ClewError as e:
@@ -318,11 +497,26 @@ async def index_status(
 
             last_commit = components.cache.get_last_indexed_commit("code")
 
+            # Staleness detection
+            staleness_info: dict[str, object] = {}
+            if project_root:
+                from clew.indexer.git_tracker import GitChangeTracker
+
+                tracker = GitChangeTracker(Path(project_root))
+                staleness = tracker.check_staleness(last_commit)
+                staleness_info = {
+                    "is_stale": staleness.is_stale,
+                    "commits_behind": staleness.commits_behind,
+                    "has_uncommitted_changes": staleness.has_uncommitted_changes,
+                    "current_commit": staleness.current_commit,
+                }
+
             return {
                 "indexed": bool(collections),
                 "qdrant_healthy": healthy,
                 "collections": collections,
                 "last_commit": last_commit,
+                **staleness_info,
             }
 
         if action == "trigger":
@@ -346,6 +540,14 @@ async def index_status(
 
             components.qdrant.ensure_collection("code", dense_dim=1024)
             result = await components.indexing_pipeline.index_files(files, collection="code")
+
+            # Save commit hash after successful indexing
+            from clew.indexer.git_tracker import GitChangeTracker
+
+            tracker = GitChangeTracker(root)
+            commit = tracker.get_current_commit()
+            if commit:
+                components.cache.set_last_indexed_commit("code", commit)
 
             return {
                 "triggered": True,
