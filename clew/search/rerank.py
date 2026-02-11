@@ -1,14 +1,25 @@
-"""Voyage AI reranking integration.
-
-Candidate limit is configurable via SearchConfig (default 30, Tradeoff B).
-"""
+"""Voyage AI reranking integration with retry and circuit breaker."""
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
 import voyageai
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from clew.clients.circuit_breaker import CircuitBreaker
+from clew.exceptions import SearchUnavailableError
+
+logger = logging.getLogger(__name__)
+
+_circuit_breaker = CircuitBreaker("rerank", failure_threshold=3, cooldown_seconds=60.0)
 
 
 @dataclass
@@ -29,15 +40,7 @@ def should_skip_rerank(
     high_confidence_threshold: float = 0.92,
     low_variance_threshold: float = 0.1,
 ) -> bool:
-    """Determine if reranking should be skipped.
-
-    Skip conditions (per DESIGN.md):
-    1. Few candidates (<=threshold) — no benefit
-    2. High confidence top result (>0.92)
-    3. Low score variance (<0.1) — already well-ranked
-    4. Exact identifier (PascalCase)
-    5. File path query
-    """
+    """Determine if reranking should be skipped."""
     if num_candidates <= no_rerank_threshold:
         return True
     if top_score > high_confidence_threshold:
@@ -52,12 +55,18 @@ def should_skip_rerank(
 
 
 class RerankProvider:
-    """Voyage AI reranking provider."""
+    """Voyage AI reranking provider with retry and circuit breaker."""
 
     def __init__(self, api_key: str, model: str = "rerank-2.5") -> None:
         self._client = voyageai.Client(api_key=api_key)  # type: ignore[attr-defined]
         self._model = model
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        reraise=True,
+    )
     def rerank(
         self,
         query: str,
@@ -68,13 +77,24 @@ class RerankProvider:
         if not documents:
             return []
 
-        result = self._client.rerank(
-            query=query,
-            documents=documents,
-            model=self._model,
-            top_k=top_k,
-            truncation=True,
-        )
-        return [
-            RerankResult(index=r.index, relevance_score=r.relevance_score) for r in result.results
-        ]
+        if _circuit_breaker.is_open:
+            raise SearchUnavailableError(
+                "Rerank API circuit breaker is open. Retrying in 60s."
+            )
+
+        try:
+            result = self._client.rerank(
+                query=query,
+                documents=documents,
+                model=self._model,
+                top_k=top_k,
+                truncation=True,
+            )
+            _circuit_breaker.record_success()
+            return [
+                RerankResult(index=r.index, relevance_score=r.relevance_score)
+                for r in result.results
+            ]
+        except Exception:
+            _circuit_breaker.record_failure()
+            raise

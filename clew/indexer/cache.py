@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -11,6 +12,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from clew.indexer.relationships import Relationship
+
+logger = logging.getLogger(__name__)
 
 CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -93,7 +96,31 @@ CREATE TABLE IF NOT EXISTS code_relationships (
 CREATE INDEX IF NOT EXISTS idx_rel_source ON code_relationships(source_entity);
 CREATE INDEX IF NOT EXISTS idx_rel_target ON code_relationships(target_entity);
 CREATE INDEX IF NOT EXISTS idx_rel_file ON code_relationships(file_path);
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY
+);
 """
+
+# Current schema version — increment when adding migrations
+CURRENT_SCHEMA_VERSION = 2
+
+
+def _migration_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Add target_entity index for faster inbound lookups."""
+    # idx_rel_target already exists in the CREATE TABLE schema, but this
+    # migration ensures it exists for databases created before it was added.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rel_target_entity "
+        "ON code_relationships(target_entity)"
+    )
+
+
+# Ordered list of migration functions: index = from_version
+_MIGRATIONS: list[callable] = [
+    lambda _conn: None,  # v0→v1: initial schema (no-op, tables already created)
+    _migration_v1_to_v2,  # v1→v2: add target_entity index
+]
 
 
 class CacheDB:
@@ -105,11 +132,35 @@ class CacheDB:
         self._init_databases()
 
     def _init_databases(self) -> None:
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist, then run pending migrations."""
         with self._get_cache_conn() as conn:
             conn.executescript(CACHE_SCHEMA)
         with self._get_state_conn() as conn:
             conn.executescript(STATE_SCHEMA)
+            self._run_migrations(conn)
+
+    @staticmethod
+    def _run_migrations(conn: sqlite3.Connection) -> None:
+        """Run any pending schema migrations."""
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        current = row[0] if row[0] is not None else 0
+
+        if current >= CURRENT_SCHEMA_VERSION:
+            return
+
+        for version in range(current, CURRENT_SCHEMA_VERSION):
+            try:
+                if version < len(_MIGRATIONS):
+                    logger.info("Running schema migration v%d → v%d", version, version + 1)
+                    _MIGRATIONS[version](conn)
+                conn.execute(
+                    "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+                    (version + 1,),
+                )
+            except Exception as e:
+                from clew.exceptions import SchemaMigrationError
+
+                raise SchemaMigrationError(version, version + 1, e) from e
 
     @contextmanager
     def _get_cache_conn(self) -> Iterator[sqlite3.Connection]:
@@ -316,12 +367,78 @@ class CacheDB:
                 (file_path,),
             )
 
+    # --- Checkpoint methods for indexing recovery ---
+
+    def save_checkpoint(
+        self, collection: str, batch_index: int, file_paths: list[str]
+    ) -> None:
+        """Record a successfully completed batch for resume support."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                "INSERT INTO checkpoints (collection_name, batch_index, files_processed) "
+                "VALUES (?, ?, ?)",
+                (collection, batch_index, json.dumps(file_paths)),
+            )
+        logger.info("Saved checkpoint: collection=%s batch=%d", collection, batch_index)
+
+    def get_last_checkpoint(self, collection: str) -> int:
+        """Get the last completed batch index for a collection, or -1 if none."""
+        with self._get_state_conn() as conn:
+            row = conn.execute(
+                "SELECT MAX(batch_index) FROM checkpoints WHERE collection_name = ?",
+                (collection,),
+            ).fetchone()
+            return row[0] if row[0] is not None else -1
+
+    def clear_checkpoints(self, collection: str) -> None:
+        """Clear all checkpoints for a collection (called on full success)."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                "DELETE FROM checkpoints WHERE collection_name = ?",
+                (collection,),
+            )
+        logger.info("Cleared checkpoints for collection=%s", collection)
+
+    def record_failed_file(
+        self, file_path: str, error_type: str, error_message: str
+    ) -> None:
+        """Record a file that failed during indexing."""
+        with self._get_state_conn() as conn:
+            conn.execute(
+                """INSERT INTO failed_files (file_path, error_type, error_message, retry_count)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(file_path) DO UPDATE SET
+                    error_type = excluded.error_type,
+                    error_message = excluded.error_message,
+                    retry_count = retry_count + 1,
+                    last_attempt = datetime('now')""",
+                (file_path, error_type, error_message),
+            )
+
+    def get_failed_files(self) -> list[dict[str, object]]:
+        """Get all files that failed during indexing."""
+        with self._get_state_conn() as conn:
+            rows = conn.execute(
+                "SELECT file_path, error_type, error_message, retry_count, last_attempt "
+                "FROM failed_files ORDER BY last_attempt DESC"
+            ).fetchall()
+            return [
+                {
+                    "file_path": row[0],
+                    "error_type": row[1],
+                    "error_message": row[2],
+                    "retry_count": row[3],
+                    "last_attempt": row[4],
+                }
+                for row in rows
+            ]
+
     @staticmethod
     def _escape_like(value: str) -> str:
         """Escape LIKE metacharacters so ``_`` and ``%`` match literally."""
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-    def resolve_entity(self, entity: str) -> str:
+    def resolve_entity(self, entity: str, *, context_file: str | None = None) -> str:
         """Resolve a user-provided entity identifier to a stored entity.
 
         Supports exact match, suffix match (for relative paths), and
@@ -330,13 +447,15 @@ class CacheDB:
         Resolution strategy:
           1. Exact match against source_entity or target_entity.
           2. Suffix match — entities whose source_entity or target_entity
-             ends with the provided string (e.g., relative path like
-             ``backend/care/models.py::Prescription``).
+             ends with the provided string.
           3. Symbol-only match — when the entity has no ``::`` separator,
              match against the symbol portion after the last ``::`` in
              stored entities.
 
-        When multiple candidates exist, source_entity matches are preferred.
+        When multiple candidates exist at any tier, rank by proximity:
+          - Same directory as context_file (if provided)
+          - Import relationship from context_file (if provided)
+          - Alphabetical (deterministic fallback)
 
         Returns the resolved entity string, or the original if no match is found.
         """
@@ -359,45 +478,95 @@ class CacheDB:
             if row:
                 return row[0]
 
-            # 2. Suffix match — source_entity first, then target_entity
+            # 2. Suffix match — collect all candidates
             suffix_pattern = f"%{safe}"
-            row = conn.execute(
-                "SELECT source_entity FROM code_relationships "
-                "WHERE source_entity LIKE ? ESCAPE '\\' LIMIT 1",
-                (suffix_pattern,),
-            ).fetchone()
-            if row:
-                return row[0]
+            candidates: list[str] = []
 
-            row = conn.execute(
-                "SELECT target_entity FROM code_relationships "
-                "WHERE target_entity LIKE ? ESCAPE '\\' LIMIT 1",
+            rows = conn.execute(
+                "SELECT DISTINCT source_entity FROM code_relationships "
+                "WHERE source_entity LIKE ? ESCAPE '\\'",
                 (suffix_pattern,),
-            ).fetchone()
-            if row:
-                return row[0]
+            ).fetchall()
+            candidates.extend(row[0] for row in rows)
 
-            # 3. Symbol-only match (no :: in the query) — match the trailing
-            #    ``::symbol`` portion of stored entities.
+            rows = conn.execute(
+                "SELECT DISTINCT target_entity FROM code_relationships "
+                "WHERE target_entity LIKE ? ESCAPE '\\'",
+                (suffix_pattern,),
+            ).fetchall()
+            candidates.extend(row[0] for row in rows if row[0] not in candidates)
+
+            if candidates:
+                return self._rank_candidates(candidates, context_file, conn)
+
+            # 3. Symbol-only match (no :: in the query)
             if "::" not in entity:
                 symbol_pattern = f"%::{safe}"
-                row = conn.execute(
-                    "SELECT source_entity FROM code_relationships "
-                    "WHERE source_entity LIKE ? ESCAPE '\\' LIMIT 1",
-                    (symbol_pattern,),
-                ).fetchone()
-                if row:
-                    return row[0]
+                candidates = []
 
-                row = conn.execute(
-                    "SELECT target_entity FROM code_relationships "
-                    "WHERE target_entity LIKE ? ESCAPE '\\' LIMIT 1",
+                rows = conn.execute(
+                    "SELECT DISTINCT source_entity FROM code_relationships "
+                    "WHERE source_entity LIKE ? ESCAPE '\\'",
                     (symbol_pattern,),
-                ).fetchone()
-                if row:
-                    return row[0]
+                ).fetchall()
+                candidates.extend(row[0] for row in rows)
 
+                rows = conn.execute(
+                    "SELECT DISTINCT target_entity FROM code_relationships "
+                    "WHERE target_entity LIKE ? ESCAPE '\\'",
+                    (symbol_pattern,),
+                ).fetchall()
+                candidates.extend(row[0] for row in rows if row[0] not in candidates)
+
+                if candidates:
+                    return self._rank_candidates(candidates, context_file, conn)
+
+        logger.debug("Entity resolution fallback: '%s' has no matches", entity)
         return entity
+
+    def _rank_candidates(
+        self,
+        candidates: list[str],
+        context_file: str | None,
+        conn: sqlite3.Connection,
+    ) -> str:
+        """Rank entity candidates by proximity to context_file."""
+        if len(candidates) == 1:
+            return candidates[0]
+
+        if not context_file:
+            # No context — return first alphabetically for determinism
+            return sorted(candidates)[0]
+
+        # Extract directory from context file for proximity
+        context_dir = context_file.rsplit("/", 1)[0] if "/" in context_file else ""
+
+        def score(candidate: str) -> tuple[int, str]:
+            # Lower score = better match
+            # Tier 0: same directory
+            cand_file = candidate.split("::")[0] if "::" in candidate else candidate
+            cand_dir = cand_file.rsplit("/", 1)[0] if "/" in cand_file else ""
+            if context_dir and cand_dir == context_dir:
+                return (0, candidate)
+            # Tier 1: import relationship exists
+            row = conn.execute(
+                "SELECT 1 FROM code_relationships "
+                "WHERE source_entity = ? AND target_entity = ? LIMIT 1",
+                (context_file, candidate),
+            ).fetchone()
+            if row:
+                return (1, candidate)
+            # Tier 2: any other match
+            return (2, candidate)
+
+        candidates.sort(key=score)
+        logger.debug(
+            "Entity resolution: '%s' resolved to '%s' (of %d candidates)",
+            candidates[0],
+            candidates[0],
+            len(candidates),
+        )
+        return candidates[0]
 
     def traverse_relationships(
         self,
@@ -455,5 +624,8 @@ class CacheDB:
                 if next_entity not in visited:
                     visited.add(next_entity)
                     queue.append((next_entity, depth + 1))
+                else:
+                    # Mark edge as part of a cycle
+                    results[-1]["cycle_detected"] = True
 
         return results

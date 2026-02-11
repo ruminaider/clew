@@ -101,9 +101,12 @@ class TestHealthCheck:
     def test_returns_true_when_healthy(self, manager: QdrantManager) -> None:
         assert manager.health_check() is True
 
-    def test_returns_false_on_error(self, manager: QdrantManager, mock_client: Mock) -> None:
+    def test_returns_error_string_on_failure(self, manager: QdrantManager, mock_client: Mock) -> None:
         mock_client.get_collections.side_effect = Exception("connection refused")
-        assert manager.health_check() is False
+        result = manager.health_check()
+        assert result != True  # noqa: E712
+        assert isinstance(result, str)
+        assert "connection refused" in result
 
 
 class TestCollectionInfo:

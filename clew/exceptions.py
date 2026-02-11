@@ -87,7 +87,7 @@ class SearchError(ClewError):
 
 
 class SearchUnavailableError(SearchError):
-    """Search service is unavailable."""
+    """Search service is unavailable (e.g., circuit breaker open)."""
 
 
 class InvalidFilterError(SearchError):
@@ -95,3 +95,15 @@ class InvalidFilterError(SearchError):
 
     def __init__(self, filter_name: str, value: str, valid_values: list[str]):
         super().__init__(f"Invalid filter '{filter_name}': '{value}'. Valid values: {valid_values}")
+
+
+class SchemaMigrationError(IndexingError):
+    """Schema migration failed."""
+
+    def __init__(self, from_version: int, to_version: int, original: Exception | None = None):
+        self.from_version = from_version
+        self.to_version = to_version
+        self.original = original
+        super().__init__(
+            f"Schema migration v{from_version} → v{to_version} failed: {original}"
+        )
