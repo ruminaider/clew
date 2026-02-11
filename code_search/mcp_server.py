@@ -33,18 +33,47 @@ def _get_components() -> Components:
     return _components
 
 
-def _result_to_dict(result: Any) -> dict[str, Any]:
-    """Convert a SearchResult to a dict for MCP output."""
+SNIPPET_MAX_LINES = 5
+
+
+def _build_snippet(result: Any) -> str:
+    """Build a compact preview: signature + docstring if available, else first lines."""
+    sig = getattr(result, "signature", "")
+    doc = getattr(result, "docstring", "")
+    if sig and doc:
+        doc_lines = doc.splitlines()
+        remaining = SNIPPET_MAX_LINES - 1
+        doc_preview = "\n".join(doc_lines[:remaining])
+        return f"{sig}\n{doc_preview}"
+    if sig:
+        return sig
+    content = getattr(result, "content", "")
+    lines = content.splitlines()
+    return "\n".join(lines[:SNIPPET_MAX_LINES])
+
+
+def _compact_result_to_dict(result: Any) -> dict[str, Any]:
+    """Convert a SearchResult to a compact dict (no full content)."""
     return {
         "file_path": result.file_path,
-        "content": result.content,
-        "score": result.score,
-        "chunk_type": result.chunk_type,
         "line_start": result.line_start,
         "line_end": result.line_end,
+        "score": result.score,
+        "chunk_type": result.chunk_type,
         "language": result.language,
-        "class_name": result.class_name,
         "function_name": result.function_name,
+        "class_name": result.class_name,
+        "snippet": _build_snippet(result),
+    }
+
+
+def _result_to_dict(result: Any, detail: str = "compact") -> dict[str, Any]:
+    """Convert a SearchResult to a dict, respecting detail level."""
+    if detail == "compact":
+        return _compact_result_to_dict(result)
+    return {
+        **_compact_result_to_dict(result),
+        "content": result.content,
     }
 
 
@@ -60,21 +89,23 @@ def _error_response(error: Exception) -> dict[str, str]:
 @mcp.tool()
 async def search(
     query: str,
-    limit: int = 10,
+    limit: int = 5,
     collection: str = "code",
     active_file: str | None = None,
     intent: str | None = None,
     filters: dict[str, str] | None = None,
+    detail: str = "compact",
 ) -> list[dict[str, Any]] | dict[str, str]:
     """Search the codebase for relevant code snippets.
 
     Args:
         query: Natural language search query
-        limit: Maximum number of results (default 10)
+        limit: Maximum number of results (default 5)
         collection: Collection to search (default "code")
         active_file: Currently open file path for context boosting
         intent: Search intent hint (code, docs, debug, location)
         filters: Metadata filters (language, chunk_type, app_name, layer, is_test)
+        detail: Response detail level — "compact" (default) or "full"
     """
     try:
         from code_search.search.models import QueryIntent
@@ -99,7 +130,7 @@ async def search(
             filters=filters or {},
         )
         response = await components.search_engine.search(request)
-        return [_result_to_dict(r) for r in response.results]
+        return [_result_to_dict(r, detail) for r in response.results]
     except InvalidFilterError as e:
         return {
             "error": str(e),
@@ -117,13 +148,15 @@ async def get_context(
     file_path: str,
     line_start: int | None = None,
     line_end: int | None = None,
+    include_related: bool = False,
 ) -> dict[str, Any]:
-    """Get file content with related code chunks.
+    """Get file content with optional related code chunks.
 
     Args:
         file_path: Path to the file
         line_start: Optional start line (1-indexed)
         line_end: Optional end line (1-indexed)
+        include_related: If True, search for related code chunks (compact format)
     """
     try:
         path = Path(file_path)
@@ -133,19 +166,12 @@ async def get_context(
         content = path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines()
 
-        # Apply line range if specified
         if line_start is not None or line_end is not None:
-            start = (line_start or 1) - 1  # convert to 0-indexed
+            start = (line_start or 1) - 1
             end = line_end or len(lines)
             lines = lines[start:end]
             content = "\n".join(lines)
 
-        # Search for related chunks
-        components = _get_components()
-        request = SearchRequest(query=file_path, limit=5, active_file=file_path)
-        response = await components.search_engine.search(request)
-
-        # Detect language from extension
         ext = path.suffix.lstrip(".")
         lang_map = {
             "py": "python",
@@ -156,12 +182,19 @@ async def get_context(
         }
         language = lang_map.get(ext, ext)
 
-        return {
+        result_dict: dict[str, Any] = {
             "file_path": file_path,
             "content": content,
             "language": language,
-            "related_chunks": [_result_to_dict(r) for r in response.results],
         }
+
+        if include_related:
+            components = _get_components()
+            request = SearchRequest(query=file_path, limit=5, active_file=file_path)
+            response = await components.search_engine.search(request)
+            result_dict["related_chunks"] = [_compact_result_to_dict(r) for r in response.results]
+
+        return result_dict
     except CodeSearchError as e:
         return _error_response(e)
     except Exception as e:
@@ -174,6 +207,7 @@ async def explain(
     file_path: str,
     symbol: str | None = None,
     question: str | None = None,
+    detail: str = "compact",
 ) -> dict[str, Any]:
     """Search for context about a symbol or question in a file.
 
@@ -181,19 +215,20 @@ async def explain(
         file_path: Path to the file for context
         symbol: Symbol name to look up (class, function, variable)
         question: Natural language question about the code
+        detail: Response detail level — "compact" (default) or "full"
     """
     try:
         query = symbol or question or file_path
 
         components = _get_components()
-        request = SearchRequest(query=query, limit=10, active_file=file_path)
+        request = SearchRequest(query=query, limit=5, active_file=file_path)
         response = await components.search_engine.search(request)
 
         return {
             "file_path": file_path,
             "symbol": symbol,
             "question": question,
-            "related_chunks": [_result_to_dict(r) for r in response.results],
+            "related_chunks": [_result_to_dict(r, detail) for r in response.results],
         }
     except CodeSearchError as e:
         return _error_response(e)

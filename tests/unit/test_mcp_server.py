@@ -53,7 +53,7 @@ def _mock_components():
 class TestResultToDict:
     def test_converts_all_fields(self):
         result = _mock_search_result()
-        d = _result_to_dict(result)
+        d = _result_to_dict(result, detail="full")
         assert d["file_path"] == "src/main.py"
         assert d["content"] == "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True"
         assert d["score"] == 0.95
@@ -76,7 +76,7 @@ class TestResultToDict:
             class_name="Parser",
             function_name="parse",
         )
-        d = _result_to_dict(result)
+        d = _result_to_dict(result, detail="full")
         assert d["file_path"] == "lib/utils.ts"
         assert d["content"] == "export function parse() {}"
         assert d["score"] == 0.72
@@ -159,7 +159,7 @@ class TestSearchTool:
 
         call_args = components.search_engine.search.call_args[0][0]
         assert call_args.query == "test query"
-        assert call_args.limit == 10
+        assert call_args.limit == 5
         assert call_args.collection == "code"
         assert call_args.active_file is None
 
@@ -279,7 +279,7 @@ class TestGetContextTool:
         assert "line2" in output["content"]
         assert "line3" in output["content"]
         assert output["language"] == "python"
-        assert output["related_chunks"] == []
+        assert "related_chunks" not in output
 
     @patch("code_search.mcp_server._get_components")
     async def test_with_line_range(self, mock_get, tmp_path):
@@ -388,7 +388,7 @@ class TestGetContextTool:
         test_file = tmp_path / "test.py"
         test_file.write_text("x = 1")
 
-        output = await get_context(str(test_file))
+        output = await get_context(str(test_file), include_related=True)
         assert len(output["related_chunks"]) == 1
         assert output["related_chunks"][0]["file_path"] == "src/main.py"
 
@@ -405,7 +405,7 @@ class TestGetContextTool:
         test_file = tmp_path / "test.py"
         test_file.write_text("x = 1")
 
-        output = await get_context(str(test_file))
+        output = await get_context(str(test_file), include_related=True)
         assert "error" in output
         assert output["fix"] == "Run: docker compose up -d qdrant"
 
@@ -470,7 +470,7 @@ class TestExplainTool:
         assert call_args.query == "MyClass"
 
     @patch("code_search.mcp_server._get_components")
-    async def test_search_limit_is_ten(self, mock_get):
+    async def test_search_limit_is_five(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
         components.search_engine.search.return_value = Mock(results=[])
@@ -478,7 +478,7 @@ class TestExplainTool:
         await explain("src/main.py", symbol="Foo")
 
         call_args = components.search_engine.search.call_args[0][0]
-        assert call_args.limit == 10
+        assert call_args.limit == 5
 
     @patch("code_search.mcp_server._get_components")
     async def test_explain_handles_error(self, mock_get):
