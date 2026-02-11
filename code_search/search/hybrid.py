@@ -144,4 +144,5 @@ class HybridSearchEngine:
             app_name=payload.get("app_name", ""),
             layer=payload.get("layer", ""),
             chunk_id=payload.get("chunk_id", ""),
+            docstring=payload.get("docstring", ""),
         )

@@ -32,6 +32,7 @@ class SearchResult:
     app_name: str = ""
     layer: str = ""
     chunk_id: str = ""
+    docstring: str = ""
 
 
 @dataclass
