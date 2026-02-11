@@ -191,6 +191,7 @@ class TestPointToResultDocstring:
     def test_point_to_result_extracts_docstring(self) -> None:
         """Verify docstring is pulled from Qdrant payload into SearchResult."""
         from unittest.mock import Mock
+
         from code_search.search.hybrid import HybridSearchEngine
 
         point = Mock()
@@ -208,6 +209,7 @@ class TestPointToResultDocstring:
     def test_point_to_result_docstring_defaults_empty(self) -> None:
         """Verify docstring defaults to empty string when not in payload."""
         from unittest.mock import Mock
+
         from code_search.search.hybrid import HybridSearchEngine
 
         point = Mock()

@@ -55,7 +55,8 @@ class TestResultToDict:
         result = _mock_search_result()
         d = _result_to_dict(result, detail="full")
         assert d["file_path"] == "src/main.py"
-        assert d["content"] == "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True"
+        expected = "def hello():\n    \"\"\"Say hello.\"\"\"\n    print('hello')\n    return True"
+        assert d["content"] == expected
         assert d["score"] == 0.95
         assert d["chunk_type"] == "function"
         assert d["line_start"] == 1
