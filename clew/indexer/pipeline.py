@@ -335,11 +335,20 @@ class IndexingPipeline:
                     "Post-extraction normalization: resolved %d bare target entities",
                     len(updates),
                 )
+                # Use OR IGNORE: if the resolved target already exists as a row
+                # (same source + relationship + target PK), skip the update.
                 conn.executemany(
-                    "UPDATE code_relationships SET target_entity = ? "
+                    "UPDATE OR IGNORE code_relationships SET target_entity = ? "
                     "WHERE target_entity = ?",
                     updates,
                 )
+                # Delete any leftover unresolved rows (skipped due to PK conflict —
+                # the file-qualified version already exists, so these are redundant)
+                for resolved, original in updates:
+                    conn.execute(
+                        "DELETE FROM code_relationships WHERE target_entity = ?",
+                        (original,),
+                    )
 
             # Second pass: resolve module-qualified targets
             # These have :: but use dots in the module path (not slashes)
@@ -385,10 +394,15 @@ class IndexingPipeline:
                     len(module_updates),
                 )
                 conn.executemany(
-                    "UPDATE code_relationships SET target_entity = ? "
+                    "UPDATE OR IGNORE code_relationships SET target_entity = ? "
                     "WHERE target_entity = ?",
                     module_updates,
                 )
+                for resolved, original in module_updates:
+                    conn.execute(
+                        "DELETE FROM code_relationships WHERE target_entity = ?",
+                        (original,),
+                    )
 
     async def _generate_descriptions(self, chunks: list[Chunk]) -> list[str | None] | None:
         """Generate NL descriptions for chunks that lack docstrings.
