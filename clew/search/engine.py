@@ -13,7 +13,7 @@ from clew.models import SearchConfig
 
 from .filters import build_qdrant_filter
 from .intent import classify_intent
-from .models import SearchRequest, SearchResponse, SearchResult
+from .models import QueryIntent, SearchRequest, SearchResponse, SearchResult
 from .rerank import should_skip_rerank
 
 if TYPE_CHECKING:
@@ -50,6 +50,7 @@ class SearchEngine:
 
         # Step 2: Classify intent (on original query, not enhanced)
         intent = request.intent or classify_intent(query)
+        logger.debug("Intent classified: query=%r intent=%s", query, intent.value)
 
         # Step 3: Use the collection from the request (user-specified or default)
         collection = request.collection
@@ -78,7 +79,11 @@ class SearchEngine:
         # Step 5: Rerank (if applicable)
         results = self._maybe_rerank(query_enhanced, candidates)
 
-        # Step 5.5: Deduplicate overlapping results
+        # Step 5.5: Demote test files
+        results = self._apply_test_demotion(results, intent)
+        results.sort(key=lambda r: r.score, reverse=True)
+
+        # Step 5.6: Deduplicate overlapping results
         results = self._deduplicate(results)
 
         # Step 6: Apply limit
@@ -105,6 +110,28 @@ class SearchEngine:
             if existing is None or result.score > existing.score:
                 seen[key] = result
         return list(seen.values())
+
+    def _apply_test_demotion(
+        self, results: list[SearchResult], intent: QueryIntent
+    ) -> list[SearchResult]:
+        """Apply multiplicative score demotion to test file results.
+
+        DEBUG intent gets a mild penalty (0.95); other intents get a stronger
+        penalty (0.80) so production code ranks higher.
+        """
+        factor = (
+            self._config.test_demotion_debug_factor
+            if intent == QueryIntent.DEBUG
+            else self._config.test_demotion_factor
+        )
+        demoted = 0
+        for result in results:
+            if result.is_test:
+                result.score *= factor
+                demoted += 1
+        if demoted:
+            logger.debug("Applied test demotion factor=%.2f to %d results", factor, demoted)
+        return results
 
     def _maybe_rerank(self, query: str, candidates: list[SearchResult]) -> list[SearchResult]:
         """Rerank candidates if conditions are met."""

@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import re
+
 from .models import QueryIntent
 
-DEBUG_KEYWORDS = frozenset(
-    {"bug", "fix", "error", "fail", "broken", "why", "crash", "exception", "traceback", "debug"}
+# Hard DEBUG keywords: always trigger DEBUG intent
+HARD_DEBUG_KEYWORDS = frozenset(
+    {"bug", "error", "crash", "exception", "traceback", "debug"}
+)
+
+# Soft DEBUG keywords: need question form or error context to trigger DEBUG
+SOFT_DEBUG_KEYWORDS = frozenset(
+    {"fix", "broken", "why", "failing"}
 )
 
 LOCATION_PHRASES = [
@@ -27,25 +35,74 @@ DOCS_PHRASES = [
     "guide",
 ]
 
+QUESTION_PREFIXES = ("how", "why", "what", "when", "who", "which")
+
+# Matches PascalCase or snake_case single identifiers (no spaces)
+_BARE_IDENTIFIER_RE = re.compile(
+    r"^(?:[A-Z][a-zA-Z0-9]*(?:[A-Z][a-z0-9]*)*|[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$"
+)
+
+
+def _is_question(query: str) -> bool:
+    """Check if query is a question (has ? or starts with question word)."""
+    if query.rstrip().endswith("?"):
+        return True
+    first_word = query.split()[0].lower() if query.split() else ""
+    return first_word in QUESTION_PREFIXES
+
+
+def _has_error_context(query: str) -> bool:
+    """Check for error signals that strengthen soft DEBUG keywords."""
+    error_signals = {"error", "fail", "crash", "exception", "traceback", "500", "404", "timeout"}
+    words = set(query.lower().split())
+    return bool(words & error_signals)
+
 
 def classify_intent(query: str) -> QueryIntent:
     """Classify query intent using keyword heuristics.
 
     Priority: DEBUG > LOCATION > DOCS > CODE (default).
+
+    Refinements over naive keyword matching:
+    - Hard DEBUG keywords always trigger DEBUG
+    - Soft DEBUG keywords need question form or error context
+    - Questions starting with how/why → DOCS (not DEBUG) unless error context
+    - Bare identifiers (PascalCase or snake_case) → LOCATION
     """
     query_lower = query.lower()
     words = set(query_lower.split())
 
-    if words & DEBUG_KEYWORDS:
+    # Hard DEBUG: always trigger
+    if words & HARD_DEBUG_KEYWORDS:
         return QueryIntent.DEBUG
+
+    # Soft DEBUG: only if question form or error context
+    if words & SOFT_DEBUG_KEYWORDS:
+        if _has_error_context(query) or _is_question(query):
+            return QueryIntent.DEBUG
 
     for phrase in LOCATION_PHRASES:
         if phrase in query_lower:
             return QueryIntent.LOCATION
 
+    # Questions starting with how/why → DOCS
+    if _is_question(query):
+        for phrase in DOCS_PHRASES:
+            if phrase in query_lower:
+                return QueryIntent.DOCS
+        # "how does X work?" or "why does X fail?" with question mark → DOCS
+        first_word = query.split()[0].lower() if query.split() else ""
+        if first_word in ("how", "what") and query.rstrip().endswith("?"):
+            return QueryIntent.DOCS
+
     for phrase in DOCS_PHRASES:
         if phrase in query_lower:
             return QueryIntent.DOCS
+
+    # Bare identifiers → LOCATION
+    query_stripped = query.strip()
+    if _BARE_IDENTIFIER_RE.match(query_stripped):
+        return QueryIntent.LOCATION
 
     return QueryIntent.CODE
 

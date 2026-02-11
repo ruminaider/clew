@@ -145,4 +145,5 @@ class HybridSearchEngine:
             layer=payload.get("layer", ""),
             chunk_id=payload.get("chunk_id", ""),
             docstring=payload.get("docstring", ""),
+            is_test=payload.get("is_test", False),
         )

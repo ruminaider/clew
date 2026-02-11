@@ -2,32 +2,18 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from clew.indexer.extractors.base import RelationshipExtractor
+from clew.indexer.metadata import is_test_file
 from clew.indexer.relationships import Relationship
-
-_TEST_FILE_PATTERNS = [
-    re.compile(r"(?:^|/)test_"),
-    re.compile(r"_test\.py$"),
-    re.compile(r"\.test\.\w+$"),
-    re.compile(r"\.spec\.\w+$"),
-    re.compile(r"(?:^|/)tests/"),
-    re.compile(r"(?:^|/)__tests__/"),
-]
-
-
-def _is_test_file(file_path: str) -> bool:
-    """Check if a file path matches test file patterns."""
-    return any(p.search(file_path) for p in _TEST_FILE_PATTERNS)
 
 
 class TestRelationshipExtractor(RelationshipExtractor):
     """Detect test files and create 'tests' relationships from their imports."""
 
     def extract(self, tree: Any, source: str, file_path: str) -> list[Relationship]:
-        if not _is_test_file(file_path):
+        if not is_test_file(file_path):
             return []
 
         relationships: list[Relationship] = []

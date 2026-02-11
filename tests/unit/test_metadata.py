@@ -42,8 +42,8 @@ class TestClassifyLayer:
         """Tradeoff C: unmatched files get 'other' layer."""
         assert classify_layer("backend/care/utils.py") == "other"
 
-    def test_admin_fallback_other(self) -> None:
-        assert classify_layer("backend/care/admin.py") == "other"
+    def test_admin_layer(self) -> None:
+        assert classify_layer("backend/care/admin.py") == "admin"
 
     def test_unknown_extension(self) -> None:
         assert classify_layer("data.csv") == "other"

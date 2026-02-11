@@ -71,6 +71,9 @@ class SearchConfig(BaseModel):
     rerank_model: str = "rerank-2.5"
     high_confidence_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     low_variance_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+    test_demotion_factor: float = Field(default=0.80, ge=0.0, le=1.0)
+    test_demotion_debug_factor: float = Field(default=0.95, ge=0.0, le=1.0)
+    explain_llm_enabled: bool = Field(default=True)
 
 
 class ProjectConfig(BaseModel):

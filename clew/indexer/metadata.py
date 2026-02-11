@@ -7,7 +7,28 @@ from file paths and code entities.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import PurePosixPath
+
+# Canonical test file detection patterns
+_TEST_FILE_PATTERNS = [
+    re.compile(r"(?:^|/)test_"),       # test_*.py
+    re.compile(r"_test\.py$"),         # *_test.py
+    re.compile(r"\.test\.\w+$"),       # *.test.ts/js
+    re.compile(r"\.spec\.\w+$"),       # *.spec.ts/js
+    re.compile(r"(?:^|/)tests/"),      # tests/ directory
+    re.compile(r"(?:^|/)test/"),       # test/ directory
+    re.compile(r"(?:^|/)__tests__/"),  # __tests__/ directory
+    re.compile(r"(?:^|/)conftest\.py$"),  # pytest conftest
+]
+
+
+def is_test_file(file_path: str) -> bool:
+    """Check if a file path matches test file patterns.
+
+    Canonical implementation — import from here, not from extractors.
+    """
+    return any(p.search(file_path) for p in _TEST_FILE_PATTERNS)
 
 # Layer classification mapping (filename -> layer)
 LAYER_MAP: dict[str, str] = {
@@ -18,6 +39,11 @@ LAYER_MAP: dict[str, str] = {
     "tasks.py": "task",
     "service.py": "service",
     "services.py": "service",
+    "admin.py": "admin",
+    "forms.py": "form",
+    "urls.py": "routing",
+    "middleware.py": "middleware",
+    "signals.py": "signal",
 }
 
 # Extensions that map to "component" layer
@@ -27,9 +53,12 @@ COMPONENT_EXTENSIONS = frozenset({".tsx", ".jsx"})
 def classify_layer(file_path: str) -> str:
     """Classify file into an architectural layer.
 
-    Returns one of: model, view, serializer, task, service, component, other.
-    Tradeoff C resolution: "other" is the explicit fallback for unmatched files.
+    Returns one of: model, view, serializer, task, service, component, test,
+    admin, form, routing, middleware, signal, other.
     """
+    if is_test_file(file_path):
+        return "test"
+
     path = PurePosixPath(file_path)
     filename = path.name
 

@@ -33,6 +33,7 @@ class SearchResult:
     layer: str = ""
     chunk_id: str = ""
     docstring: str = ""
+    is_test: bool = False
 
 
 @dataclass
