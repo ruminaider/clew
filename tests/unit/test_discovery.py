@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from clew.discovery import discover_files
 from clew.models import ProjectConfig, SafetyConfig
@@ -122,3 +127,73 @@ class TestDiscoverFiles:
 
         assert tmp_path / "output.generated.py" not in result
         assert tmp_path / "app.py" in result
+
+
+def _git_init_and_add(repo: Path, *filenames: str) -> None:
+    """Initialize a git repo and add the named files."""
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True
+    )
+    for fn in filenames:
+        subprocess.run(["git", "add", fn], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init", "--allow-empty"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+class TestGitAwareDiscovery:
+    """Tests for git ls-files based discovery."""
+
+    def test_excludes_untracked_directories(self, tmp_path: Path) -> None:
+        """Files in untracked dirs that are gitignored should be excluded."""
+        tracked_file = tmp_path / "tracked.py"
+        tracked_file.write_text("x = 1")
+
+        untracked_dir = tmp_path / "untracked_dir"
+        untracked_dir.mkdir()
+        (untracked_dir / "module.py").write_text("y = 2")
+
+        # Add .gitignore to exclude the untracked dir
+        (tmp_path / ".gitignore").write_text("untracked_dir/\n")
+
+        _git_init_and_add(tmp_path, "tracked.py", ".gitignore")
+
+        config = ProjectConfig()
+        result = discover_files(tmp_path, config)
+
+        resolved_tracked = (tmp_path / "tracked.py").resolve()
+        resolved_untracked = (tmp_path / "untracked_dir" / "module.py").resolve()
+        assert resolved_tracked in result
+        assert resolved_untracked not in result
+
+    def test_returns_resolved_absolute_paths(self, tmp_path: Path) -> None:
+        """All returned paths must be absolute and resolved."""
+        (tmp_path / "app.py").write_text("x = 1")
+        _git_init_and_add(tmp_path, "app.py")
+
+        config = ProjectConfig()
+        result = discover_files(tmp_path, config)
+
+        assert len(result) >= 1
+        for p in result:
+            assert p.is_absolute(), f"Path {p} is not absolute"
+            assert str(p) == str(p.resolve()), f"Path {p} is not resolved"
+
+    def test_falls_back_to_rglob_outside_git(self, tmp_path: Path) -> None:
+        """Discovery should work in a non-git directory via rglob fallback."""
+        (tmp_path / "app.py").write_text("x = 1")
+        config = ProjectConfig()
+
+        # tmp_path is not a git repo, so git ls-files will fail
+        result = discover_files(tmp_path, config)
+
+        resolved = (tmp_path / "app.py").resolve()
+        assert resolved in result

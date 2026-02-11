@@ -97,6 +97,18 @@ class TestQueryHybrid:
         assert call_kwargs["limit"] == 20
 
 
+class TestDeleteCollection:
+    def test_deletes_existing_collection(self, manager: QdrantManager, mock_client: Mock) -> None:
+        mock_client.get_collections.return_value = Mock(collections=[_collection("code")])
+        manager.delete_collection("code")
+        mock_client.delete_collection.assert_called_once_with(collection_name="code")
+
+    def test_noop_when_collection_missing(self, manager: QdrantManager, mock_client: Mock) -> None:
+        mock_client.get_collections.return_value = Mock(collections=[])
+        manager.delete_collection("code")
+        mock_client.delete_collection.assert_not_called()
+
+
 class TestHealthCheck:
     def test_returns_true_when_healthy(self, manager: QdrantManager) -> None:
         assert manager.health_check() is True

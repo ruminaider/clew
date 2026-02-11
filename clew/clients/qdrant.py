@@ -133,6 +133,14 @@ class QdrantManager:
         """Get the number of points in a collection."""
         return self._client.count(collection_name=name).count
 
+    def delete_collection(self, name: str) -> None:
+        """Delete a collection if it exists."""
+        if not self.collection_exists(name):
+            logger.debug("Collection '%s' does not exist, nothing to delete", name)
+            return
+        self._client.delete_collection(collection_name=name)
+        logger.info("Deleted collection '%s'", name)
+
     def health_check(self) -> bool | str:
         """Check if Qdrant is reachable. Returns True if healthy, error string if not."""
         try:

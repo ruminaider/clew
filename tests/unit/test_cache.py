@@ -127,6 +127,59 @@ class TestDescriptionCache:
         assert cache.get_description("abc123", "model-a") == "New"
 
 
+class TestClearAllState:
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_clears_state_tables(self, cache: CacheDB) -> None:
+        """clear_all_state wipes code_relationships, failed_files, checkpoints, index_state, chunk_cache."""
+        from clew.indexer.relationships import Relationship
+
+        # Populate state tables
+        cache.store_relationships([Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py")])
+        cache.record_failed_file("bad.py", "SyntaxError", "invalid syntax")
+        cache.save_checkpoint("code", 0, ["a.py"])
+        cache.set_last_indexed_commit("code", "abc123")
+        cache.set_file_chunks("a.py", "hash1", ["chunk1"])
+
+        # Clear
+        cache.clear_all_state("code")
+
+        # Verify state tables are empty
+        assert cache.get_relationships("a.py::Foo", direction="outbound") == []
+        assert cache.get_failed_files() == []
+        assert cache.get_last_checkpoint("code") == -1
+        assert cache.get_last_indexed_commit("code") is None
+        assert cache.get_file_hash("a.py") is None
+
+    def test_preserves_embedding_cache(self, cache: CacheDB) -> None:
+        """clear_all_state must NOT wipe embedding_cache."""
+        cache.set_embedding("hash1", "voyage-code-3", b"\x00\x01", 10)
+        cache.clear_all_state("code")
+        assert cache.get_embedding("hash1", "voyage-code-3") == b"\x00\x01"
+
+    def test_preserves_description_cache(self, cache: CacheDB) -> None:
+        """clear_all_state must NOT wipe description_cache."""
+        cache.set_description("hash1", "model-a", "A function that does X.")
+        cache.clear_all_state("code")
+        assert cache.get_description("hash1", "model-a") == "A function that does X."
+
+    def test_scoped_to_collection(self, cache: CacheDB) -> None:
+        """Clearing 'code' collection doesn't affect 'docs' collection state."""
+        cache.set_last_indexed_commit("code", "abc123")
+        cache.set_last_indexed_commit("docs", "def456")
+        cache.save_checkpoint("code", 0, ["a.py"])
+        cache.save_checkpoint("docs", 0, ["readme.md"])
+
+        cache.clear_all_state("code")
+
+        assert cache.get_last_indexed_commit("code") is None
+        assert cache.get_last_indexed_commit("docs") == "def456"
+        assert cache.get_last_checkpoint("code") == -1
+        assert cache.get_last_checkpoint("docs") == 0
+
+
 class TestRelationshipStore:
     @pytest.fixture
     def cache(self, temp_cache_dir: Path) -> CacheDB:

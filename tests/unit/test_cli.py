@@ -169,6 +169,53 @@ class TestIndexCommand:
         # With --full, detect_changes should NOT be called (change detection skipped)
         mock_detector_cls.return_value.detect_changes.assert_not_called()
 
+    @patch("clew.discovery.discover_files")
+    @patch("clew.factory.create_components")
+    def test_full_flag_drops_collection_and_clears_cache(
+        self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
+    ) -> None:
+        """--full calls delete_collection and clear_all_state before indexing."""
+        test_py = tmp_path / "test.py"
+        test_py.write_text("x = 1")
+        mock_discover.return_value = [test_py]
+        mock_components = mock_factory.return_value
+        mock_components.indexing_pipeline.index_files = AsyncMock(
+            return_value=Mock(files_processed=1, chunks_created=3, files_skipped=0, errors=[])
+        )
+
+        result = runner.invoke(app, ["index", str(tmp_path), "--full"])
+        assert result.exit_code == 0
+        mock_components.qdrant.delete_collection.assert_called_once_with("code")
+        mock_components.cache.clear_all_state.assert_called_once_with("code")
+
+    @patch("clew.discovery.discover_files")
+    @patch("clew.factory.create_components")
+    def test_incremental_does_not_drop_collection(
+        self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
+    ) -> None:
+        """Without --full, delete_collection and clear_all_state are NOT called."""
+        test_py = tmp_path / "test.py"
+        test_py.write_text("x = 1")
+        mock_discover.return_value = [test_py]
+        mock_components = mock_factory.return_value
+        mock_components.indexing_pipeline.index_files = AsyncMock(
+            return_value=Mock(files_processed=1, chunks_created=3, files_skipped=0, errors=[])
+        )
+        # Simulate change detector returning changes
+        from clew.indexer.change_detector import ChangeDetector
+
+        mock_changes = Mock(
+            added=[str(test_py)], modified=[], deleted=[], unchanged=[], source="git"
+        )
+        with patch.object(ChangeDetector, "__init__", return_value=None), patch.object(
+            ChangeDetector, "detect_changes", return_value=mock_changes
+        ), patch.object(ChangeDetector, "get_current_commit", return_value="abc123"):
+            result = runner.invoke(app, ["index", str(tmp_path)])
+
+        assert result.exit_code == 0
+        mock_components.qdrant.delete_collection.assert_not_called()
+        mock_components.cache.clear_all_state.assert_not_called()
+
     @patch("clew.factory.create_components")
     def test_index_connection_error(self, mock_factory: Mock) -> None:
         """Index shows error on connection failure."""

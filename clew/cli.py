@@ -44,6 +44,12 @@ def index(
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
+    # Full reindex: drop collection and clear cached state
+    if full:
+        console.print("[yellow]Full reindex: dropping collection and clearing cache...[/yellow]")
+        components.qdrant.delete_collection("code")
+        components.cache.clear_all_state("code")
+
     # Ensure collection exists
     components.qdrant.ensure_collection("code", dense_dim=1024)
 
