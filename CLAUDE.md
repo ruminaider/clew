@@ -100,7 +100,7 @@ clew serve                           # Start MCP server (stdio transport)
 
 - `docs/DESIGN.md` — Architecture, chunking strategy, search pipeline, MCP tools, metadata schema
 - `docs/IMPLEMENTATION.md` — Concrete specs: dependencies, SQLite schemas, Pydantic models, tree-sitter setup, phase tasks
-- `docs/adr/` — Architecture Decision Records (Qdrant over Milvus, build vs adopt)
+- `docs/adr/` — Architecture Decision Records (Qdrant over Milvus, build vs adopt, code retrieval landscape)
 - `docs/plans/2026-02-06-phase1-core-infrastructure.md` — Phase 1 plan (complete)
 - `docs/plans/2026-02-06-phase2-search-pipeline.md` — Phase 2 plan (complete)
 - `docs/plans/2026-02-09-v1.1-nl-descriptions.md` — V1.1 NL Descriptions plan (complete)

@@ -10,6 +10,7 @@ V2 architecture: Two-pass indexing with 3 named vectors.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -652,10 +653,25 @@ class IndexingPipeline:
         sub_batch: list[str] = []
         sub_batch_tokens = 0
 
+        async def _embed_with_retry(batch: list[str], max_retries: int = 3) -> list[list[float]]:
+            for attempt in range(max_retries):
+                try:
+                    return await self._embedder.embed(batch, input_type="document")
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait = 2 ** (attempt + 1)
+                        logger.warning(
+                            "Embedding API error (attempt %d/%d), retrying in %ds: %s",
+                            attempt + 1, max_retries, wait, e,
+                        )
+                        await asyncio.sleep(wait)
+                    else:
+                        raise
+
         for text in texts:
             tokens = count_tokens(text)
             if sub_batch and sub_batch_tokens + tokens > max_batch_tokens:
-                embs = await self._embedder.embed(sub_batch, input_type="document")
+                embs = await _embed_with_retry(sub_batch)
                 all_embeddings.extend(embs)
                 sub_batch = []
                 sub_batch_tokens = 0
@@ -663,7 +679,7 @@ class IndexingPipeline:
             sub_batch_tokens += tokens
 
         if sub_batch:
-            embs = await self._embedder.embed(sub_batch, input_type="document")
+            embs = await _embed_with_retry(sub_batch)
             all_embeddings.extend(embs)
 
         return all_embeddings
@@ -899,6 +915,49 @@ class IndexingPipeline:
 
         if not chunks_to_embed:
             logger.info("No enriched chunks to re-embed")
+            return result
+
+        # Skip chunks already enriched in Qdrant (resume support)
+        already_enriched: set[str] = set()
+        try:
+            offset_id = None
+            while True:
+                scroll_result = self._qdrant._client.scroll(
+                    collection_name=collection,
+                    scroll_filter=models.Filter(
+                        must=[models.FieldCondition(
+                            key="enriched",
+                            match=models.MatchValue(value=True),
+                        )]
+                    ),
+                    limit=1000,
+                    with_payload=["chunk_id"],
+                    with_vectors=False,
+                    offset=offset_id,
+                )
+                points, next_offset = scroll_result
+                for p in points:
+                    cid = p.payload.get("chunk_id", "") if p.payload else ""
+                    if cid:
+                        already_enriched.add(cid)
+                if next_offset is None:
+                    break
+                offset_id = next_offset
+            if already_enriched:
+                before = len(chunks_to_embed)
+                chunks_to_embed = [
+                    c for c in chunks_to_embed if c[0] not in already_enriched
+                ]
+                logger.info(
+                    "Skipping %d already-enriched chunks (%d remaining)",
+                    before - len(chunks_to_embed),
+                    len(chunks_to_embed),
+                )
+        except Exception as exc:
+            logger.warning("Could not check existing enriched chunks, re-embedding all: %s", exc)
+
+        if not chunks_to_embed:
+            logger.info("All chunks already enriched")
             return result
 
         logger.info("Re-embedding %d enriched chunks", len(chunks_to_embed))
