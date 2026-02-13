@@ -1,0 +1,31 @@
+{
+  "name": "clewdex",
+  "version": "0.1.0",
+  "description": "Semantic code search with hybrid retrieval and MCP integration for Claude Code",
+  "keywords": [
+    "code-search",
+    "semantic-search",
+    "embeddings",
+    "mcp",
+    "claude",
+    "clew",
+    "clewdex"
+  ],
+  "homepage": "https://github.com/ruminaider/clew",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruminaider/clew.git"
+  },
+  "license": "MIT",
+  "author": "Ruminaider <hello@ruminaider.com>",
+  "bin": {
+    "clewdex": "bin/clewdex.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}
