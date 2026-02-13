@@ -79,6 +79,9 @@ class SearchEngine:
         # Step 5: Rerank (if applicable)
         results = self._maybe_rerank(query_enhanced, candidates)
 
+        # Step 5.4: Apply importance boost (before test demotion)
+        results = self._apply_importance_boost(results)
+
         # Step 5.5: Demote test files
         results = self._apply_test_demotion(results, intent)
         results.sort(key=lambda r: r.score, reverse=True)
@@ -110,6 +113,19 @@ class SearchEngine:
             if existing is None or result.score > existing.score:
                 seen[key] = result
         return list(seen.values())
+
+    @staticmethod
+    def _apply_importance_boost(results: list[SearchResult]) -> list[SearchResult]:
+        """Apply importance-based score boost (1.0x to 1.25x).
+
+        Files with higher importance (more inbound edges) get a mild
+        score boost to surface central code above peripheral code.
+        """
+        for result in results:
+            if result.importance_score > 0:
+                boost = 1.0 + (result.importance_score * 0.25)
+                result.score *= boost
+        return results
 
     def _apply_test_demotion(
         self, results: list[SearchResult], intent: QueryIntent

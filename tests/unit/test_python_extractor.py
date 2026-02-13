@@ -200,14 +200,16 @@ class TestCallExtraction:
         self, extractor: PythonRelationshipExtractor, parser: ASTParser
     ) -> None:
         """Attribute access chains emit both the full target and a class-level edge."""
-        source = "from care.models import PrescriptionFill\ndef save():\n    PrescriptionFill.objects.create(name='x')\n"
+        source = (
+            "from care.models import PrescriptionFill\n"
+            "def save():\n"
+            "    PrescriptionFill.objects.create(name='x')\n"
+        )
         tree = parser.parse(source, "python")
         rels = extractor.extract(tree, source, "app/views.py")
         calls = [r for r in rels if r.relationship == "calls"]
         # Full resolved target
-        assert any(
-            r.target_entity == "care.models::PrescriptionFill.objects.create" for r in calls
-        )
+        assert any(r.target_entity == "care.models::PrescriptionFill.objects.create" for r in calls)
         # Class-level edge
         assert any(r.target_entity == "care.models::PrescriptionFill" for r in calls)
 

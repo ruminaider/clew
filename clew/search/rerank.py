@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 import voyageai
@@ -47,8 +46,6 @@ def should_skip_rerank(
         return True
     if score_variance < low_variance_threshold:
         return True
-    if re.match(r"^[A-Z][a-zA-Z0-9]+$", query):
-        return True
     if "/" in query or query.endswith((".py", ".ts", ".js")):
         return True
     return False
@@ -78,9 +75,7 @@ class RerankProvider:
             return []
 
         if _circuit_breaker.is_open:
-            raise SearchUnavailableError(
-                "Rerank API circuit breaker is open. Retrying in 60s."
-            )
+            raise SearchUnavailableError("Rerank API circuit breaker is open. Retrying in 60s.")
 
         try:
             result = self._client.rerank(

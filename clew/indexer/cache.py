@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -50,6 +50,13 @@ CREATE TABLE IF NOT EXISTS description_cache (
 
 CREATE INDEX IF NOT EXISTS idx_description_cache_model
 ON description_cache(provider_model);
+
+CREATE TABLE IF NOT EXISTS enrichment_cache (
+    chunk_id TEXT PRIMARY KEY,
+    description TEXT,
+    keywords TEXT,
+    enriched_at REAL
+);
 """
 
 STATE_SCHEMA = """
@@ -103,7 +110,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 """
 
 # Current schema version — increment when adding migrations
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def _migration_v1_to_v2(conn: sqlite3.Connection) -> None:
@@ -111,15 +118,27 @@ def _migration_v1_to_v2(conn: sqlite3.Connection) -> None:
     # idx_rel_target already exists in the CREATE TABLE schema, but this
     # migration ensures it exists for databases created before it was added.
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_rel_target_entity "
-        "ON code_relationships(target_entity)"
+        "CREATE INDEX IF NOT EXISTS idx_rel_target_entity ON code_relationships(target_entity)"
+    )
+
+
+def _migration_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Add enrichment_cache table for LLM-generated descriptions + keywords."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS enrichment_cache ("
+        "    chunk_id TEXT PRIMARY KEY,"
+        "    description TEXT,"
+        "    keywords TEXT,"
+        "    enriched_at REAL"
+        ")"
     )
 
 
 # Ordered list of migration functions: index = from_version
-_MIGRATIONS: list[callable] = [
+_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     lambda _conn: None,  # v0→v1: initial schema (no-op, tables already created)
     _migration_v1_to_v2,  # v1→v2: add target_entity index
+    _migration_v2_to_v3,  # v2→v3: add enrichment_cache table
 ]
 
 
@@ -192,17 +211,12 @@ class CacheDB:
         with self._get_state_conn() as conn:
             conn.execute("DELETE FROM code_relationships")
             conn.execute("DELETE FROM failed_files")
-            conn.execute(
-                "DELETE FROM checkpoints WHERE collection_name = ?", (collection,)
-            )
-            conn.execute(
-                "DELETE FROM index_state WHERE collection_name = ?", (collection,)
-            )
-            conn.execute(
-                "DELETE FROM safety_state WHERE collection_name = ?", (collection,)
-            )
+            conn.execute("DELETE FROM checkpoints WHERE collection_name = ?", (collection,))
+            conn.execute("DELETE FROM index_state WHERE collection_name = ?", (collection,))
+            conn.execute("DELETE FROM safety_state WHERE collection_name = ?", (collection,))
         with self._get_cache_conn() as conn:
             conn.execute("DELETE FROM chunk_cache")
+            conn.execute("DELETE FROM enrichment_cache")
         logger.info("Cleared all indexing state for collection '%s'", collection)
 
     def get_embedding(self, content_hash: str, model: str) -> bytes | None:
@@ -284,6 +298,35 @@ class CacheDB:
                 "(content_hash, provider_model, description) "
                 "VALUES (?, ?, ?)",
                 (content_hash, model, description),
+            )
+
+    def get_all_relationship_pairs(self) -> list[tuple[str, str]]:
+        """Return all (source_entity, target_entity) pairs from code_relationships."""
+        with self._get_state_conn() as conn:
+            rows = conn.execute(
+                "SELECT source_entity, target_entity FROM code_relationships"
+            ).fetchall()
+            return [(row[0], row[1]) for row in rows]
+
+    def get_enrichment(self, chunk_id: str) -> tuple[str, str] | None:
+        """Return (description, keywords) for a chunk, or None."""
+        with self._get_cache_conn() as conn:
+            row = conn.execute(
+                "SELECT description, keywords FROM enrichment_cache WHERE chunk_id = ?",
+                (chunk_id,),
+            ).fetchone()
+            return (row["description"], row["keywords"]) if row else None
+
+    def set_enrichment(self, chunk_id: str, description: str, keywords: str) -> None:
+        """Store enrichment data for a chunk."""
+        import time
+
+        with self._get_cache_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO enrichment_cache "
+                "(chunk_id, description, keywords, enriched_at) "
+                "VALUES (?, ?, ?, ?)",
+                (chunk_id, description, keywords, time.time()),
             )
 
     def get_last_indexed_commit(self, collection_name: str) -> str | None:
@@ -392,9 +435,7 @@ class CacheDB:
 
     # --- Checkpoint methods for indexing recovery ---
 
-    def save_checkpoint(
-        self, collection: str, batch_index: int, file_paths: list[str]
-    ) -> None:
+    def save_checkpoint(self, collection: str, batch_index: int, file_paths: list[str]) -> None:
         """Record a successfully completed batch for resume support."""
         with self._get_state_conn() as conn:
             conn.execute(
@@ -422,9 +463,7 @@ class CacheDB:
             )
         logger.info("Cleared checkpoints for collection=%s", collection)
 
-    def record_failed_file(
-        self, file_path: str, error_type: str, error_message: str
-    ) -> None:
+    def record_failed_file(self, file_path: str, error_type: str, error_message: str) -> None:
         """Record a file that failed during indexing."""
         with self._get_state_conn() as conn:
             conn.execute(
@@ -491,7 +530,7 @@ class CacheDB:
                 (entity,),
             ).fetchone()
             if row:
-                return row[0]
+                return str(row[0])
 
             # Exact match on target_entity
             row = conn.execute(
@@ -499,7 +538,7 @@ class CacheDB:
                 (entity,),
             ).fetchone()
             if row:
-                return row[0]
+                return str(row[0])
 
             # 2. Suffix match — collect all candidates
             suffix_pattern = f"%{safe}"

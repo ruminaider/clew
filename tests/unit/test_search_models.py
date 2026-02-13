@@ -33,6 +33,13 @@ class TestSearchResult:
         assert result.app_name == ""
         assert result.layer == ""
         assert result.chunk_id == ""
+        assert result.importance_score == 0.0
+
+    def test_importance_score_field(self) -> None:
+        result = SearchResult(
+            content="def foo():", file_path="main.py", score=0.95, importance_score=0.75
+        )
+        assert result.importance_score == 0.75
 
     def test_all_metadata_fields(self) -> None:
         result = SearchResult(

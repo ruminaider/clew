@@ -41,15 +41,18 @@ class TestEnsureCollection:
         manager.ensure_collection("code")
         mock_client.create_collection.assert_not_called()
 
-    def test_creates_with_dense_and_bm25_sparse(
+    def test_creates_with_named_vectors_and_bm25_sparse(
         self,
         manager: QdrantManager,
         mock_client: Mock,
     ) -> None:
-        """Sparse vector must use name 'bm25' with IDF modifier."""
+        """Collection must have 3 named vectors and bm25 sparse vector."""
         manager.ensure_collection("code", dense_dim=1024)
         call_kwargs = mock_client.create_collection.call_args
-        assert "dense" in call_kwargs.kwargs["vectors_config"]
+        vectors_config = call_kwargs.kwargs["vectors_config"]
+        assert "signature" in vectors_config
+        assert "semantic" in vectors_config
+        assert "body" in vectors_config
         assert "bm25" in call_kwargs.kwargs["sparse_vectors_config"]
 
 
@@ -113,7 +116,9 @@ class TestHealthCheck:
     def test_returns_true_when_healthy(self, manager: QdrantManager) -> None:
         assert manager.health_check() is True
 
-    def test_returns_error_string_on_failure(self, manager: QdrantManager, mock_client: Mock) -> None:
+    def test_returns_error_string_on_failure(
+        self, manager: QdrantManager, mock_client: Mock
+    ) -> None:
         mock_client.get_collections.side_effect = Exception("connection refused")
         result = manager.health_check()
         assert result != True  # noqa: E712

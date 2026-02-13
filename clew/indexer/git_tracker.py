@@ -184,9 +184,7 @@ class GitChangeTracker:
         Renamed entries are dicts with "from" and "to" keys.
         """
         if self.is_merging_or_rebasing():
-            logger.warning(
-                "Repo is in merge/rebase state — change detection may be incomplete"
-            )
+            logger.warning("Repo is in merge/rebase state — change detection may be incomplete")
 
         try:
             result = subprocess.run(

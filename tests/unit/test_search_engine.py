@@ -293,3 +293,76 @@ class TestDeduplication:
         """Handles empty list gracefully."""
         deduped = SearchEngine._deduplicate([])
         assert deduped == []
+
+
+class TestImportanceBoost:
+    """Tests for importance-based score boost (S7)."""
+
+    def test_boost_range_1x_to_1_25x(self) -> None:
+        """Max importance (1.0) should give 1.25x boost."""
+        results = [
+            SearchResult(
+                content="def important(): pass",
+                file_path="core.py",
+                score=0.8,
+                importance_score=1.0,
+            ),
+        ]
+        boosted = SearchEngine._apply_importance_boost(results)
+        assert boosted[0].score == pytest.approx(0.8 * 1.25)
+
+    def test_zero_importance_no_boost(self) -> None:
+        """Zero importance score should leave score unchanged."""
+        results = [
+            SearchResult(
+                content="def leaf(): pass",
+                file_path="leaf.py",
+                score=0.8,
+                importance_score=0.0,
+            ),
+        ]
+        boosted = SearchEngine._apply_importance_boost(results)
+        assert boosted[0].score == 0.8
+
+    def test_partial_importance(self) -> None:
+        """Intermediate importance gets proportional boost."""
+        results = [
+            SearchResult(
+                content="def mid(): pass",
+                file_path="mid.py",
+                score=1.0,
+                importance_score=0.5,
+            ),
+        ]
+        boosted = SearchEngine._apply_importance_boost(results)
+        # boost = 1.0 + (0.5 * 0.25) = 1.125
+        assert boosted[0].score == pytest.approx(1.125)
+
+    async def test_boost_applied_before_test_demotion(self) -> None:
+        """Verify importance boost runs before test demotion in the pipeline."""
+        from unittest.mock import AsyncMock, Mock
+
+        from clew.models import SearchConfig
+
+        hybrid = Mock()
+        hybrid.search = AsyncMock(
+            return_value=[
+                SearchResult(
+                    content="def important(): pass",
+                    file_path="core.py",
+                    score=0.9,
+                    importance_score=0.8,
+                    is_test=True,
+                ),
+            ]
+        )
+        config = SearchConfig()
+        engine = SearchEngine(hybrid_engine=hybrid, search_config=config)
+
+        response = await engine.search(SearchRequest(query="test", limit=10))
+
+        # Score = 0.9 * (1.0 + 0.8*0.25) * test_demotion_factor
+        # boost = 1.0 + (0.8 * 0.25) = 1.2
+        # After importance: 0.9 * 1.2 = 1.08
+        # After test demotion: 1.08 * 0.80 = 0.864
+        assert response.results[0].score == pytest.approx(0.9 * 1.2 * config.test_demotion_factor)

@@ -42,6 +42,11 @@ class Environment:
     CACHE_DIR: Path = _resolve_cache_dir()
     LOG_LEVEL: str = os.environ.get("CLEW_LOG_LEVEL", "INFO")
     ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
+    CLEW_DESCRIPTION_MODEL: str = os.environ.get(
+        "CLEW_DESCRIPTION_MODEL", "claude-sonnet-4-5-20250929"
+    )
+    CLEW_FULL_INDEX_MODEL: str = os.environ.get("CLEW_FULL_INDEX_MODEL", "claude-opus-4-6")
+    CLEW_CONFIDENCE_THRESHOLD: float = float(os.environ.get("CLEW_CONFIDENCE_THRESHOLD", "0.65"))
 
     @classmethod
     def validate(cls) -> list[str]:

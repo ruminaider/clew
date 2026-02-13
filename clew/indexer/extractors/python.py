@@ -134,8 +134,7 @@ class PythonRelationshipExtractor(RelationshipExtractor):
                         )
                     )
                     local_name = (
-                        alias_node.text.decode() if alias_node
-                        else module_name.split(".")[0]
+                        alias_node.text.decode() if alias_node else module_name.split(".")[0]
                     )
                     self._import_table[local_name] = module_name
 
@@ -316,7 +315,7 @@ class PythonRelationshipExtractor(RelationshipExtractor):
             if resolved_root is not None:
                 # Replace root with resolved path
                 # e.g., `np.array()` with np→numpy becomes `numpy.array`
-                suffix = called_name[len(root):]  # ".array()" → ".array"
+                suffix = called_name[len(root) :]  # ".array()" → ".array"
                 return f"{resolved_root}{suffix}"
 
         return called_name
@@ -330,7 +329,7 @@ class PythonRelationshipExtractor(RelationshipExtractor):
             root = self._get_attribute_root(node)
             if root and root in self._import_table:
                 resolved_root = self._import_table[root]
-                suffix = name[len(root):]
+                suffix = name[len(root) :]
                 return f"{resolved_root}{suffix}"
 
         return name

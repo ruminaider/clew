@@ -55,7 +55,8 @@ class TestShouldSkipRerank:
             is True
         )
 
-    def test_pascal_case_identifier(self) -> None:
+    def test_pascal_case_identifier_not_skipped(self) -> None:
+        """PascalCase queries should NOT skip reranking (V2 fix)."""
         assert (
             should_skip_rerank(
                 "UserModel",
@@ -63,7 +64,19 @@ class TestShouldSkipRerank:
                 top_score=0.5,
                 score_variance=0.5,
             )
-            is True
+            is False
+        )
+
+    def test_pascal_case_multi_word_not_skipped(self) -> None:
+        """Multi-word PascalCase like PrescriptionFill should rerank."""
+        assert (
+            should_skip_rerank(
+                "PrescriptionFill",
+                num_candidates=50,
+                top_score=0.5,
+                score_variance=0.5,
+            )
+            is False
         )
 
     def test_file_path(self) -> None:

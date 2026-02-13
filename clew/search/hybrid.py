@@ -1,15 +1,16 @@
 """Hybrid search engine: dense + BM25 with RRF fusion and structural boosting.
 
 Multi-prefetch approach per DESIGN.md:
-- Base dense (limit=30)
-- Base BM25 (limit=30)
+- Intent-adaptive named vector selection (signature/semantic/body)
+- Base BM25 (limit varies by intent)
 - Same-module boost when active_file provided (limit=15)
-- Debug intent test-file boost (limit=10)
+- Confidence-based fallback expansion
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from qdrant_client import models
@@ -66,7 +67,61 @@ class HybridSearchEngine:
             query_filter=query_filter,
         )
 
-        return [self._point_to_result(p) for p in points]
+        results = [self._point_to_result(p) for p in points]
+
+        # Confidence-based fallback: expand to all vectors when primary is low
+        confidence_threshold = float(os.environ.get("CLEW_CONFIDENCE_THRESHOLD", "0.65"))
+        if results and results[0].score < confidence_threshold:
+            results = self._expand_search(
+                dense_vector, sparse_vector, results, collection, limit, query_filter
+            )
+
+        return results
+
+    def _expand_search(
+        self,
+        dense_vector: list[float],
+        sparse_vector: models.SparseVector,
+        primary_results: list[SearchResult],
+        collection: str,
+        limit: int,
+        query_filter: models.Filter | None,
+    ) -> list[SearchResult]:
+        """Fan out to all vectors when primary confidence is low."""
+        all_prefetches = [
+            models.Prefetch(query=dense_vector, using="signature", limit=20),
+            models.Prefetch(query=dense_vector, using="semantic", limit=20),
+            models.Prefetch(query=dense_vector, using="body", limit=20),
+            models.Prefetch(query=sparse_vector, using="bm25", limit=30),
+        ]
+
+        expansion_points = self._qdrant.query_hybrid(
+            collection=collection,
+            prefetches=all_prefetches,
+            limit=limit,
+            query_filter=query_filter,
+        )
+
+        expansion_results = [self._point_to_result(p) for p in expansion_points]
+
+        # Merge: keep max score per chunk_id
+        merged: dict[str, SearchResult] = {}
+        for result in primary_results + expansion_results:
+            key = result.chunk_id or f"{result.file_path}:{result.line_start}"
+            existing = merged.get(key)
+            if existing is None or result.score > existing.score:
+                merged[key] = result
+
+        combined = sorted(merged.values(), key=lambda r: r.score, reverse=True)
+        return combined[:limit]
+
+    # Intent-to-vector mapping: which named vector to query per intent
+    _INTENT_VECTOR_MAP: dict[QueryIntent, str] = {
+        QueryIntent.LOCATION: "signature",
+        QueryIntent.CODE: "semantic",
+        QueryIntent.DEBUG: "semantic",
+        QueryIntent.DOCS: "semantic",
+    }
 
     def _build_prefetches(
         self,
@@ -75,15 +130,13 @@ class HybridSearchEngine:
         active_file: str | None,
         intent: QueryIntent | None,
     ) -> list[models.Prefetch]:
-        """Build multi-prefetch list with structural boosting.
+        """Build multi-prefetch list with intent-adaptive vector selection."""
+        primary_vector = self._INTENT_VECTOR_MAP.get(intent or QueryIntent.CODE, "semantic")
+        bm25_limit = 50 if intent == QueryIntent.LOCATION else 30
 
-        Per DESIGN.md lines 588-621.
-        """
         prefetches: list[models.Prefetch] = [
-            # Base semantic search
-            models.Prefetch(query=dense_vector, using="dense", limit=30),
-            # Base keyword search
-            models.Prefetch(query=sparse_vector, using="bm25", limit=30),
+            models.Prefetch(query=dense_vector, using=primary_vector, limit=30),
+            models.Prefetch(query=sparse_vector, using="bm25", limit=bm25_limit),
         ]
 
         # Structural boost: same module gets extra candidates (Tradeoff A)
@@ -93,7 +146,7 @@ class HybridSearchEngine:
                 prefetches.append(
                     models.Prefetch(
                         query=dense_vector,
-                        using="dense",
+                        using=primary_vector,
                         filter=models.Filter(
                             must=[
                                 models.FieldCondition(
@@ -105,24 +158,6 @@ class HybridSearchEngine:
                         limit=15,
                     )
                 )
-
-        # Intent-based boost: debug queries get more test files
-        if intent == QueryIntent.DEBUG:
-            prefetches.append(
-                models.Prefetch(
-                    query=dense_vector,
-                    using="dense",
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="is_test",
-                                match=models.MatchValue(value=True),
-                            )
-                        ]
-                    ),
-                    limit=10,
-                )
-            )
 
         return prefetches
 
@@ -146,4 +181,5 @@ class HybridSearchEngine:
             chunk_id=payload.get("chunk_id", ""),
             docstring=payload.get("docstring", ""),
             is_test=payload.get("is_test", False),
+            importance_score=payload.get("importance_score", 0.0),
         )

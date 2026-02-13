@@ -91,6 +91,46 @@ class TestResultToDict:
         assert d["function_name"] == "parse"
 
 
+class TestResultDictNewFields:
+    """Test enriched and importance_score fields in result dicts."""
+
+    def test_importance_score_included_when_nonzero(self):
+        result = _mock_search_result(importance_score=0.75)
+        d = _result_to_dict(result, detail="compact")
+        assert d["importance_score"] == 0.75
+
+    def test_importance_score_omitted_when_zero(self):
+        result = _mock_search_result(importance_score=0.0)
+        d = _result_to_dict(result, detail="compact")
+        assert "importance_score" not in d
+
+    def test_enriched_included_when_present(self):
+        result = _mock_search_result(enriched=True)
+        d = _result_to_dict(result, detail="compact")
+        assert d["enriched"] is True
+
+    def test_enriched_false_included(self):
+        result = _mock_search_result(enriched=False)
+        d = _result_to_dict(result, detail="compact")
+        assert d["enriched"] is False
+
+    def test_enriched_omitted_when_not_present(self):
+        """When result has no enriched attribute, it is not in the dict."""
+        result = _mock_search_result()
+        # Mock objects return Mock for any attribute by default,
+        # so we need spec to avoid that — instead, just delete the attr
+        del result.enriched
+        d = _result_to_dict(result, detail="compact")
+        assert "enriched" not in d
+
+    def test_full_detail_includes_new_fields(self):
+        result = _mock_search_result(importance_score=0.5, enriched=True)
+        d = _result_to_dict(result, detail="full")
+        assert d["importance_score"] == 0.5
+        assert d["enriched"] is True
+        assert "content" in d
+
+
 class TestErrorResponse:
     def test_qdrant_connection_error(self):
         from clew.exceptions import QdrantConnectionError

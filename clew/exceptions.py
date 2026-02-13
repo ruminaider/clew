@@ -104,6 +104,4 @@ class SchemaMigrationError(IndexingError):
         self.from_version = from_version
         self.to_version = to_version
         self.original = original
-        super().__init__(
-            f"Schema migration v{from_version} → v{to_version} failed: {original}"
-        )
+        super().__init__(f"Schema migration v{from_version} → v{to_version} failed: {original}")

@@ -318,6 +318,45 @@ def trace(
 
 
 @app.command()
+def reembed(
+    project_root: Path = typer.Argument(".", help="Project root directory"),
+    config: Path = typer.Option("config.yaml", "--config", "-c", help="Config file path"),
+) -> None:
+    """Re-embed enriched chunks into Qdrant.
+
+    Reads enrichment data (description + keywords) from SQLite cache
+    and re-embeds all 3 named vectors with full content.
+    Run this after enrichment data has been written to the cache.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    from clew.exceptions import ClewError
+    from clew.factory import create_components
+
+    try:
+        components = create_components(
+            config_path=config if config.exists() else None,
+        )
+    except ClewError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from None
+
+    # Ensure collection exists
+    components.qdrant.ensure_collection("code", dense_dim=1024)
+
+    console.print("[bold]Re-embedding enriched chunks...[/bold]")
+    result = asyncio.run(components.indexing_pipeline.reembed(collection="code"))
+
+    console.print(
+        f"[green]Done![/green] {result.chunks_created} chunks re-embedded "
+        f"from {result.files_processed} files"
+    )
+    if result.errors:
+        for err in result.errors[:5]:
+            console.print(f"[red]  {err}[/red]")
+
+
+@app.command()
 def serve() -> None:
     """Start the MCP server for Claude Code integration."""
     from clew.mcp_server import mcp as mcp_server

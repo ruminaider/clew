@@ -59,9 +59,7 @@ class VoyageEmbeddingProvider(EmbeddingProvider):
     )
     async def embed(self, texts: list[str], input_type: str = "document") -> list[list[float]]:
         if _circuit_breaker.is_open:
-            raise SearchUnavailableError(
-                "Voyage API circuit breaker is open. Retrying in 60s."
-            )
+            raise SearchUnavailableError("Voyage API circuit breaker is open. Retrying in 60s.")
         try:
             result = await self._client.embed(
                 texts,

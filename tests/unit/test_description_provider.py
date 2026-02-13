@@ -190,3 +190,130 @@ class TestAnthropicDescriptionProvider:
 
         assert len(results) == 5
         assert mock_create.call_count == 5
+
+    async def test_generate_enrichment(self, mock_anthropic: MagicMock) -> None:
+        """Test enrichment generates description + keywords with relationship context."""
+        provider = _make_provider(mock_anthropic)
+
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(
+                text=(
+                    "Description: Processes incoming orders and dispatches notifications.\n"
+                    "Keywords: order processing dispatch notification ecommerce workflow"
+                )
+            )
+        ]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            result = await provider.generate_enrichment(
+                code="def process_order(order_id): pass",
+                language="python",
+                entity_type="function",
+                name="process_order",
+                file_path="ecomm/utils.py",
+                layer="service",
+                app_name="ecomm",
+                callers="views.checkout",
+                callees="tasks.void_order, notifications.send_email",
+                imports="models.Order",
+            )
+
+        assert result is not None
+        desc, keywords = result
+        assert "Processes incoming orders" in desc
+        assert "order" in keywords
+
+        # Verify the prompt includes relationship context
+        call_kwargs = mock_create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "Called by: views.checkout" in prompt
+        assert "Calls: tasks.void_order" in prompt
+        assert "Imports: models.Order" in prompt
+
+    async def test_generate_enrichment_returns_none_on_error(
+        self, mock_anthropic: MagicMock
+    ) -> None:
+        provider = _make_provider(mock_anthropic)
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.side_effect = Exception("API error")
+            result = await provider.generate_enrichment(
+                code="def broken(): pass",
+                language="python",
+                entity_type="function",
+                name="broken",
+            )
+
+        assert result is None
+
+    async def test_generate_enrichment_empty_relationships(self, mock_anthropic: MagicMock) -> None:
+        """Enrichment works with empty relationship fields."""
+        provider = _make_provider(mock_anthropic)
+
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(text="Description: A simple helper.\nKeywords: helper utility")
+        ]
+
+        with patch.object(
+            provider._client.messages, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_response
+            result = await provider.generate_enrichment(
+                code="def helper(): pass",
+                language="python",
+                entity_type="function",
+                name="helper",
+            )
+
+        assert result is not None
+        desc, keywords = result
+        assert desc == "A simple helper."
+        assert keywords == "helper utility"
+
+        # Verify empty relationships show as (none) in prompt
+        call_kwargs = mock_create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "(none)" in prompt
+
+
+class TestParseEnrichmentResponse:
+    """Test enrichment response parsing."""
+
+    def test_standard_format(self) -> None:
+        from clew.clients.description import parse_enrichment_response
+
+        text = "Description: Processes orders.\nKeywords: order process ecommerce"
+        desc, kw = parse_enrichment_response(text)
+        assert desc == "Processes orders."
+        assert kw == "order process ecommerce"
+
+    def test_unstructured_fallback(self) -> None:
+        from clew.clients.description import parse_enrichment_response
+
+        text = "This is a free-form description without labels."
+        desc, kw = parse_enrichment_response(text)
+        assert desc == text
+        assert kw == ""
+
+    def test_extra_whitespace(self) -> None:
+        from clew.clients.description import parse_enrichment_response
+
+        text = "  Description:   Handles auth.  \n  Keywords:   auth login token  "
+        desc, kw = parse_enrichment_response(text)
+        assert desc == "Handles auth."
+        assert kw == "auth login token"
+
+    def test_case_insensitive(self) -> None:
+        from clew.clients.description import parse_enrichment_response
+
+        text = "description: Does stuff.\nkeywords: thing stuff"
+        desc, kw = parse_enrichment_response(text)
+        assert desc == "Does stuff."
+        assert kw == "thing stuff"

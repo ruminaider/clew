@@ -34,6 +34,17 @@ class TestClassifyIntent:
     def test_code_query(self) -> None:
         assert classify_intent("prescription fill order model") == QueryIntent.CODE
 
+    def test_leading_underscore_snake_case_is_location(self) -> None:
+        """Bare identifiers with leading underscore should be LOCATION (V2 fix)."""
+        assert classify_intent("_process_shopify_order_impl") == QueryIntent.LOCATION
+
+    def test_pascal_case_is_location(self) -> None:
+        assert classify_intent("PrescriptionFill") == QueryIntent.LOCATION
+
+    def test_natural_language_not_location(self) -> None:
+        """Natural language with spaces should not match as bare identifier."""
+        assert classify_intent("how does order processing work") != QueryIntent.LOCATION
+
 
 class TestIntentCollectionPreference:
     def test_docs_prefers_docs_collection(self) -> None:

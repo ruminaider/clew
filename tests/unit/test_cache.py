@@ -133,7 +133,7 @@ class TestClearAllState:
         return CacheDB(temp_cache_dir)
 
     def test_clears_state_tables(self, cache: CacheDB) -> None:
-        """clear_all_state wipes code_relationships, failed_files, checkpoints, index_state, chunk_cache."""
+        """clear_all_state wipes relationships, failed_files, checkpoints, state, chunks."""
         from clew.indexer.relationships import Relationship
 
         # Populate state tables
@@ -329,17 +329,18 @@ class TestBFSTraversal:
         same entity don't incur additional LIKE queries.
         """
         from unittest.mock import patch
+
         from clew.indexer.relationships import Relationship
 
-        cache.store_relationships([
-            Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
-            Relationship("b.py::Bar", "calls", "c.py::Baz", "b.py"),
-        ])
+        cache.store_relationships(
+            [
+                Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
+                Relationship("b.py::Bar", "calls", "c.py::Baz", "b.py"),
+            ]
+        )
 
         with patch.object(cache, "resolve_entity", wraps=cache.resolve_entity) as mock_resolve:
-            result = cache.traverse_relationships(
-                "a.py::Foo", direction="outbound", max_depth=2
-            )
+            result = cache.traverse_relationships("a.py::Foo", direction="outbound", max_depth=2)
             assert len(result) == 2
 
             # resolve_entity should be called for each unique next_entity
@@ -351,21 +352,22 @@ class TestBFSTraversal:
     def test_bfs_resolution_cache_deduplicates(self, cache: CacheDB) -> None:
         """Resolution cache avoids calling resolve_entity multiple times for same entity."""
         from unittest.mock import patch
+
         from clew.indexer.relationships import Relationship
 
         # Create a diamond: A -> B, A -> C, B -> D, C -> D
         # D appears as target_entity twice but resolve_entity should only be called once for it
-        cache.store_relationships([
-            Relationship("a.py::A", "calls", "b.py::B", "a.py"),
-            Relationship("a.py::A", "calls", "c.py::C", "a.py"),
-            Relationship("b.py::B", "calls", "d.py::D", "b.py"),
-            Relationship("c.py::C", "calls", "d.py::D", "c.py"),
-        ])
+        cache.store_relationships(
+            [
+                Relationship("a.py::A", "calls", "b.py::B", "a.py"),
+                Relationship("a.py::A", "calls", "c.py::C", "a.py"),
+                Relationship("b.py::B", "calls", "d.py::D", "b.py"),
+                Relationship("c.py::C", "calls", "d.py::D", "c.py"),
+            ]
+        )
 
         with patch.object(cache, "resolve_entity", wraps=cache.resolve_entity) as mock_resolve:
-            result = cache.traverse_relationships(
-                "a.py::A", direction="outbound", max_depth=2
-            )
+            result = cache.traverse_relationships("a.py::A", direction="outbound", max_depth=2)
             # Should find B, C at depth 1, and D at depth 2
             assert len(result) >= 3
 
@@ -461,3 +463,90 @@ class TestResolveEntity:
         # resolve_entity should prefer the source_entity match.
         result = cache.resolve_entity("Gadget")
         assert result == "/some/path/models.py::Gadget"
+
+
+class TestEnrichmentCache:
+    """Test enrichment cache CRUD operations."""
+
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_get_enrichment_missing(self, cache: CacheDB) -> None:
+        result = cache.get_enrichment("nonexistent_chunk")
+        assert result is None
+
+    def test_set_and_get_enrichment(self, cache: CacheDB) -> None:
+        cache.set_enrichment("file.py::Foo", "A Foo class.", "foo bar baz")
+        result = cache.get_enrichment("file.py::Foo")
+        assert result is not None
+        assert result[0] == "A Foo class."
+        assert result[1] == "foo bar baz"
+
+    def test_enrichment_upsert(self, cache: CacheDB) -> None:
+        cache.set_enrichment("file.py::Foo", "Old desc.", "old keywords")
+        cache.set_enrichment("file.py::Foo", "New desc.", "new keywords")
+        result = cache.get_enrichment("file.py::Foo")
+        assert result is not None
+        assert result[0] == "New desc."
+        assert result[1] == "new keywords"
+
+    def test_enrichment_stores_timestamp(self, cache: CacheDB) -> None:
+        import time
+
+        before = time.time()
+        cache.set_enrichment("file.py::Foo", "Desc.", "kw")
+        after = time.time()
+
+        with cache._get_cache_conn() as conn:
+            row = conn.execute(
+                "SELECT enriched_at FROM enrichment_cache WHERE chunk_id = ?",
+                ("file.py::Foo",),
+            ).fetchone()
+            assert row is not None
+            assert before <= row["enriched_at"] <= after
+
+
+class TestGetAllRelationshipPairs:
+    """Test get_all_relationship_pairs method."""
+
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_empty_returns_empty(self, cache: CacheDB) -> None:
+        result = cache.get_all_relationship_pairs()
+        assert result == []
+
+    def test_returns_all_pairs(self, cache: CacheDB) -> None:
+        from clew.indexer.relationships import Relationship
+
+        rels = [
+            Relationship("a.py::Foo", "calls", "b.py::Bar", "a.py"),
+            Relationship("c.py::Baz", "imports", "d.py::Qux", "c.py"),
+        ]
+        cache.store_relationships(rels)
+        pairs = cache.get_all_relationship_pairs()
+        assert len(pairs) == 2
+        assert ("a.py::Foo", "b.py::Bar") in pairs
+        assert ("c.py::Baz", "d.py::Qux") in pairs
+
+
+class TestSchemaMigration:
+    """Test schema migration from v2 to v3."""
+
+    def test_new_database_has_enrichment_table(self, temp_cache_dir: Path) -> None:
+        """A fresh CacheDB creates the enrichment_cache table."""
+        cache = CacheDB(temp_cache_dir)
+        # Should be able to use enrichment methods without error
+        cache.set_enrichment("test::chunk", "desc", "keywords")
+        result = cache.get_enrichment("test::chunk")
+        assert result == ("desc", "keywords")
+
+    def test_clear_all_state_clears_enrichment(self, temp_cache_dir: Path) -> None:
+        """clear_all_state should also clear enrichment_cache."""
+        cache = CacheDB(temp_cache_dir)
+        cache.set_enrichment("test::chunk", "desc", "keywords")
+        cache.clear_all_state("code")
+        result = cache.get_enrichment("test::chunk")
+        assert result is None

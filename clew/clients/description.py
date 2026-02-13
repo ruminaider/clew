@@ -24,6 +24,48 @@ _DESCRIPTION_PROMPT = (
     "Description:"
 )
 
+_ENRICHMENT_PROMPT = (
+    "Generate a description and search keywords for this code entity.\n"
+    "\n"
+    "Entity: {name}\n"
+    "Type: {entity_type}\n"
+    "File: {file_path} ({layer} layer, {app_name} app)\n"
+    "Called by: {callers}\n"
+    "Calls: {callees}\n"
+    "Imports: {imports}\n"
+    "\n"
+    "```{language}\n"
+    "{code}\n"
+    "```\n"
+    "\n"
+    "Respond in exactly this format:\n"
+    "Description: <2-3 sentences: what it does, why it exists, what domain concept it represents>\n"
+    "Keywords: <8-15 space-separated terms a developer might search for>"
+)
+
+
+def parse_enrichment_response(text: str) -> tuple[str, str]:
+    """Parse a Description + Keywords response.
+
+    Returns (description, keywords) tuple.
+    Falls back gracefully if format is unexpected.
+    """
+    description = ""
+    keywords = ""
+
+    for line in text.strip().splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("description:"):
+            description = stripped[len("description:") :].strip()
+        elif stripped.lower().startswith("keywords:"):
+            keywords = stripped[len("keywords:") :].strip()
+
+    # If no structured format found, use entire text as description
+    if not description and not keywords:
+        description = text.strip()
+
+    return description, keywords
+
 
 class DescriptionProvider(ABC):
     """Abstract base class for description generation providers."""
@@ -47,6 +89,30 @@ class DescriptionProvider(ABC):
         Returns None if generation fails.
         """
         ...
+
+    async def generate_enrichment(
+        self,
+        code: str,
+        language: str,
+        entity_type: str,
+        name: str,
+        *,
+        file_path: str = "",
+        layer: str = "",
+        app_name: str = "",
+        callers: str = "",
+        callees: str = "",
+        imports: str = "",
+    ) -> tuple[str, str] | None:
+        """Generate description + keywords with relationship context.
+
+        Returns (description, keywords) tuple, or None if generation fails.
+        """
+        # Default implementation falls back to generate_description
+        desc = await self.generate_description(code, language, entity_type, name)
+        if desc:
+            return desc, ""
+        return None
 
     async def generate_batch(self, items: list[dict[str, str]]) -> list[str | None]:
         """Generate descriptions for multiple items concurrently.
@@ -116,6 +182,56 @@ class AnthropicDescriptionProvider(DescriptionProvider):
         except Exception:
             logger.warning(
                 "Failed to generate description for %s '%s'",
+                entity_type,
+                name,
+                exc_info=True,
+            )
+            return None
+
+    async def generate_enrichment(
+        self,
+        code: str,
+        language: str,
+        entity_type: str,
+        name: str,
+        *,
+        file_path: str = "",
+        layer: str = "",
+        app_name: str = "",
+        callers: str = "",
+        callees: str = "",
+        imports: str = "",
+    ) -> tuple[str, str] | None:
+        """Generate description + keywords with relationship context."""
+        prompt = _ENRICHMENT_PROMPT.format(
+            entity_type=entity_type,
+            name=name,
+            language=language,
+            code=code,
+            file_path=file_path,
+            layer=layer,
+            app_name=app_name,
+            callers=callers or "(none)",
+            callees=callees or "(none)",
+            imports=imports or "(none)",
+        )
+        try:
+            async with self._semaphore:
+                response = await self._client.messages.create(
+                    model=self._model,
+                    max_tokens=300,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            block = response.content[0]
+            if not hasattr(block, "text"):
+                return None
+            text: str = block.text.strip()
+            if not text:
+                return None
+            return parse_enrichment_response(text)
+        except Exception:
+            logger.warning(
+                "Failed to generate enrichment for %s '%s'",
                 entity_type,
                 name,
                 exc_info=True,

@@ -207,9 +207,11 @@ class TestIndexCommand:
         mock_changes = Mock(
             added=[str(test_py)], modified=[], deleted=[], unchanged=[], source="git"
         )
-        with patch.object(ChangeDetector, "__init__", return_value=None), patch.object(
-            ChangeDetector, "detect_changes", return_value=mock_changes
-        ), patch.object(ChangeDetector, "get_current_commit", return_value="abc123"):
+        with (
+            patch.object(ChangeDetector, "__init__", return_value=None),
+            patch.object(ChangeDetector, "detect_changes", return_value=mock_changes),
+            patch.object(ChangeDetector, "get_current_commit", return_value="abc123"),
+        ):
             result = runner.invoke(app, ["index", str(tmp_path)])
 
         assert result.exit_code == 0

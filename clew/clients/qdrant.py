@@ -44,7 +44,13 @@ class QdrantManager:
         return self._client
 
     def ensure_collection(self, name: str, dense_dim: int = 1024) -> None:
-        """Create collection with dense + BM25 sparse vectors if it doesn't exist."""
+        """Create collection with 3 named dense vectors + BM25 sparse vector.
+
+        Named vectors:
+          - "signature": signature text (entity ID, signature, class, app, layer)
+          - "semantic": semantic text (description, keywords, relationships)
+          - "body": raw source code
+        """
         existing = [c.name for c in self._client.get_collections().collections]
         if name in existing:
             logger.debug("Collection '%s' already exists", name)
@@ -53,10 +59,18 @@ class QdrantManager:
         self._client.create_collection(
             collection_name=name,
             vectors_config={
-                "dense": models.VectorParams(
+                "signature": models.VectorParams(
                     size=dense_dim,
                     distance=models.Distance.COSINE,
-                )
+                ),
+                "semantic": models.VectorParams(
+                    size=dense_dim,
+                    distance=models.Distance.COSINE,
+                ),
+                "body": models.VectorParams(
+                    size=dense_dim,
+                    distance=models.Distance.COSINE,
+                ),
             },
             sparse_vectors_config={
                 "bm25": models.SparseVectorParams(
@@ -65,7 +79,7 @@ class QdrantManager:
             },
         )
         logger.info(
-            "Created collection '%s' (dense=%d dims, sparse=bm25+IDF)",
+            "Created collection '%s' (3 named vectors @ %d dims, sparse=bm25+IDF)",
             name,
             dense_dim,
         )

@@ -2,6 +2,10 @@
 
 Uses structured chunk IDs, full metadata payload, and BM25 sparse vectors
 with raw term counts.
+
+V2 architecture: Two-pass indexing with 3 named vectors.
+  Pass 1 (basic index, no LLM): signature + semantic stub + body vectors
+  Pass 2 (enrichment, LLM required): re-embed with description + keywords
 """
 
 from __future__ import annotations
@@ -19,10 +23,12 @@ from clew.chunker.fallback import Chunk, split_file
 from clew.chunker.parser import ASTParser
 from clew.chunker.tokenizer import count_tokens
 from clew.indexer.extractors.api_boundary import APIBoundaryMatcher
+from clew.indexer.extractors.django_models import DjangoModelFieldExtractor
 from clew.indexer.extractors.django_urls import DjangoURLExtractor
 from clew.indexer.extractors.python import PythonRelationshipExtractor
 from clew.indexer.extractors.tests import TestRelationshipExtractor
 from clew.indexer.extractors.typescript import TypeScriptRelationshipExtractor
+from clew.indexer.importance import compute_importance_scores
 from clew.indexer.metadata import (
     build_chunk_id,
     classify_layer,
@@ -62,6 +68,75 @@ def detect_language(file_path: str) -> str:
     """Detect language from file extension."""
     ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
     return LANGUAGE_MAP.get(ext, "unknown")
+
+
+def _build_signature_text(
+    chunk_id: str,
+    signature: str,
+    class_name: str,
+    app_name: str,
+    layer: str,
+) -> str:
+    """Build signature text for the 'signature' vector."""
+    parts = [chunk_id]
+    if signature:
+        parts.append(signature)
+    if class_name:
+        parts.append(f"class: {class_name}")
+    if app_name:
+        parts.append(f"app: {app_name}")
+    if layer:
+        parts.append(f"layer: {layer}")
+    return "\n".join(parts)
+
+
+def _build_semantic_stub(
+    signature_text: str,
+    *,
+    callers: list[str] | None = None,
+    callees: list[str] | None = None,
+    imports: list[str] | None = None,
+) -> str:
+    """Build a semantic stub for Pass 1 (no description/keywords).
+
+    Combines signature text with available relationship data.
+    """
+    parts = [signature_text]
+    if callers:
+        parts.append(f"[Callers]: {', '.join(callers)}")
+    if callees:
+        parts.append(f"[Calls]: {', '.join(callees)}")
+    if imports:
+        parts.append(f"[Imports]: {', '.join(imports)}")
+    return "\n".join(parts)
+
+
+def _build_enriched_semantic_text(
+    file_path: str,
+    layer: str,
+    app_name: str,
+    description: str,
+    keywords: str,
+    *,
+    callers: list[str] | None = None,
+    callees: list[str] | None = None,
+    imports: list[str] | None = None,
+) -> str:
+    """Build enriched semantic text for Pass 2 (with LLM output)."""
+    parts = [
+        f"[File]: {file_path}",
+        f"[Layer]: {layer}",
+        f"[App]: {app_name}",
+        f"[Description]: {description}",
+        f"[Keywords]: {keywords}",
+    ]
+    if callers:
+        parts.append(f"[Callers]: {', '.join(callers)}")
+    if callees:
+        parts.append(f"[Calls]: {', '.join(callees)}")
+    if imports:
+        parts.append(f"[Imports]: {', '.join(imports)}")
+    return "\n".join(parts)
 
 
 @dataclass
@@ -104,6 +179,7 @@ class IndexingPipeline:
         }
         self._test_extractor = TestRelationshipExtractor()
         self._django_url_extractor = DjangoURLExtractor()
+        self._django_model_extractor = DjangoModelFieldExtractor()
         self._api_boundary_matcher = APIBoundaryMatcher()
 
     async def index_files(
@@ -130,9 +206,7 @@ class IndexingPipeline:
                 result.files_skipped += 1
                 result.errors.append(f"{file_path}: {e}")
                 if self._cache:
-                    self._cache.record_failed_file(
-                        str(file_path), type(e).__name__, str(e)
-                    )
+                    self._cache.record_failed_file(str(file_path), type(e).__name__, str(e))
                 continue
 
             if not content.strip():
@@ -149,8 +223,31 @@ class IndexingPipeline:
                 self._max_tokens,
                 self._parser,
             )
+
+            # Generate file summary chunk
+            file_summary = self._build_file_summary(str(file_path), content, chunks)
+            if file_summary:
+                chunks.append(file_summary)
+
             all_chunks.extend(chunks)
             result.files_processed += 1
+
+            # Cache chunk IDs for this file (needed by reembed)
+            if self._cache:
+                import hashlib
+
+                file_hash = hashlib.sha256(content.encode()).hexdigest()
+                chunk_ids = [
+                    build_chunk_id(
+                        c.file_path,
+                        c.metadata.get("entity_type", "section"),
+                        c.metadata.get(
+                            "qualified_name", c.metadata.get("name", "")
+                        ),
+                    )
+                    for c in chunks
+                ]
+                self._cache.set_file_chunks(str(file_path), file_hash, chunk_ids)
 
             # Extract and store code relationships
             if self._cache:
@@ -164,6 +261,12 @@ class IndexingPipeline:
         # Post-extraction normalization: resolve remaining bare target_entity values
         if self._cache:
             self._normalize_relationship_targets()
+
+        # Compute importance scores from relationship graph
+        importance_scores: dict[str, float] = {}
+        if self._cache:
+            pairs = self._cache.get_all_relationship_pairs()
+            importance_scores = compute_importance_scores(pairs)
 
         if not all_chunks:
             return result
@@ -184,9 +287,7 @@ class IndexingPipeline:
 
             # Skip already-completed batches
             if batch_num - 1 <= last_checkpoint:
-                logger.debug(
-                    "Skipping batch %d/%d (checkpointed)", batch_num, total_batches
-                )
+                logger.debug("Skipping batch %d/%d (checkpointed)", batch_num, total_batches)
                 result.chunks_created += len(batch)
                 continue
 
@@ -197,7 +298,7 @@ class IndexingPipeline:
                 len(batch),
             )
             try:
-                await self._embed_and_upsert(batch, collection)
+                await self._embed_and_upsert(batch, collection, importance_scores=importance_scores)
                 result.chunks_created += len(batch)
                 # Save checkpoint on success
                 if self._cache:
@@ -213,6 +314,99 @@ class IndexingPipeline:
             self._cache.clear_checkpoints(collection)
 
         return result
+
+    def _build_file_summary(
+        self, file_path: str, content: str, chunks: list[Chunk]
+    ) -> Chunk | None:
+        """Build a synthetic file_summary chunk from a file's chunks."""
+        # Collect signatures from all entity chunks
+        signatures: list[str] = []
+        for c in chunks:
+            entity_type = c.metadata.get("entity_type", "section")
+            if entity_type in ("function", "class", "method"):
+                sig = extract_signature(entity_type, c.content)
+                if sig:
+                    signatures.append(sig)
+
+        # Extract module docstring (first line starting with """ or ''')
+        module_docstring = ""
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith(('"""', "'''")):
+                module_docstring = stripped.strip("\"'")
+                break
+            if stripped and not stripped.startswith("#"):
+                break
+
+        # Extract import list
+        import_lines: list[str] = []
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("import ") or stripped.startswith("from "):
+                import_lines.append(stripped)
+
+        # Build summary content
+        parts = [f"# File: {file_path}"]
+        if module_docstring:
+            parts.append(f"# {module_docstring}")
+        if import_lines:
+            parts.append("# Imports: " + ", ".join(import_lines[:20]))
+        if signatures:
+            parts.append("# Entities:")
+            parts.extend(f"#   {s}" for s in signatures[:30])
+
+        summary_content = "\n".join(parts)
+        if not signatures and not import_lines:
+            return None
+
+        return Chunk(
+            content=summary_content,
+            source="synthetic",
+            file_path=file_path,
+            metadata={
+                "entity_type": "file_summary",
+                "chunk_type": "file_summary",
+                "qualified_name": "__file_summary__",
+                "name": "file_summary",
+            },
+        )
+
+    def _get_chunk_relationships(self, chunk_id: str) -> tuple[list[str], list[str], list[str]]:
+        """Get callers, callees, and imports for a chunk from the cache.
+
+        Returns (callers, callees, imports) lists.
+        """
+        callers: list[str] = []
+        callees: list[str] = []
+        imports: list[str] = []
+
+        if not self._cache:
+            return callers, callees, imports
+
+        # Extract entity name from chunk_id (format: file_path::entity_type::name)
+        parts = chunk_id.split("::")
+        if len(parts) < 3:
+            return callers, callees, imports
+
+        # Build entity key: file_path::qualified_name
+        file_path = parts[0]
+        qualified_name = parts[2] if len(parts) >= 3 else ""
+        entity_key = f"{file_path}::{qualified_name}" if qualified_name else file_path
+
+        rels = self._cache.get_relationships(entity_key, direction="both")
+        for r in rels:
+            if r.relationship == "imports" and r.source_entity == entity_key:
+                target = r.target_entity
+                imports.append(target.split("::")[-1] if "::" in target else target)
+            elif r.relationship == "calls":
+                if r.source_entity == entity_key:
+                    target = r.target_entity
+                    callees.append(target.split("::")[-1] if "::" in target else target)
+                else:
+                    source = r.source_entity
+                    callers.append(source.split("::")[-1] if "::" in source else source)
+
+        return callers, callees, imports
 
     def _extract_relationships(self, file_path: str, content: str) -> list[dict[str, str]]:
         """Extract code relationships from a file and store in cache.
@@ -247,6 +441,9 @@ class IndexingPipeline:
                     url_patterns = self._django_url_extractor.extract_url_patterns(
                         tree, content, file_path
                     )
+                    # Extract Django model field relationships
+                    model_rels = self._django_model_extractor.extract(tree, content, file_path)
+                    all_rels.extend(model_rels)
             except Exception:
                 logger.debug("Relationship extraction failed for %s", file_path)
 
@@ -259,11 +456,6 @@ class IndexingPipeline:
         """Match frontend API calls to backend URL patterns."""
         assert self._cache is not None
 
-        # Collect all calls_api relationships from the store
-        # We need to scan by querying relationships — get all calls_api rels
-        # by checking outbound relationships of known API-calling entities.
-        # Since we can't enumerate all entities, query by relationship type
-        # using a direct SQL query.
         from clew.indexer.relationships import Relationship as _Relationship
 
         api_calls: list[_Relationship] = []
@@ -299,9 +491,7 @@ class IndexingPipeline:
 
         with self._cache._get_state_conn() as conn:
             # Build symbol index: bare_name → [fully_qualified_names]
-            rows = conn.execute(
-                "SELECT DISTINCT source_entity FROM code_relationships"
-            ).fetchall()
+            rows = conn.execute("SELECT DISTINCT source_entity FROM code_relationships").fetchall()
 
             symbol_index: dict[str, list[str]] = {}
             for (source_entity,) in rows:
@@ -326,7 +516,7 @@ class IndexingPipeline:
                     resolved = candidates[0]
                     if base_name != target:
                         # Preserve the dotted suffix: Foo.bar → resolved::Foo.bar
-                        suffix = target[len(base_name):]
+                        suffix = target[len(base_name) :]
                         resolved = f"{resolved}{suffix}"
                     updates.append((resolved, target))
 
@@ -335,15 +525,11 @@ class IndexingPipeline:
                     "Post-extraction normalization: resolved %d bare target entities",
                     len(updates),
                 )
-                # Use OR IGNORE: if the resolved target already exists as a row
-                # (same source + relationship + target PK), skip the update.
                 conn.executemany(
                     "UPDATE OR IGNORE code_relationships SET target_entity = ? "
                     "WHERE target_entity = ?",
                     updates,
                 )
-                # Delete any leftover unresolved rows (skipped due to PK conflict —
-                # the file-qualified version already exists, so these are redundant)
                 for resolved, original in updates:
                     conn.execute(
                         "DELETE FROM code_relationships WHERE target_entity = ?",
@@ -351,8 +537,6 @@ class IndexingPipeline:
                     )
 
             # Second pass: resolve module-qualified targets
-            # These have :: but use dots in the module path (not slashes)
-            # e.g., "ecomm.tasks::void_order" → "/abs/path/backend/ecomm/tasks.py::void_order"
             module_qualified = conn.execute(
                 "SELECT DISTINCT target_entity FROM code_relationships "
                 "WHERE target_entity LIKE '%::%' AND target_entity NOT LIKE '%/%'"
@@ -367,22 +551,16 @@ class IndexingPipeline:
 
             module_updates: list[tuple[str, str]] = []
             for (target,) in module_qualified:
-                # Split into module part and symbol part
                 module_part, symbol_part = target.split("::", 1)
-                # Get the base symbol (before any dots, e.g., "PrescriptionFill" from "PrescriptionFill.objects.create")
                 base_symbol = symbol_part.split(".")[0]
                 candidates = file_entities_by_symbol.get(base_symbol, [])
 
-                # Filter candidates: the file path should end with the module path
-                # e.g., module_part "ecomm.tasks" → file should contain "ecomm/tasks"
                 module_as_path = module_part.replace(".", "/")
                 matching = [c for c in candidates if module_as_path in c.split("::")[0]]
 
                 if len(matching) == 1:
-                    # Unambiguous match — resolve
                     resolved_file = matching[0].split("::")[0]
                     if base_symbol != symbol_part:
-                        # Preserve dotted suffix: ecomm.tasks::Foo.bar → /path/ecomm/tasks.py::Foo.bar
                         resolved = f"{resolved_file}::{symbol_part}"
                     else:
                         resolved = f"{resolved_file}::{base_symbol}"
@@ -490,29 +668,28 @@ class IndexingPipeline:
 
         return all_embeddings
 
-    async def _embed_and_upsert(self, chunks: list[Chunk], collection: str) -> None:
-        """Embed a batch of chunks and upsert to Qdrant."""
-        # Generate NL descriptions (if provider configured)
+    async def _embed_and_upsert(
+        self,
+        chunks: list[Chunk],
+        collection: str,
+        *,
+        importance_scores: dict[str, float] | None = None,
+    ) -> None:
+        """Embed a batch of chunks and upsert to Qdrant (Pass 1).
+
+        Uses 3 named vectors: signature, semantic (stub), body.
+        """
+        # Generate NL descriptions (if provider configured — backward compat with --nl-descriptions)
         descriptions = await self._generate_descriptions(chunks)
 
-        # Build texts for embedding: prepend description if available
-        texts: list[str] = []
+        # Build per-chunk metadata and texts for each vector
+        sig_texts: list[str] = []
+        sem_texts: list[str] = []
+        body_texts: list[str] = []
+        chunk_metas: list[dict[str, object]] = []
+
         for i, chunk in enumerate(chunks):
-            desc = descriptions[i] if descriptions else None
-            if desc:
-                texts.append(f"# Description: {desc}\n\n{chunk.content}")
-            else:
-                texts.append(chunk.content)
-
-        embeddings = await self._embed_with_token_limit(texts)
-
-        points: list[models.PointStruct] = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            # BM25 sparse vector from raw content only (not prepended description)
-            sparse = text_to_sparse_vector(chunk.content)
             file_path_str = chunk.file_path
-
-            # Extract metadata
             entity_type = chunk.metadata.get("entity_type", "section")
             qualified_name = chunk.metadata.get("qualified_name", "")
             app_name = detect_app_name(file_path_str)
@@ -525,43 +702,154 @@ class IndexingPipeline:
                 content=chunk.content,
             )
 
+            # Build signature text
+            sig_text = _build_signature_text(
+                chunk_id,
+                signature,
+                chunk.metadata.get("parent_class", ""),
+                app_name,
+                layer,
+            )
+
+            # Get relationship context for semantic stub
+            callers, callees, imports = self._get_chunk_relationships(chunk_id)
+
+            # Check if we have enrichment data in cache
+            enriched = False
+            enrichment_desc = ""
+            enrichment_kw = ""
+            if self._cache:
+                enrichment = self._cache.get_enrichment(chunk_id)
+                if enrichment:
+                    enrichment_desc, enrichment_kw = enrichment
+                    enriched = True
+
+            # Build semantic text
+            desc = descriptions[i] if descriptions else None
+            if enriched:
+                # Use cached enrichment for semantic vector
+                sem_text = _build_enriched_semantic_text(
+                    file_path_str,
+                    layer,
+                    app_name,
+                    enrichment_desc,
+                    enrichment_kw,
+                    callers=callers,
+                    callees=callees,
+                    imports=imports,
+                )
+            elif desc:
+                # Backward compat: use NL description from --nl-descriptions
+                sem_text = _build_enriched_semantic_text(
+                    file_path_str,
+                    layer,
+                    app_name,
+                    desc,
+                    "",
+                    callers=callers,
+                    callees=callees,
+                    imports=imports,
+                )
+                enriched = True
+            else:
+                # Pass 1 stub: signature + relationships
+                sem_text = _build_semantic_stub(
+                    sig_text,
+                    callers=callers,
+                    callees=callees,
+                    imports=imports,
+                )
+
+            sig_texts.append(sig_text)
+            sem_texts.append(sem_text)
+            body_texts.append(chunk.content)
+
+            # Compute importance score for this chunk's file
+            importance_score = 0.0
+            if importance_scores:
+                importance_score = importance_scores.get(file_path_str, 0.0)
+
+            chunk_metas.append(
+                {
+                    "chunk": chunk,
+                    "chunk_id": chunk_id,
+                    "entity_type": entity_type,
+                    "qualified_name": qualified_name,
+                    "app_name": app_name,
+                    "layer": layer,
+                    "signature": signature,
+                    "enriched": enriched,
+                    "importance_score": importance_score,
+                    "description": enrichment_desc or (desc or ""),
+                    "keywords": enrichment_kw,
+                }
+            )
+
+        # Embed all three vectors
+        sig_embeddings = await self._embed_with_token_limit(sig_texts)
+        sem_embeddings = await self._embed_with_token_limit(sem_texts)
+        body_embeddings = await self._embed_with_token_limit(body_texts)
+
+        points: list[models.PointStruct] = []
+        for i, meta in enumerate(chunk_metas):
+            pt_chunk = meta["chunk"]
+            assert isinstance(pt_chunk, Chunk)
+            pt_chunk_id = str(meta["chunk_id"])
+            pt_enriched = bool(meta["enriched"])
+
+            # BM25 sparse vector
+            if pt_enriched:
+                # Pass 2: semantic text + raw code
+                sparse_text = sem_texts[i] + "\n" + pt_chunk.content
+            else:
+                # Pass 1: raw code only
+                sparse_text = pt_chunk.content
+            sparse = text_to_sparse_vector(sparse_text)
+
+            file_path_str = pt_chunk.file_path
+
             payload: dict[str, object] = {
-                "content": chunk.content,
-                "chunk_id": chunk_id,
+                "content": pt_chunk.content,
+                "chunk_id": pt_chunk_id,
                 "file_path": file_path_str,
                 "language": detect_language(file_path_str),
-                "chunk_type": entity_type,
-                "class_name": chunk.metadata.get("parent_class", ""),
-                "function_name": chunk.metadata.get("name", ""),
-                "signature": signature,
-                "app_name": app_name,
-                "layer": layer,
-                "line_start": chunk.metadata.get("line_start", 0),
-                "line_end": chunk.metadata.get("line_end", 0),
+                "chunk_type": meta["entity_type"],
+                "class_name": pt_chunk.metadata.get("parent_class", ""),
+                "function_name": pt_chunk.metadata.get("name", ""),
+                "signature": meta["signature"],
+                "app_name": meta["app_name"],
+                "layer": meta["layer"],
+                "line_start": pt_chunk.metadata.get("line_start", 0),
+                "line_end": pt_chunk.metadata.get("line_end", 0),
                 "is_test": is_test_file(file_path_str),
                 "source_type": collection,
                 "embedding_model": self._embedder.model_name,
                 "indexed_at": datetime.now(tz=timezone.utc).isoformat(),
+                "enriched": pt_enriched,
+                "importance_score": meta["importance_score"],
             }
 
-            # Add NL description if generated
-            desc = descriptions[i] if descriptions else None
-            if desc:
-                payload["nl_description"] = desc
+            # Add description/keywords if available
+            if meta["description"]:
+                payload["description"] = meta["description"]
+                payload["nl_description"] = meta["description"]  # backward compat
+            if meta["keywords"]:
+                payload["keywords"] = meta["keywords"]
 
             # Add docstring from chunk metadata if present
-            docstring = chunk.metadata.get("docstring")
+            docstring = pt_chunk.metadata.get("docstring")
             if docstring:
                 payload["docstring"] = docstring
 
-            # Qdrant requires UUID or int IDs -- generate deterministic UUID from chunk_id
-            point_id = str(uuid.uuid5(CHUNK_UUID_NAMESPACE, chunk_id))
+            point_id = str(uuid.uuid5(CHUNK_UUID_NAMESPACE, pt_chunk_id))
 
             points.append(
                 models.PointStruct(
                     id=point_id,
                     vector={
-                        "dense": embedding,
+                        "signature": sig_embeddings[i],
+                        "semantic": sem_embeddings[i],
+                        "body": body_embeddings[i],
                         "bm25": models.SparseVector(
                             indices=sparse.indices,
                             values=sparse.values,
@@ -572,3 +860,180 @@ class IndexingPipeline:
             )
 
         self._qdrant.upsert_points(collection, points)
+
+    async def reembed(self, collection: str = "code") -> IndexingResult:
+        """Re-embed all chunks using cached enrichment data (Pass 2).
+
+        Reads chunks from SQLite chunk cache, enrichment from enrichment_cache,
+        and re-embeds with full content into all 3 named vectors.
+        """
+        result = IndexingResult()
+        if not self._cache:
+            result.errors.append("No cache configured")
+            return result
+
+        # Compute importance scores
+        pairs = self._cache.get_all_relationship_pairs()
+        importance_scores = compute_importance_scores(pairs)
+
+        # Get all files from chunk cache
+        with self._cache._get_cache_conn() as conn:
+            rows = conn.execute("SELECT file_path, chunk_ids FROM chunk_cache").fetchall()
+
+        if not rows:
+            logger.info("No chunks in cache to re-embed")
+            return result
+
+        # Collect chunks that have enrichment data
+        chunks_to_embed: list[tuple[str, str, str, str]] = []  # (chunk_id, file_path, desc, kw)
+        for row in rows:
+            file_path = row["file_path"]
+            import json
+
+            chunk_ids = json.loads(row["chunk_ids"])
+            for chunk_id in chunk_ids:
+                enrichment = self._cache.get_enrichment(chunk_id)
+                if enrichment:
+                    desc, kw = enrichment
+                    chunks_to_embed.append((chunk_id, file_path, desc, kw))
+
+        if not chunks_to_embed:
+            logger.info("No enriched chunks to re-embed")
+            return result
+
+        logger.info("Re-embedding %d enriched chunks", len(chunks_to_embed))
+
+        # Process in batches
+        for i in range(0, len(chunks_to_embed), self._batch_size):
+            batch = chunks_to_embed[i : i + self._batch_size]
+
+            sig_texts: list[str] = []
+            sem_texts: list[str] = []
+            body_texts: list[str] = []
+            point_data: list[dict[str, object]] = []
+
+            for chunk_id, file_path, desc, kw in batch:
+                # Read the source file to get raw content
+                try:
+                    content = Path(file_path).read_text(encoding="utf-8", errors="replace")
+                except (OSError, UnicodeDecodeError):
+                    logger.debug("Cannot read %s for re-embed, skipping", file_path)
+                    continue
+
+                # Parse chunk_id to extract metadata
+                parts = chunk_id.split("::")
+                entity_type = parts[1] if len(parts) >= 2 else "section"
+                qualified_name = parts[2] if len(parts) >= 3 else ""
+
+                app_name = detect_app_name(file_path)
+                layer = classify_layer(file_path)
+                signature = extract_signature(entity_type, content)
+                class_name = ""
+                if "." in qualified_name:
+                    class_name = qualified_name.split(".")[0]
+
+                # Build signature text
+                sig_text = _build_signature_text(chunk_id, signature, class_name, app_name, layer)
+
+                # Get relationship context
+                callers, callees, imports = self._get_chunk_relationships(chunk_id)
+
+                # Build enriched semantic text
+                sem_text = _build_enriched_semantic_text(
+                    file_path,
+                    layer,
+                    app_name,
+                    desc,
+                    kw,
+                    callers=callers,
+                    callees=callees,
+                    imports=imports,
+                )
+
+                # For body, use the content we can find
+                # The actual chunk content may be a subset of the file
+                # Use the full file for now as a reasonable approximation
+                body_text = content
+
+                sig_texts.append(sig_text)
+                sem_texts.append(sem_text)
+                body_texts.append(body_text)
+
+                importance = importance_scores.get(file_path, 0.0)
+                point_data.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "file_path": file_path,
+                        "entity_type": entity_type,
+                        "app_name": app_name,
+                        "layer": layer,
+                        "signature": signature,
+                        "class_name": class_name,
+                        "importance_score": importance,
+                        "description": desc,
+                        "keywords": kw,
+                        "body_text": body_text,
+                        "sem_text": sem_text,
+                    }
+                )
+
+            if not sig_texts:
+                continue
+
+            # Embed all three vectors
+            sig_embeddings = await self._embed_with_token_limit(sig_texts)
+            sem_embeddings = await self._embed_with_token_limit(sem_texts)
+            body_embeddings = await self._embed_with_token_limit(body_texts)
+
+            points: list[models.PointStruct] = []
+            for j, data in enumerate(point_data):
+                c_id = str(data["chunk_id"])
+                fp = str(data["file_path"])
+
+                # BM25: semantic text + raw code
+                sparse_text = str(data["sem_text"]) + "\n" + str(data["body_text"])
+                sparse = text_to_sparse_vector(sparse_text)
+
+                payload: dict[str, object] = {
+                    "content": data["body_text"],
+                    "chunk_id": c_id,
+                    "file_path": fp,
+                    "language": detect_language(fp),
+                    "chunk_type": data["entity_type"],
+                    "class_name": data["class_name"],
+                    "signature": data["signature"],
+                    "app_name": data["app_name"],
+                    "layer": data["layer"],
+                    "is_test": is_test_file(fp),
+                    "source_type": collection,
+                    "embedding_model": self._embedder.model_name,
+                    "indexed_at": datetime.now(tz=timezone.utc).isoformat(),
+                    "enriched": True,
+                    "importance_score": data["importance_score"],
+                    "description": data["description"],
+                    "nl_description": data["description"],
+                    "keywords": data["keywords"],
+                }
+
+                point_id = str(uuid.uuid5(CHUNK_UUID_NAMESPACE, c_id))
+                points.append(
+                    models.PointStruct(
+                        id=point_id,
+                        vector={
+                            "signature": sig_embeddings[j],
+                            "semantic": sem_embeddings[j],
+                            "body": body_embeddings[j],
+                            "bm25": models.SparseVector(
+                                indices=sparse.indices,
+                                values=sparse.values,
+                            ),
+                        },
+                        payload=payload,
+                    )
+                )
+
+            self._qdrant.upsert_points(collection, points)
+            result.chunks_created += len(points)
+            result.files_processed += len({str(d["file_path"]) for d in point_data})
+
+        return result

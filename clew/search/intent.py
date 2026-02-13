@@ -7,14 +7,10 @@ import re
 from .models import QueryIntent
 
 # Hard DEBUG keywords: always trigger DEBUG intent
-HARD_DEBUG_KEYWORDS = frozenset(
-    {"bug", "error", "crash", "exception", "traceback", "debug"}
-)
+HARD_DEBUG_KEYWORDS = frozenset({"bug", "error", "crash", "exception", "traceback", "debug"})
 
 # Soft DEBUG keywords: need question form or error context to trigger DEBUG
-SOFT_DEBUG_KEYWORDS = frozenset(
-    {"fix", "broken", "why", "failing"}
-)
+SOFT_DEBUG_KEYWORDS = frozenset({"fix", "broken", "why", "failing"})
 
 LOCATION_PHRASES = [
     "where is",
@@ -39,7 +35,7 @@ QUESTION_PREFIXES = ("how", "why", "what", "when", "who", "which")
 
 # Matches PascalCase or snake_case single identifiers (no spaces)
 _BARE_IDENTIFIER_RE = re.compile(
-    r"^(?:[A-Z][a-zA-Z0-9]*(?:[A-Z][a-z0-9]*)*|[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$"
+    r"^(?:[A-Z][a-zA-Z0-9]*(?:[A-Z][a-z0-9]*)*|_?[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$"
 )
 
 

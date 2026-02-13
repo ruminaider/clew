@@ -61,7 +61,7 @@ def _build_snippet(result: Any) -> str:
 
 def _compact_result_to_dict(result: Any) -> dict[str, Any]:
     """Convert a SearchResult to a compact dict (no full content)."""
-    return {
+    d: dict[str, Any] = {
         "file_path": result.file_path,
         "line_start": result.line_start,
         "line_end": result.line_end,
@@ -73,6 +73,13 @@ def _compact_result_to_dict(result: Any) -> dict[str, Any]:
         "snippet": _build_snippet(result),
         "is_test": getattr(result, "is_test", False),
     }
+    importance = getattr(result, "importance_score", 0.0)
+    if importance:
+        d["importance_score"] = importance
+    enriched = getattr(result, "enriched", None)
+    if enriched is not None:
+        d["enriched"] = enriched
+    return d
 
 
 def _result_to_dict(result: Any, detail: str = "compact") -> dict[str, Any]:
@@ -281,7 +288,7 @@ async def _llm_explain(
     cached = cache.get_description(cache_key, "explain")
     if cached:
         logger.debug("Explain cache hit: %s", cache_key[:12])
-        return cached
+        return str(cached)
 
     # 2. Check circuit breaker
     if _explain_breaker.is_open:
@@ -408,9 +415,7 @@ async def explain(
                 explanation_source = "llm"
 
         if not explanation:
-            explanation = _heuristic_explain(
-                file_path, symbol, question, filtered, trace_data
-            )
+            explanation = _heuristic_explain(file_path, symbol, question, filtered, trace_data)
 
         return {
             "file_path": file_path,

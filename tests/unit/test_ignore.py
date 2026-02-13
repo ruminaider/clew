@@ -69,3 +69,19 @@ class TestIgnorePatternLoader:
         loader = IgnorePatternLoader(project_root)
         # Don't call load() explicitly — should_ignore triggers it
         assert loader.should_ignore("__pycache__/foo.pyc")
+
+    def test_codesearchignore_fallback(self, project_root: Path) -> None:
+        """When .clewignore doesn't exist, .codesearchignore is used."""
+        (project_root / ".codesearchignore").write_text("*.generated.ts\n")
+        loader = IgnorePatternLoader(project_root)
+        loader.load()
+        assert loader.should_ignore("output.generated.ts")
+
+    def test_clewignore_takes_priority_over_codesearchignore(self, project_root: Path) -> None:
+        """When both exist, .clewignore takes priority."""
+        (project_root / ".clewignore").write_text("*.clewignored\n")
+        (project_root / ".codesearchignore").write_text("*.codesearchignored\n")
+        loader = IgnorePatternLoader(project_root)
+        loader.load()
+        assert loader.should_ignore("file.clewignored")
+        assert not loader.should_ignore("file.codesearchignored")

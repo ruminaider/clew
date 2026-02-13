@@ -12,12 +12,12 @@ from pathlib import PurePosixPath
 
 # Canonical test file detection patterns
 _TEST_FILE_PATTERNS = [
-    re.compile(r"(?:^|/)test_"),       # test_*.py
-    re.compile(r"_test\.py$"),         # *_test.py
-    re.compile(r"\.test\.\w+$"),       # *.test.ts/js
-    re.compile(r"\.spec\.\w+$"),       # *.spec.ts/js
-    re.compile(r"(?:^|/)tests/"),      # tests/ directory
-    re.compile(r"(?:^|/)test/"),       # test/ directory
+    re.compile(r"(?:^|/)test_"),  # test_*.py
+    re.compile(r"_test\.py$"),  # *_test.py
+    re.compile(r"\.test\.\w+$"),  # *.test.ts/js
+    re.compile(r"\.spec\.\w+$"),  # *.spec.ts/js
+    re.compile(r"(?:^|/)tests/"),  # tests/ directory
+    re.compile(r"(?:^|/)test/"),  # test/ directory
     re.compile(r"(?:^|/)__tests__/"),  # __tests__/ directory
     re.compile(r"(?:^|/)conftest\.py$"),  # pytest conftest
 ]
@@ -29,6 +29,7 @@ def is_test_file(file_path: str) -> bool:
     Canonical implementation — import from here, not from extractors.
     """
     return any(p.search(file_path) for p in _TEST_FILE_PATTERNS)
+
 
 # Layer classification mapping (filename -> layer)
 LAYER_MAP: dict[str, str] = {

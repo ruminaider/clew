@@ -34,6 +34,7 @@ class SearchResult:
     chunk_id: str = ""
     docstring: str = ""
     is_test: bool = False
+    importance_score: float = 0.0
 
 
 @dataclass
