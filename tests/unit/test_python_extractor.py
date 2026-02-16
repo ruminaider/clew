@@ -224,3 +224,71 @@ class TestCallExtraction:
         # Only one call edge — no duplicate class-level edge
         assert len(calls) == 1
         assert calls[0].target_entity == "utils::helper"
+
+
+class TestContainsRelationship:
+    def test_class_contains_methods(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        source = """
+class Order:
+    def process(self):
+        pass
+
+    def cancel(self):
+        pass
+"""
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/models.py")
+        contains_rels = [r for r in rels if r.relationship == "contains"]
+        assert len(contains_rels) == 2
+        targets = {r.target_entity for r in contains_rels}
+        assert "app/models.py::Order.process" in targets
+        assert "app/models.py::Order.cancel" in targets
+        assert all(r.source_entity == "app/models.py::Order" for r in contains_rels)
+
+    def test_class_contains_decorated_methods(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        source = """
+class MyView:
+    @staticmethod
+    def get(request):
+        pass
+
+    @classmethod
+    def create(cls):
+        pass
+"""
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/views.py")
+        contains_rels = [r for r in rels if r.relationship == "contains"]
+        assert len(contains_rels) == 2
+        targets = {r.target_entity for r in contains_rels}
+        assert "app/views.py::MyView.get" in targets
+        assert "app/views.py::MyView.create" in targets
+
+    def test_class_without_methods_has_no_contains(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        source = """
+class Empty:
+    pass
+"""
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/models.py")
+        contains_rels = [r for r in rels if r.relationship == "contains"]
+        assert len(contains_rels) == 0
+
+    def test_contains_confidence_is_static(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        source = """
+class Foo:
+    def bar(self):
+        pass
+"""
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/main.py")
+        contains_rels = [r for r in rels if r.relationship == "contains"]
+        assert all(r.confidence == "static" for r in contains_rels)

@@ -50,7 +50,37 @@ class PythonRelationshipExtractor(RelationshipExtractor):
             class_name = self._get_field_text(node, "name")
             self._extract_inheritance(node, file_path, class_name, rels)
             body = node.child_by_field_name("body")
-            if body:
+            if body and class_name:
+                # Emit contains relationships for methods
+                for child in body.children:
+                    func_node = child
+                    # Handle decorated functions
+                    if child.type == "decorated_definition":
+                        for sub in child.children:
+                            if sub.type == "function_definition":
+                                func_node = sub
+                                break
+                    if func_node.type == "function_definition":
+                        method_name = self._get_field_text(func_node, "name")
+                        if method_name:
+                            rels.append(
+                                Relationship(
+                                    source_entity=f"{file_path}::{class_name}",
+                                    relationship="contains",
+                                    target_entity=f"{file_path}::{class_name}.{method_name}",
+                                    file_path=file_path,
+                                )
+                            )
+                for child in body.children:
+                    self._walk(
+                        child,
+                        source,
+                        file_path,
+                        rels,
+                        parent_class=class_name,
+                        current_function=None,
+                    )
+            elif body:
                 for child in body.children:
                     self._walk(
                         child,
