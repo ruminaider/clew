@@ -247,7 +247,11 @@ class TestIndexNLDescriptions:
         result = runner.invoke(app, ["index", str(tmp_path), "--full", "--nl-descriptions"])
         assert result.exit_code == 0
         # Verify nl_descriptions=True was passed to create_components
-        mock_factory.assert_called_once_with(config_path=None, nl_descriptions=True)
+        mock_factory.assert_called_once_with(
+            config_path=None,
+            nl_descriptions=True,
+            project_root=tmp_path,
+        )
 
     @patch("clew.discovery.discover_files")
     @patch("clew.factory.create_components")
@@ -265,7 +269,11 @@ class TestIndexNLDescriptions:
 
         result = runner.invoke(app, ["index", str(tmp_path), "--full"])
         assert result.exit_code == 0
-        mock_factory.assert_called_once_with(config_path=None, nl_descriptions=False)
+        mock_factory.assert_called_once_with(
+            config_path=None,
+            nl_descriptions=False,
+            project_root=tmp_path,
+        )
 
     def test_nl_descriptions_in_help(self) -> None:
         """--nl-descriptions appears in help text."""

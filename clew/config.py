@@ -6,17 +6,36 @@ from pathlib import Path
 from subprocess import TimeoutExpired
 
 
-def _resolve_cache_dir() -> Path:
-    """Resolve cache directory: env var > git root > CWD fallback.
+def _resolve_cache_dir(project_root: Path | None = None) -> Path:
+    """Resolve cache directory: env var > project root > git root > CWD fallback.
 
     Resolution order:
     1. CLEW_CACHE_DIR env var (absolute path)
-    2. {git_root}/.clew/ (auto-detected)
-    3. .clew/ relative to CWD (fallback)
+    2. {project_root}/.clew/ (if project_root provided)
+    3. {git_root}/.clew/ (auto-detected from CWD)
+    4. .clew/ relative to CWD (fallback)
     """
     env_val = os.environ.get("CLEW_CACHE_DIR")
     if env_val:
         return Path(env_val)
+
+    if project_root is not None:
+        candidate = Path(project_root).resolve() / ".clew"
+        if candidate.exists():
+            return candidate
+        # Also try git root from project_root
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=str(project_root),
+            )
+            if result.returncode == 0:
+                return Path(result.stdout.strip()) / ".clew"
+        except (FileNotFoundError, TimeoutExpired):
+            pass
 
     try:
         result = subprocess.run(
@@ -47,6 +66,11 @@ class Environment:
     )
     CLEW_FULL_INDEX_MODEL: str = os.environ.get("CLEW_FULL_INDEX_MODEL", "claude-opus-4-6")
     CLEW_CONFIDENCE_THRESHOLD: float = float(os.environ.get("CLEW_CONFIDENCE_THRESHOLD", "0.65"))
+
+    def __init__(self, project_root: Path | None = None) -> None:
+        """Initialize with optional project_root for cache dir resolution."""
+        if project_root is not None:
+            self.CACHE_DIR = _resolve_cache_dir(project_root)
 
     @classmethod
     def validate(cls) -> list[str]:

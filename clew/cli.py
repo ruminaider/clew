@@ -39,6 +39,7 @@ def index(
         components = create_components(
             config_path=config if config.exists() else None,
             nl_descriptions=nl_descriptions,
+            project_root=project_root,
         )
     except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -336,6 +337,7 @@ def reembed(
     try:
         components = create_components(
             config_path=config if config.exists() else None,
+            project_root=project_root,
         )
     except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")

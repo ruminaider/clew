@@ -41,18 +41,20 @@ def create_components(
     config_path: Path | None = None,
     *,
     nl_descriptions: bool = False,
+    project_root: Path | None = None,
 ) -> Components:
     """Create all components with proper configuration.
 
     Args:
         config_path: Path to YAML config file. Uses defaults if None or missing.
         nl_descriptions: If True, override config to enable NL description generation.
+        project_root: Project root directory for cache dir resolution.
 
     Returns:
         Components dataclass with all wired components.
     """
     # Load config
-    env = Environment()
+    env = Environment(project_root=project_root)
     if config_path:
         config = ProjectConfig.from_yaml(config_path)
     else:
