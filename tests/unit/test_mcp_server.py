@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from clew.mcp_server import (
     _error_response,
+    _heuristic_explain,
     _result_to_dict,
     explain,
     get_context,
@@ -993,3 +994,39 @@ class TestExplainCompact:
         call_args = components.search_engine.search.call_args
         request = call_args[0][0]
         assert request.limit == 10
+
+
+class TestHeuristicExplainEnrichment:
+    def test_includes_enrichment_when_cache_available(self):
+        result = _mock_search_result(chunk_id="src/main.py::function::hello")
+        mock_cache = Mock()
+        mock_cache.get_enrichment.return_value = (
+            "Greets the user and returns True",
+            "hello,greeting",
+        )
+
+        explanation = _heuristic_explain("src/main.py", "hello", None, [result], cache=mock_cache)
+        assert "Summary:" in explanation
+        assert "Greets the user" in explanation
+
+    def test_no_enrichment_without_cache(self):
+        result = _mock_search_result(chunk_id="src/main.py::function::hello")
+
+        explanation = _heuristic_explain("src/main.py", "hello", None, [result], cache=None)
+        assert "Summary:" not in explanation
+
+    def test_no_enrichment_when_cache_returns_none(self):
+        result = _mock_search_result(chunk_id="src/main.py::function::hello")
+        mock_cache = Mock()
+        mock_cache.get_enrichment.return_value = None
+
+        explanation = _heuristic_explain("src/main.py", "hello", None, [result], cache=mock_cache)
+        assert "Summary:" not in explanation
+
+    def test_enrichment_with_empty_description(self):
+        result = _mock_search_result(chunk_id="src/main.py::function::hello")
+        mock_cache = Mock()
+        mock_cache.get_enrichment.return_value = ("", "hello")
+
+        explanation = _heuristic_explain("src/main.py", "hello", None, [result], cache=mock_cache)
+        assert "Summary:" not in explanation

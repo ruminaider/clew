@@ -223,6 +223,7 @@ def _heuristic_explain(
     question: str | None,
     search_results: list[Any],
     trace_data: list[dict[str, object]] | None = None,
+    cache: Any = None,
 ) -> str:
     """Build a structured explanation from search results and trace data.
 
@@ -248,6 +249,17 @@ def _heuristic_explain(
         if doc:
             doc_truncated = doc[:300] + ("..." if len(doc) > 300 else "")
             parts.append(doc_truncated)
+
+        # Add enrichment description if available
+        if cache:
+            chunk_id = getattr(result, "chunk_id", "")
+            if chunk_id:
+                enrichment = cache.get_enrichment(chunk_id)
+                if enrichment:
+                    desc, _keywords = enrichment
+                    if desc:
+                        parts.append(f"**Summary:** {desc}")
+
         parts.append("")
 
     if trace_data and symbol:
@@ -307,7 +319,15 @@ async def _llm_explain(
     for r in search_results[:3]:
         content = getattr(r, "content", "")[:500]
         lang = r.language or ""
-        snippets.append(f"```{lang}\n# {r.file_path}:{r.line_start or ''}\n{content}\n```")
+        desc_prefix = ""
+        if cache:
+            chunk_id = getattr(r, "chunk_id", "")
+            if chunk_id:
+                enrichment = cache.get_enrichment(chunk_id)
+                if enrichment and enrichment[0]:
+                    desc_prefix = f"# Description: {enrichment[0]}\n"
+        header = f"{desc_prefix}# {r.file_path}:{r.line_start or ''}"
+        snippets.append(f"```{lang}\n{header}\n{content}\n```")
 
     context = "\n\n".join(snippets)
     query = question or (f"What does `{symbol}` do?" if symbol else f"Explain {file_path}")
@@ -415,7 +435,9 @@ async def explain(
                 explanation_source = "llm"
 
         if not explanation:
-            explanation = _heuristic_explain(file_path, symbol, question, filtered, trace_data)
+            explanation = _heuristic_explain(
+                file_path, symbol, question, filtered, trace_data, cache=components.cache
+            )
 
         return {
             "file_path": file_path,
