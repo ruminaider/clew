@@ -99,10 +99,13 @@ def text_to_sparse_vector(text: str) -> SparseVector:
     for t in all_tokens:
         freq[t] = freq.get(t, 0) + 1
 
-    indices: list[int] = []
-    values: list[float] = []
-    for token, count in sorted(freq.items()):
-        indices.append(_token_to_index(token))
-        values.append(float(count))  # Raw count, not normalized
+    # Map tokens to indices, merging counts on hash collision
+    index_values: dict[int, float] = {}
+    for token, count in freq.items():
+        idx = _token_to_index(token)
+        index_values[idx] = index_values.get(idx, 0.0) + float(count)
+
+    indices = sorted(index_values.keys())
+    values = [index_values[i] for i in indices]
 
     return SparseVector(indices=indices, values=values)
