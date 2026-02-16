@@ -507,6 +507,38 @@ class TestEnrichmentCache:
             assert before <= row["enriched_at"] <= after
 
 
+class TestChunkContentCache:
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_get_missing_returns_none(self, cache: CacheDB) -> None:
+        assert cache.get_chunk_content("nonexistent::chunk") is None
+
+    def test_set_and_get_roundtrip(self, cache: CacheDB) -> None:
+        cache.set_chunk_content("app/main.py::function::hello", "def hello():\n    pass", 10, 12)
+        result = cache.get_chunk_content("app/main.py::function::hello")
+        assert result is not None
+        content, line_start, line_end = result
+        assert content == "def hello():\n    pass"
+        assert line_start == 10
+        assert line_end == 12
+
+    def test_upsert_replaces_existing(self, cache: CacheDB) -> None:
+        cache.set_chunk_content("chunk1", "old content", 1, 5)
+        cache.set_chunk_content("chunk1", "new content", 10, 20)
+        result = cache.get_chunk_content("chunk1")
+        assert result is not None
+        assert result[0] == "new content"
+        assert result[1] == 10
+        assert result[2] == 20
+
+    def test_clear_all_state_clears_chunk_content(self, cache: CacheDB) -> None:
+        cache.set_chunk_content("chunk1", "content", 1, 5)
+        cache.clear_all_state("code")
+        assert cache.get_chunk_content("chunk1") is None
+
+
 class TestGetAllRelationshipPairs:
     """Test get_all_relationship_pairs method."""
 

@@ -902,3 +902,133 @@ class TestModuleQualifiedNormalization:
         targets = [r.target_entity for r in rels]
         # Should be unchanged — two candidates match "ecomm/tasks" pattern
         assert "ecomm.tasks::send" in targets
+
+
+class TestReembedUsesChunkContent:
+    """Tests for reembed() using chunk_content_cache instead of full files."""
+
+    @pytest.fixture
+    def mock_qdrant(self) -> Mock:
+        qdrant = Mock()
+        qdrant.ensure_collection = Mock()
+        qdrant.upsert_points = Mock()
+        qdrant.delete_by_file_path = Mock()
+        qdrant._client = Mock()
+        qdrant._client.scroll = Mock(return_value=([], None))
+        return qdrant
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        embedder = Mock()
+        embedder.embed = AsyncMock(side_effect=lambda texts, **kwargs: [[0.1] * 1024] * len(texts))
+        embedder.model_name = "voyage-code-3"
+        embedder.dimensions = 1024
+        return embedder
+
+    async def test_pass1_stores_chunk_content(
+        self,
+        mock_qdrant: Mock,
+        mock_embedder: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """Pass 1 (index_files) stores chunk content in chunk_content_cache."""
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder, cache=cache)
+        f = tmp_path / "hello.py"
+        f.write_text("def hello():\n    return 'world'\n")
+        await pipeline.index_files([f], collection="code")
+
+        # Check that chunk content was cached
+        chunk_ids = cache.get_file_chunk_ids(str(f))
+        assert len(chunk_ids) >= 1
+        for cid in chunk_ids:
+            cached = cache.get_chunk_content(cid)
+            assert cached is not None, f"No cached content for {cid}"
+            content, line_start, line_end = cached
+            assert len(content) > 0
+
+    async def test_reembed_uses_cached_chunk_content(
+        self,
+        mock_qdrant: Mock,
+        mock_embedder: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """reembed() uses cached chunk content, not full file content."""
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder, cache=cache)
+
+        # Index a file with two functions
+        f = tmp_path / "funcs.py"
+        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n")
+        await pipeline.index_files([f], collection="code")
+
+        # Add enrichment for all chunks
+        chunk_ids = cache.get_file_chunk_ids(str(f))
+        for cid in chunk_ids:
+            cache.set_enrichment(cid, "A test description.", "test keyword")
+
+        # Run reembed
+        mock_qdrant.upsert_points.reset_mock()
+        result = await pipeline.reembed(collection="code")
+        assert result.chunks_created >= 1
+
+        # Verify function chunks use cached chunk content (not full file)
+        points = mock_qdrant.upsert_points.call_args[0][1]
+        function_payloads = [p.payload for p in points if p.payload.get("chunk_type") == "function"]
+        for payload in function_payloads:
+            content = payload["content"]
+            # Function chunk content should contain only one function, not both
+            assert not ("def foo()" in content and "def bar()" in content), (
+                "Chunk content should be a single function, not the full file"
+            )
+
+    async def test_reembed_payload_has_line_numbers(
+        self,
+        mock_qdrant: Mock,
+        mock_embedder: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """reembed() includes line_start and line_end in payload."""
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder, cache=cache)
+
+        f = tmp_path / "hello.py"
+        f.write_text("def hello():\n    return 'world'\n")
+        await pipeline.index_files([f], collection="code")
+
+        chunk_ids = cache.get_file_chunk_ids(str(f))
+        for cid in chunk_ids:
+            cache.set_enrichment(cid, "Desc.", "kw")
+
+        mock_qdrant.upsert_points.reset_mock()
+        await pipeline.reembed(collection="code")
+
+        points = mock_qdrant.upsert_points.call_args[0][1]
+        for point in points:
+            assert "line_start" in point.payload
+            assert "line_end" in point.payload
+
+    async def test_reembed_payload_has_function_name(
+        self,
+        mock_qdrant: Mock,
+        mock_embedder: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """reembed() includes function_name in payload."""
+        cache = CacheDB(tmp_path / ".cache")
+        pipeline = IndexingPipeline(qdrant=mock_qdrant, embedder=mock_embedder, cache=cache)
+
+        f = tmp_path / "hello.py"
+        f.write_text("def hello():\n    return 'world'\n")
+        await pipeline.index_files([f], collection="code")
+
+        chunk_ids = cache.get_file_chunk_ids(str(f))
+        for cid in chunk_ids:
+            cache.set_enrichment(cid, "Desc.", "kw")
+
+        mock_qdrant.upsert_points.reset_mock()
+        await pipeline.reembed(collection="code")
+
+        points = mock_qdrant.upsert_points.call_args[0][1]
+        for point in points:
+            assert "function_name" in point.payload

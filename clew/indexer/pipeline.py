@@ -233,21 +233,26 @@ class IndexingPipeline:
             all_chunks.extend(chunks)
             result.files_processed += 1
 
-            # Cache chunk IDs for this file (needed by reembed)
+            # Cache chunk IDs and chunk content for this file (needed by reembed)
             if self._cache:
                 import hashlib
 
                 file_hash = hashlib.sha256(content.encode()).hexdigest()
-                chunk_ids = [
-                    build_chunk_id(
+                chunk_ids = []
+                for c in chunks:
+                    cid = build_chunk_id(
                         c.file_path,
                         c.metadata.get("entity_type", "section"),
-                        c.metadata.get(
-                            "qualified_name", c.metadata.get("name", "")
-                        ),
+                        c.metadata.get("qualified_name", c.metadata.get("name", "")),
                     )
-                    for c in chunks
-                ]
+                    chunk_ids.append(cid)
+                    # Store chunk-level content for Pass 2 reembed
+                    self._cache.set_chunk_content(
+                        cid,
+                        c.content,
+                        c.metadata.get("line_start", 0),
+                        c.metadata.get("line_end", 0),
+                    )
                 self._cache.set_file_chunks(str(file_path), file_hash, chunk_ids)
 
             # Extract and store code relationships
@@ -654,19 +659,25 @@ class IndexingPipeline:
         sub_batch_tokens = 0
 
         async def _embed_with_retry(batch: list[str], max_retries: int = 3) -> list[list[float]]:
+            last_error: Exception | None = None
             for attempt in range(max_retries):
                 try:
                     return await self._embedder.embed(batch, input_type="document")
                 except Exception as e:
+                    last_error = e
                     if attempt < max_retries - 1:
                         wait = 2 ** (attempt + 1)
                         logger.warning(
                             "Embedding API error (attempt %d/%d), retrying in %ds: %s",
-                            attempt + 1, max_retries, wait, e,
+                            attempt + 1,
+                            max_retries,
+                            wait,
+                            e,
                         )
                         await asyncio.sleep(wait)
                     else:
                         raise
+            raise last_error  # type: ignore[misc]
 
         for text in texts:
             tokens = count_tokens(text)
@@ -925,10 +936,12 @@ class IndexingPipeline:
                 scroll_result = self._qdrant._client.scroll(
                     collection_name=collection,
                     scroll_filter=models.Filter(
-                        must=[models.FieldCondition(
-                            key="enriched",
-                            match=models.MatchValue(value=True),
-                        )]
+                        must=[
+                            models.FieldCondition(
+                                key="enriched",
+                                match=models.MatchValue(value=True),
+                            )
+                        ]
                     ),
                     limit=1000,
                     with_payload=["chunk_id"],
@@ -945,9 +958,7 @@ class IndexingPipeline:
                 offset_id = next_offset
             if already_enriched:
                 before = len(chunks_to_embed)
-                chunks_to_embed = [
-                    c for c in chunks_to_embed if c[0] not in already_enriched
-                ]
+                chunks_to_embed = [c for c in chunks_to_embed if c[0] not in already_enriched]
                 logger.info(
                     "Skipping %d already-enriched chunks (%d remaining)",
                     before - len(chunks_to_embed),
@@ -960,7 +971,8 @@ class IndexingPipeline:
             logger.info("All chunks already enriched")
             return result
 
-        logger.info("Re-embedding %d enriched chunks", len(chunks_to_embed))
+        total_chunks = len(chunks_to_embed)
+        logger.info("Re-embedding %d enriched chunks", total_chunks)
 
         # Process in batches
         for i in range(0, len(chunks_to_embed), self._batch_size):
@@ -972,12 +984,19 @@ class IndexingPipeline:
             point_data: list[dict[str, object]] = []
 
             for chunk_id, file_path, desc, kw in batch:
-                # Read the source file to get raw content
-                try:
-                    content = Path(file_path).read_text(encoding="utf-8", errors="replace")
-                except (OSError, UnicodeDecodeError):
-                    logger.debug("Cannot read %s for re-embed, skipping", file_path)
-                    continue
+                # Use cached chunk content (stored during Pass 1)
+                cached = self._cache.get_chunk_content(chunk_id)
+                if cached:
+                    content, line_start, line_end = cached
+                else:
+                    # Fallback: read full file (legacy data without chunk cache)
+                    try:
+                        content = Path(file_path).read_text(encoding="utf-8", errors="replace")
+                    except (OSError, UnicodeDecodeError):
+                        logger.debug("Cannot read %s for re-embed, skipping", file_path)
+                        continue
+                    line_start = 0
+                    line_end = 0
 
                 # Parse chunk_id to extract metadata
                 parts = chunk_id.split("::")
@@ -986,10 +1005,15 @@ class IndexingPipeline:
 
                 app_name = detect_app_name(file_path)
                 layer = classify_layer(file_path)
+                # Use chunk content (not full file) for signature extraction
                 signature = extract_signature(entity_type, content)
                 class_name = ""
+                function_name = ""
                 if "." in qualified_name:
                     class_name = qualified_name.split(".")[0]
+                    function_name = qualified_name.split(".")[-1]
+                else:
+                    function_name = qualified_name
 
                 # Build signature text
                 sig_text = _build_signature_text(chunk_id, signature, class_name, app_name, layer)
@@ -1009,14 +1033,9 @@ class IndexingPipeline:
                     imports=imports,
                 )
 
-                # For body, use the content we can find
-                # The actual chunk content may be a subset of the file
-                # Use the full file for now as a reasonable approximation
-                body_text = content
-
                 sig_texts.append(sig_text)
                 sem_texts.append(sem_text)
-                body_texts.append(body_text)
+                body_texts.append(content)
 
                 importance = importance_scores.get(file_path, 0.0)
                 point_data.append(
@@ -1028,11 +1047,14 @@ class IndexingPipeline:
                         "layer": layer,
                         "signature": signature,
                         "class_name": class_name,
+                        "function_name": function_name,
                         "importance_score": importance,
                         "description": desc,
                         "keywords": kw,
-                        "body_text": body_text,
+                        "body_text": content,
                         "sem_text": sem_text,
+                        "line_start": line_start,
+                        "line_end": line_end,
                     }
                 )
 
@@ -1044,7 +1066,7 @@ class IndexingPipeline:
             sem_embeddings = await self._embed_with_token_limit(sem_texts)
             body_embeddings = await self._embed_with_token_limit(body_texts)
 
-            points: list[models.PointStruct] = []
+            batch_points: list[models.PointStruct] = []
             for j, data in enumerate(point_data):
                 c_id = str(data["chunk_id"])
                 fp = str(data["file_path"])
@@ -1060,9 +1082,12 @@ class IndexingPipeline:
                     "language": detect_language(fp),
                     "chunk_type": data["entity_type"],
                     "class_name": data["class_name"],
+                    "function_name": data["function_name"],
                     "signature": data["signature"],
                     "app_name": data["app_name"],
                     "layer": data["layer"],
+                    "line_start": data["line_start"],
+                    "line_end": data["line_end"],
                     "is_test": is_test_file(fp),
                     "source_type": collection,
                     "embedding_model": self._embedder.model_name,
@@ -1075,7 +1100,7 @@ class IndexingPipeline:
                 }
 
                 point_id = str(uuid.uuid5(CHUNK_UUID_NAMESPACE, c_id))
-                points.append(
+                batch_points.append(
                     models.PointStruct(
                         id=point_id,
                         vector={
@@ -1091,8 +1116,18 @@ class IndexingPipeline:
                     )
                 )
 
-            self._qdrant.upsert_points(collection, points)
-            result.chunks_created += len(points)
+            self._qdrant.upsert_points(collection, batch_points)
+            result.chunks_created += len(batch_points)
             result.files_processed += len({str(d["file_path"]) for d in point_data})
+
+            batch_num = i // self._batch_size + 1
+            total_batches = (total_chunks + self._batch_size - 1) // self._batch_size
+            logger.info(
+                "Batch %d/%d: %d/%d chunks re-embedded",
+                batch_num,
+                total_batches,
+                result.chunks_created,
+                total_chunks,
+            )
 
         return result

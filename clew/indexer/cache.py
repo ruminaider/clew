@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS enrichment_cache (
     keywords TEXT,
     enriched_at REAL
 );
+
+CREATE TABLE IF NOT EXISTS chunk_content_cache (
+    chunk_id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    line_start INTEGER DEFAULT 0,
+    line_end INTEGER DEFAULT 0
+);
 """
 
 STATE_SCHEMA = """
@@ -110,7 +117,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 """
 
 # Current schema version — increment when adding migrations
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _migration_v1_to_v2(conn: sqlite3.Connection) -> None:
@@ -134,11 +141,17 @@ def _migration_v2_to_v3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """V4: chunk_content_cache added to CACHE_SCHEMA (auto-created on init)."""
+    pass
+
+
 # Ordered list of migration functions: index = from_version
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     lambda _conn: None,  # v0→v1: initial schema (no-op, tables already created)
     _migration_v1_to_v2,  # v1→v2: add target_entity index
     _migration_v2_to_v3,  # v2→v3: add enrichment_cache table
+    _migration_v3_to_v4,  # v3→v4: chunk_content_cache (in CACHE_SCHEMA)
 ]
 
 
@@ -216,6 +229,7 @@ class CacheDB:
             conn.execute("DELETE FROM safety_state WHERE collection_name = ?", (collection,))
         with self._get_cache_conn() as conn:
             conn.execute("DELETE FROM chunk_cache")
+            conn.execute("DELETE FROM chunk_content_cache")
             conn.execute("DELETE FROM enrichment_cache")
         logger.info("Cleared all indexing state for collection '%s'", collection)
 
@@ -328,6 +342,30 @@ class CacheDB:
                 "VALUES (?, ?, ?, ?)",
                 (chunk_id, description, keywords, time.time()),
             )
+
+    def set_chunk_content(
+        self, chunk_id: str, content: str, line_start: int, line_end: int
+    ) -> None:
+        """Store chunk content for use during reembed (Pass 2)."""
+        with self._get_cache_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO chunk_content_cache "
+                "(chunk_id, content, line_start, line_end) "
+                "VALUES (?, ?, ?, ?)",
+                (chunk_id, content, line_start, line_end),
+            )
+
+    def get_chunk_content(self, chunk_id: str) -> tuple[str, int, int] | None:
+        """Get cached chunk content, or None if not found.
+
+        Returns (content, line_start, line_end) or None.
+        """
+        with self._get_cache_conn() as conn:
+            row = conn.execute(
+                "SELECT content, line_start, line_end FROM chunk_content_cache WHERE chunk_id = ?",
+                (chunk_id,),
+            ).fetchone()
+            return (row["content"], row["line_start"], row["line_end"]) if row else None
 
     def get_last_indexed_commit(self, collection_name: str) -> str | None:
         """Get the last indexed commit hash for a collection."""
