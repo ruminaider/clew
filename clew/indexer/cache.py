@@ -155,6 +155,9 @@ _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
 ]
 
 
+_GENERATED_PATH_MARKERS = ("generated/", "__generated__", "node_modules/", ".d.ts")
+
+
 class CacheDB:
     """SQLite-based cache for embeddings and indexing state."""
 
@@ -218,8 +221,9 @@ class CacheDB:
         """Clear all indexing state for a collection (for --full reindex).
 
         Clears: code_relationships, failed_files, checkpoints (filtered),
-        index_state (filtered), safety_state (filtered), and chunk_cache.
-        Preserves: embedding_cache, description_cache (content-addressed, reusable).
+        index_state (filtered), safety_state (filtered), chunk_cache, and chunk_content_cache.
+        Preserves: embedding_cache, description_cache, enrichment_cache
+        (all content-addressed, reusable across reindexes).
         """
         with self._get_state_conn() as conn:
             conn.execute("DELETE FROM code_relationships")
@@ -230,7 +234,8 @@ class CacheDB:
         with self._get_cache_conn() as conn:
             conn.execute("DELETE FROM chunk_cache")
             conn.execute("DELETE FROM chunk_content_cache")
-            conn.execute("DELETE FROM enrichment_cache")
+            # Preserve enrichment_cache: content-addressed by chunk_id, reusable
+            # when chunk content hasn't changed across reindexes
         logger.info("Cleared all indexing state for collection '%s'", collection)
 
     def get_embedding(self, content_hash: str, model: str) -> bytes | None:
@@ -401,12 +406,23 @@ class CacheDB:
                 ],
             )
 
+    @staticmethod
+    def _get_bare_symbol(entity: str) -> str | None:
+        """Extract the symbol part after '::' (e.g., 'a.py::Foo' -> 'Foo').
+
+        Returns None if no '::' separator is present.
+        """
+        if "::" not in entity:
+            return None
+        return entity.split("::", 1)[1]
+
     def get_relationships(
         self,
         entity: str,
         *,
         direction: str = "both",
         relationship_types: list[str] | None = None,
+        bare_fallback: bool = False,
     ) -> list[Relationship]:
         """Get relationships for an entity.
 
@@ -414,6 +430,8 @@ class CacheDB:
             entity: Entity identifier (e.g., "app/main.py::Foo")
             direction: "inbound", "outbound", or "both"
             relationship_types: Optional filter by relationship type
+            bare_fallback: When True, if exact match returns 0 results for a
+                direction, retry using just the bare symbol (after '::')
         """
         from clew.indexer.relationships import Relationship as _Relationship
 
@@ -429,8 +447,9 @@ class CacheDB:
                     placeholders = ",".join("?" * len(relationship_types))
                     query += f" AND relationship IN ({placeholders})"
                     params.extend(relationship_types)
+                outbound_results: list[_Relationship] = []
                 for row in conn.execute(query, params):
-                    results.append(
+                    outbound_results.append(
                         _Relationship(
                             source_entity=row[0],
                             relationship=row[1],
@@ -439,6 +458,30 @@ class CacheDB:
                             confidence=row[4],
                         )
                     )
+                if not outbound_results and bare_fallback:
+                    bare = self._get_bare_symbol(entity)
+                    if bare:
+                        query = (
+                            "SELECT source_entity, relationship, target_entity, "
+                            "file_path, confidence "
+                            "FROM code_relationships WHERE source_entity = ?"
+                        )
+                        params = [bare]
+                        if relationship_types:
+                            placeholders = ",".join("?" * len(relationship_types))
+                            query += f" AND relationship IN ({placeholders})"
+                            params.extend(relationship_types)
+                        for row in conn.execute(query, params):
+                            outbound_results.append(
+                                _Relationship(
+                                    source_entity=row[0],
+                                    relationship=row[1],
+                                    target_entity=row[2],
+                                    file_path=row[3],
+                                    confidence=row[4],
+                                )
+                            )
+                results.extend(outbound_results)
 
             if direction in ("inbound", "both"):
                 query = (
@@ -450,8 +493,9 @@ class CacheDB:
                     placeholders = ",".join("?" * len(relationship_types))
                     query += f" AND relationship IN ({placeholders})"
                     params.extend(relationship_types)
+                inbound_results: list[_Relationship] = []
                 for row in conn.execute(query, params):
-                    results.append(
+                    inbound_results.append(
                         _Relationship(
                             source_entity=row[0],
                             relationship=row[1],
@@ -460,6 +504,30 @@ class CacheDB:
                             confidence=row[4],
                         )
                     )
+                if not inbound_results and bare_fallback:
+                    bare = self._get_bare_symbol(entity)
+                    if bare:
+                        query = (
+                            "SELECT source_entity, relationship, target_entity, "
+                            "file_path, confidence "
+                            "FROM code_relationships WHERE target_entity = ?"
+                        )
+                        params = [bare]
+                        if relationship_types:
+                            placeholders = ",".join("?" * len(relationship_types))
+                            query += f" AND relationship IN ({placeholders})"
+                            params.extend(relationship_types)
+                        for row in conn.execute(query, params):
+                            inbound_results.append(
+                                _Relationship(
+                                    source_entity=row[0],
+                                    relationship=row[1],
+                                    target_entity=row[2],
+                                    file_path=row[3],
+                                    confidence=row[4],
+                                )
+                            )
+                results.extend(inbound_results)
 
         return results
 
@@ -538,7 +606,9 @@ class CacheDB:
         """Escape LIKE metacharacters so ``_`` and ``%`` match literally."""
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-    def resolve_entity(self, entity: str, *, context_file: str | None = None) -> str:
+    def resolve_entity(
+        self, entity: str, *, context_file: str | None = None, language: str | None = None
+    ) -> str:
         """Resolve a user-provided entity identifier to a stored entity.
 
         Supports exact match, suffix match (for relative paths), and
@@ -597,7 +667,7 @@ class CacheDB:
             candidates.extend(row[0] for row in rows if row[0] not in candidates)
 
             if candidates:
-                return self._rank_candidates(candidates, context_file, conn)
+                return self._rank_candidates(candidates, context_file, conn, language)
 
             # 3. Symbol-only match (no :: in the query)
             if "::" not in entity:
@@ -619,7 +689,7 @@ class CacheDB:
                 candidates.extend(row[0] for row in rows if row[0] not in candidates)
 
                 if candidates:
-                    return self._rank_candidates(candidates, context_file, conn)
+                    return self._rank_candidates(candidates, context_file, conn, language)
 
         logger.debug("Entity resolution fallback: '%s' has no matches", entity)
         return entity
@@ -629,14 +699,14 @@ class CacheDB:
         candidates: list[str],
         context_file: str | None,
         conn: sqlite3.Connection,
+        language: str | None = None,
     ) -> str:
         """Rank entity candidates by proximity to context_file."""
         if len(candidates) == 1:
             return candidates[0]
 
         if not context_file:
-            # No context — return first alphabetically for determinism
-            return sorted(candidates)[0]
+            return self._rank_candidates_no_context(candidates, conn, language)
 
         # Extract directory from context file for proximity
         context_dir = context_file.rsplit("/", 1)[0] if "/" in context_file else ""
@@ -668,6 +738,46 @@ class CacheDB:
         )
         return candidates[0]
 
+    def _rank_candidates_no_context(
+        self,
+        candidates: list[str],
+        conn: sqlite3.Connection,
+        language: str | None = None,
+    ) -> str:
+        """Rank entity candidates when no context_file is provided.
+
+        Scoring priority (lower = better):
+          0. Language mismatch penalty (if --language specified)
+          1. Generated code penalty (generated/, node_modules/, .d.ts)
+          2. Edge count (negated — more edges = better)
+          3. Alphabetical tiebreaker
+        """
+        from clew.indexer.pipeline import detect_language
+
+        def score(candidate: str) -> tuple[int, int, int, str]:
+            file_path = candidate.split("::")[0] if "::" in candidate else candidate
+
+            lang_penalty = 0
+            if language:
+                cand_lang = detect_language(file_path)
+                if cand_lang != "unknown" and cand_lang != language:
+                    lang_penalty = 1
+
+            is_generated = (
+                1 if any(m in file_path for m in _GENERATED_PATH_MARKERS) else 0
+            )
+
+            row = conn.execute(
+                "SELECT COUNT(*) FROM code_relationships "
+                "WHERE source_entity = ? OR target_entity = ?",
+                (candidate, candidate),
+            ).fetchone()
+            edge_count = -(row[0] if row else 0)
+
+            return (lang_penalty, is_generated, edge_count, candidate)
+
+        return min(candidates, key=score)
+
     def traverse_relationships(
         self,
         entity: str,
@@ -695,7 +805,10 @@ class CacheDB:
                 continue
 
             neighbors = self.get_relationships(
-                current, direction=direction, relationship_types=relationship_types
+                current,
+                direction=direction,
+                relationship_types=relationship_types,
+                bare_fallback=True,
             )
 
             for rel in neighbors:

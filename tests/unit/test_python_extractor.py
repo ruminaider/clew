@@ -226,6 +226,90 @@ class TestCallExtraction:
         assert calls[0].target_entity == "utils::helper"
 
 
+class TestSameFileCallResolution:
+    def test_same_file_function_call_resolves(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """A call to a function defined in the same file resolves to file_path::target."""
+        source = "def helper():\n    pass\n\ndef main():\n    helper()\n"
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/main.py")
+        calls = [r for r in rels if r.relationship == "calls"]
+        assert any(r.target_entity == "app/main.py::helper" for r in calls)
+
+    def test_import_takes_priority_over_file_definition(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """When a name is both imported and defined locally, the import wins."""
+        source = (
+            "from external import helper\n\ndef helper():\n    pass\n\ndef main():\n    helper()\n"
+        )
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/main.py")
+        calls = [
+            r for r in rels if r.relationship == "calls" and r.source_entity == "app/main.py::main"
+        ]
+        assert any(r.target_entity == "external::helper" for r in calls)
+
+    def test_same_file_method_call_on_class(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """A call to ClassName.method resolves via file_definitions for a same-file class."""
+        source = (
+            "class Validator:\n"
+            "    def check(self):\n"
+            "        pass\n"
+            "\n"
+            "def main():\n"
+            "    Validator.check(None)\n"
+        )
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/utils.py")
+        calls = [
+            r for r in rels if r.relationship == "calls" and r.source_entity == "app/utils.py::main"
+        ]
+        assert any(r.target_entity == "app/utils.py::Validator.check" for r in calls)
+
+    def test_same_file_call_in_class_method(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """A call from within a class method to a same-file function resolves correctly."""
+        source = (
+            "def utility():\n    pass\n\nclass Worker:\n    def run(self):\n        utility()\n"
+        )
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/worker.py")
+        calls = [
+            r
+            for r in rels
+            if r.relationship == "calls" and r.source_entity == "app/worker.py::Worker.run"
+        ]
+        assert any(r.target_entity == "app/worker.py::utility" for r in calls)
+
+    def test_decorated_top_level_function_resolves(
+        self, extractor: PythonRelationshipExtractor, parser: ASTParser
+    ) -> None:
+        """A decorated top-level function is collected in file_definitions."""
+        source = (
+            "import functools\n"
+            "\n"
+            "@functools.cache\n"
+            "def expensive():\n"
+            "    pass\n"
+            "\n"
+            "def main():\n"
+            "    expensive()\n"
+        )
+        tree = parser.parse(source, "python")
+        rels = extractor.extract(tree, source, "app/compute.py")
+        calls = [
+            r
+            for r in rels
+            if r.relationship == "calls" and r.source_entity == "app/compute.py::main"
+        ]
+        assert any(r.target_entity == "app/compute.py::expensive" for r in calls)
+
+
 class TestContainsRelationship:
     def test_class_contains_methods(
         self, extractor: PythonRelationshipExtractor, parser: ASTParser

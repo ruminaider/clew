@@ -465,6 +465,146 @@ class TestResolveEntity:
         assert result == "/some/path/models.py::Gadget"
 
 
+class TestEntityResolutionRanking:
+    """Test multi-signal ranking when no context_file is provided."""
+
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_prefers_source_over_generated_code(self, cache: CacheDB) -> None:
+        """Python model entity beats TypeScript generated entity."""
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship(
+                    "apps/pharmacy/models.py::PrescriptionFill",
+                    "inherits",
+                    "apps/core/models.py::BaseModel",
+                    "apps/pharmacy/models.py",
+                ),
+                Relationship(
+                    "frontend/generated/types.ts::PrescriptionFill",
+                    "imports",
+                    "frontend/generated/api.ts::API",
+                    "frontend/generated/types.ts",
+                ),
+            ]
+        )
+        result = cache.resolve_entity("PrescriptionFill")
+        assert result == "apps/pharmacy/models.py::PrescriptionFill"
+
+    def test_prefers_higher_edge_count(self, cache: CacheDB) -> None:
+        """Entity with more relationships ranks higher."""
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship("src/a.py::Widget", "calls", "src/b.py::helper", "src/a.py"),
+                Relationship("src/c.py::main", "calls", "src/a.py::Widget", "src/c.py"),
+                Relationship("src/d.py::test", "calls", "src/a.py::Widget", "src/d.py"),
+                Relationship("src/e.py::setup", "calls", "src/a.py::Widget", "src/e.py"),
+                Relationship("src/f.py::run", "calls", "src/a.py::Widget", "src/f.py"),
+                Relationship("lib/z.py::Widget", "calls", "lib/other.py::foo", "lib/z.py"),
+            ]
+        )
+        result = cache.resolve_entity("Widget")
+        assert result == "src/a.py::Widget"
+
+    def test_language_filter_overrides_edge_count(self, cache: CacheDB) -> None:
+        """language='python' deprioritizes TS even if it has more edges."""
+        from clew.indexer.relationships import Relationship
+
+        # Give the TS entity more edges
+        cache.store_relationships(
+            [
+                Relationship("src/types.ts::Config", "imports", "src/a.ts::A", "src/types.ts"),
+                Relationship("src/types.ts::Config", "imports", "src/b.ts::B", "src/types.ts"),
+                Relationship("src/types.ts::Config", "imports", "src/c.ts::C", "src/types.ts"),
+                Relationship("src/app.py::Config", "calls", "src/utils.py::load", "src/app.py"),
+            ]
+        )
+        result = cache.resolve_entity("Config", language="python")
+        assert result == "src/app.py::Config"
+
+    def test_node_modules_demoted(self, cache: CacheDB) -> None:
+        """node_modules/ path entity ranks below source entity."""
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship(
+                    "node_modules/@types/react/index.d.ts::Component",
+                    "imports",
+                    "node_modules/@types/react/base.d.ts::Base",
+                    "node_modules/@types/react/index.d.ts",
+                ),
+                Relationship(
+                    "src/components/Component.tsx::Component",
+                    "renders",
+                    "src/components/Button.tsx::Button",
+                    "src/components/Component.tsx",
+                ),
+            ]
+        )
+        result = cache.resolve_entity("Component")
+        assert result == "src/components/Component.tsx::Component"
+
+    def test_dot_d_ts_demoted(self, cache: CacheDB) -> None:
+        """.d.ts path entity ranks below .ts source entity."""
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship(
+                    "types/api.d.ts::ApiClient",
+                    "imports",
+                    "types/base.d.ts::Base",
+                    "types/api.d.ts",
+                ),
+                Relationship(
+                    "src/api/client.ts::ApiClient",
+                    "calls",
+                    "src/api/fetch.ts::doFetch",
+                    "src/api/client.ts",
+                ),
+            ]
+        )
+        result = cache.resolve_entity("ApiClient")
+        assert result == "src/api/client.ts::ApiClient"
+
+    def test_single_candidate_returned_directly(self, cache: CacheDB) -> None:
+        """Bypass ranking for single candidate."""
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship(
+                    "generated/types.ts::OnlyHere",
+                    "imports",
+                    "generated/base.ts::Base",
+                    "generated/types.ts",
+                ),
+            ]
+        )
+        result = cache.resolve_entity("OnlyHere")
+        assert result == "generated/types.ts::OnlyHere"
+
+    def test_no_context_alphabetical_tiebreaker(self, cache: CacheDB) -> None:
+        """When all signals equal, alphabetical wins."""
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship("src/b.py::Util", "calls", "src/x.py::X", "src/b.py"),
+                Relationship("src/a.py::Util", "calls", "src/y.py::Y", "src/a.py"),
+            ]
+        )
+        result = cache.resolve_entity("Util")
+        assert result == "src/a.py::Util"
+
+
 class TestEnrichmentCache:
     """Test enrichment cache CRUD operations."""
 
@@ -564,6 +704,61 @@ class TestGetAllRelationshipPairs:
         assert ("c.py::Baz", "d.py::Qux") in pairs
 
 
+class TestBareSymbolFallback:
+    """Test bare symbol fallback in get_relationships."""
+
+    @pytest.fixture
+    def cache(self, temp_cache_dir: Path) -> CacheDB:
+        return CacheDB(temp_cache_dir)
+
+    def test_get_bare_symbol_extracts_after_separator(self) -> None:
+        """_get_bare_symbol extracts the part after '::'."""
+        assert CacheDB._get_bare_symbol("app/main.py::Foo") == "Foo"
+        assert CacheDB._get_bare_symbol("a.py::Class.method") == "Class.method"
+
+    def test_get_bare_symbol_returns_none_without_separator(self) -> None:
+        """_get_bare_symbol returns None when there is no '::'."""
+        assert CacheDB._get_bare_symbol("just_a_name") is None
+        assert CacheDB._get_bare_symbol("path/to/file.py") is None
+
+    def test_bare_fallback_finds_target_when_exact_fails(self, cache: CacheDB) -> None:
+        """bare_fallback=True finds matches on bare symbol when exact match returns 0."""
+        from clew.indexer.relationships import Relationship
+
+        # Store a relationship with bare symbol as target (e.g., from same-file resolution)
+        cache.store_relationships(
+            [
+                Relationship("a.py::main", "calls", "helper", "a.py"),
+            ]
+        )
+        # Query with fully qualified entity that doesn't match exactly
+        result = cache.get_relationships(
+            "some/path/a.py::helper", direction="inbound", bare_fallback=True
+        )
+        assert len(result) == 1
+        assert result[0].source_entity == "a.py::main"
+
+    def test_bare_fallback_skipped_when_exact_match_succeeds(self, cache: CacheDB) -> None:
+        """bare_fallback=True does NOT run fallback query when exact match has results."""
+        from unittest.mock import patch
+
+        from clew.indexer.relationships import Relationship
+
+        cache.store_relationships(
+            [
+                Relationship("a.py::main", "calls", "a.py::helper", "a.py"),
+            ]
+        )
+
+        with patch.object(CacheDB, "_get_bare_symbol", wraps=CacheDB._get_bare_symbol) as mock_bare:
+            result = cache.get_relationships(
+                "a.py::helper", direction="inbound", bare_fallback=True
+            )
+            assert len(result) == 1
+            # _get_bare_symbol should NOT be called since exact match succeeded
+            mock_bare.assert_not_called()
+
+
 class TestSchemaMigration:
     """Test schema migration from v2 to v3."""
 
@@ -575,10 +770,10 @@ class TestSchemaMigration:
         result = cache.get_enrichment("test::chunk")
         assert result == ("desc", "keywords")
 
-    def test_clear_all_state_clears_enrichment(self, temp_cache_dir: Path) -> None:
-        """clear_all_state should also clear enrichment_cache."""
+    def test_clear_all_state_preserves_enrichment(self, temp_cache_dir: Path) -> None:
+        """clear_all_state should preserve enrichment_cache (content-addressed, reusable)."""
         cache = CacheDB(temp_cache_dir)
         cache.set_enrichment("test::chunk", "desc", "keywords")
         cache.clear_all_state("code")
         result = cache.get_enrichment("test::chunk")
-        assert result is None
+        assert result == ("desc", "keywords")

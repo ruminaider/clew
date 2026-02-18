@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -127,6 +128,11 @@ def search(
     language: str | None = typer.Option(None, "--language", "-l", help="Filter by language"),
     chunk_type: str | None = typer.Option(None, "--chunk-type", help="Filter by chunk type"),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
+    json_output: bool = typer.Option(False, "--json", help="Compact JSON to stdout"),
+    full_content: bool = typer.Option(False, "--full", help="Include full content (with --json)"),
+    project_root: Path | None = typer.Option(
+        None, "--project-root", "-p", help="Project root directory (for cache dir resolution)"
+    ),
 ) -> None:
     """Search the codebase."""
     from clew.exceptions import ClewError
@@ -134,7 +140,7 @@ def search(
     from clew.search.models import QueryIntent, SearchRequest
 
     try:
-        components = create_components()
+        components = create_components(project_root=project_root)
     except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
@@ -183,6 +189,25 @@ def search(
         print(json.dumps(results, indent=2))
         return
 
+    if json_output:
+        from clew.mcp_server import _compact_result_to_dict
+
+        results_list = []
+        for r in response.results:
+            d = _compact_result_to_dict(r)
+            if full_content:
+                d["content"] = r.content
+            results_list.append(d)
+        output = {
+            "query": query,
+            "query_enhanced": response.query_enhanced,
+            "intent": response.intent.value,
+            "total_candidates": response.total_candidates,
+            "results": results_list,
+        }
+        print(json.dumps(output, indent=2))
+        return
+
     if not response.results:
         console.print("[yellow]No results found.[/yellow]")
         return
@@ -209,42 +234,71 @@ def search(
 
 
 @app.command()
-def status() -> None:
+def status(
+    json_output: bool = typer.Option(False, "--json", help="Compact JSON to stdout"),
+    project_root: Path | None = typer.Option(
+        None, "--project-root", "-p", help="Project root directory (for cache dir resolution)"
+    ),
+) -> None:
     """Show system health and index statistics."""
     from clew.exceptions import ClewError
     from clew.factory import create_components
 
     try:
-        components = create_components()
+        components = create_components(project_root=project_root)
     except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
-    table = Table(title="clew status")
-    table.add_column("Component", style="bold")
-    table.add_column("Status")
-
     # Qdrant health
     healthy = components.qdrant.health_check()
-    table.add_row("Qdrant", "[green]healthy[/green]" if healthy else "[red]unreachable[/red]")
 
     # Collections
+    collections: dict[str, int | None] = {}
     for name in ["code", "docs"]:
         if components.qdrant.collection_exists(name):
-            count = components.qdrant.collection_count(name)
-            table.add_row(f"Collection: {name}", f"{count} chunks")
+            collections[name] = components.qdrant.collection_count(name)
         else:
-            table.add_row(f"Collection: {name}", "[dim]not created[/dim]")
+            collections[name] = None
 
     # Last indexed commit
     last_commit = components.cache.get_last_indexed_commit("code")
-    table.add_row("Last commit", last_commit or "[dim]none[/dim]")
 
     # Staleness detection
     from clew.indexer.git_tracker import GitChangeTracker
 
     tracker = GitChangeTracker(Path(".").resolve())
     staleness = tracker.check_staleness(last_commit)
+
+    if json_output:
+        output: dict[str, Any] = {
+            "qdrant_healthy": healthy,
+            "collections": {
+                name: {"chunks": count} if count is not None else None
+                for name, count in collections.items()
+            },
+            "last_commit": last_commit,
+            "is_stale": staleness.is_stale,
+            "commits_behind": staleness.commits_behind,
+            "has_uncommitted_changes": staleness.has_uncommitted_changes,
+        }
+        print(json.dumps(output, indent=2))
+        return
+
+    table = Table(title="clew status")
+    table.add_column("Component", style="bold")
+    table.add_column("Status")
+
+    table.add_row("Qdrant", "[green]healthy[/green]" if healthy else "[red]unreachable[/red]")
+
+    for name, count in collections.items():
+        if count is not None:
+            table.add_row(f"Collection: {name}", f"{count} chunks")
+        else:
+            table.add_row(f"Collection: {name}", "[dim]not created[/dim]")
+
+    table.add_row("Last commit", last_commit or "[dim]none[/dim]")
+
     if staleness.is_stale:
         stale_msg = "[yellow]stale[/yellow]"
         if staleness.commits_behind > 0:
@@ -268,20 +322,27 @@ def trace(
     relationship_types: list[str] | None = typer.Option(
         None, "--type", "-t", help="Filter relationship types"
     ),
+    language: str | None = typer.Option(
+        None, "--language", "-l", help="Prefer entities in this language (python, typescript, etc.)"
+    ),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
+    json_output: bool = typer.Option(False, "--json", help="Compact JSON to stdout"),
+    project_root: Path | None = typer.Option(
+        None, "--project-root", "-p", help="Project root directory (for cache dir resolution)"
+    ),
 ) -> None:
     """Trace code relationships for an entity."""
     from clew.exceptions import ClewError
     from clew.factory import create_components
 
     try:
-        components = create_components()
+        components = create_components(project_root=project_root)
     except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
     clamped_depth = max(1, min(5, max_depth))
-    resolved = components.cache.resolve_entity(entity)
+    resolved = components.cache.resolve_entity(entity, language=language)
     if resolved != entity:
         console.print(f"[dim]Resolved: {entity} → {resolved}[/dim]")
     relationships = components.cache.traverse_relationships(
@@ -293,6 +354,17 @@ def trace(
 
     if raw:
         print(json.dumps({"entity": entity, "relationships": relationships}, indent=2))
+        return
+
+    if json_output:
+        output = {
+            "entity": entity,
+            "resolved_entity": resolved,
+            "direction": direction,
+            "max_depth": clamped_depth,
+            "relationships": relationships,
+        }
+        print(json.dumps(output, indent=2))
         return
 
     if not relationships:

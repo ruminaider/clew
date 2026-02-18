@@ -22,6 +22,8 @@ class PythonRelationshipExtractor(RelationshipExtractor):
     def extract(self, tree: Any, source: str, file_path: str) -> list[Relationship]:
         relationships: list[Relationship] = []
         self._import_table: dict[str, str] = {}
+        self._file_definitions: dict[str, str] = {}
+        self._collect_file_definitions(tree.root_node, file_path)
         self._walk(
             tree.root_node,
             source,
@@ -31,6 +33,42 @@ class PythonRelationshipExtractor(RelationshipExtractor):
             current_function=None,
         )
         return relationships
+
+    def _collect_file_definitions(self, root: Any, file_path: str) -> None:
+        """Pre-pass: collect top-level function/class definitions for same-file resolution."""
+        for child in root.children:
+            node = child
+            # Unwrap decorated_definition to find the actual definition
+            if child.type == "decorated_definition":
+                for sub in child.children:
+                    if sub.type in ("function_definition", "class_definition"):
+                        node = sub
+                        break
+
+            if node.type == "function_definition":
+                name = self._get_field_text(node, "name")
+                if name:
+                    self._file_definitions[name] = f"{file_path}::{name}"
+
+            elif node.type == "class_definition":
+                class_name = self._get_field_text(node, "name")
+                if class_name:
+                    self._file_definitions[class_name] = f"{file_path}::{class_name}"
+                    # Also collect methods as ClassName.method
+                    body = node.child_by_field_name("body")
+                    if body:
+                        for body_child in body.children:
+                            method_node = body_child
+                            if body_child.type == "decorated_definition":
+                                for sub in body_child.children:
+                                    if sub.type == "function_definition":
+                                        method_node = sub
+                                        break
+                            if method_node.type == "function_definition":
+                                method_name = self._get_field_text(method_node, "name")
+                                if method_name:
+                                    qualified = f"{class_name}.{method_name}"
+                                    self._file_definitions[qualified] = f"{file_path}::{qualified}"
 
     def _walk(
         self,
@@ -330,8 +368,11 @@ class PythonRelationshipExtractor(RelationshipExtractor):
         - Fallback: return original called_name
         """
         if func_node.type == "identifier":
-            # Direct lookup: `Prescription()` → import table["Prescription"]
-            return self._import_table.get(called_name, called_name)
+            # Import table takes priority over file definitions
+            resolved = self._import_table.get(called_name)
+            if resolved:
+                return resolved
+            return self._file_definitions.get(called_name, called_name)
 
         if func_node.type == "attribute":
             root = self._get_attribute_root(func_node)
@@ -346,6 +387,11 @@ class PythonRelationshipExtractor(RelationshipExtractor):
                 # Replace root with resolved path
                 # e.g., `np.array()` with np→numpy becomes `numpy.array`
                 suffix = called_name[len(root) :]  # ".array()" → ".array"
+                return f"{resolved_root}{suffix}"
+            # Check file definitions as secondary fallback
+            resolved_root = self._file_definitions.get(root)
+            if resolved_root is not None:
+                suffix = called_name[len(root) :]
                 return f"{resolved_root}{suffix}"
 
         return called_name

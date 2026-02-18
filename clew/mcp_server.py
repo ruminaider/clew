@@ -460,6 +460,7 @@ async def trace(
     direction: str = "both",
     max_depth: int = 2,
     relationship_types: list[str] | None = None,
+    language: str | None = None,
 ) -> dict[str, object]:
     """Trace code relationships for an entity.
 
@@ -471,12 +472,13 @@ async def trace(
         direction: "inbound" (dependents), "outbound" (dependencies), or "both"
         max_depth: How many hops to follow (1-5, default 2)
         relationship_types: Optional filter (e.g., ["imports", "calls", "inherits"])
+        language: Prefer entities in this language (e.g., "python", "typescript")
     """
     try:
         components = _get_components()
         clamped_depth = max(1, min(5, max_depth))
 
-        resolved = components.cache.resolve_entity(entity)
+        resolved = components.cache.resolve_entity(entity, language=language)
 
         relationships = components.cache.traverse_relationships(
             resolved,
