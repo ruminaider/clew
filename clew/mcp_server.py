@@ -20,6 +20,7 @@ from clew.exceptions import (
 from clew.factory import Components, create_components
 from clew.indexer.pipeline import detect_language
 from clew.search.models import SearchRequest, SuggestionType
+from clew.search.surfacing import surface_peripherals
 
 logger = logging.getLogger(__name__)
 
@@ -156,90 +157,6 @@ async def _run_exhaustive_search(
         return response, []
 
 
-def _surface_peripherals(
-    results: list[Any],
-    cache: Any,
-    max_files: int = 5,
-) -> list[dict[str, str]]:
-    """Surface related files from the trace graph for top search results.
-
-    Extracts entity identifiers from top-3 results, batch traverses
-    relationships, filters out files already in results, and categorizes.
-    """
-    if not results:
-        return []
-
-    # Extract entity identifiers from top-3 results
-    entities: list[str] = []
-    result_files: set[str] = {r.file_path for r in results}
-
-    for r in results[:3]:
-        chunk_id = getattr(r, "chunk_id", "")
-        if chunk_id:
-            entities.append(chunk_id)
-        # Also try file_path::class_name.function_name format
-        class_name = getattr(r, "class_name", "")
-        func_name = getattr(r, "function_name", "")
-        if class_name and func_name:
-            entities.append(f"{r.file_path}::{class_name}.{func_name}")
-        elif func_name:
-            entities.append(f"{r.file_path}::{func_name}")
-        elif class_name:
-            entities.append(f"{r.file_path}::{class_name}")
-
-    if not entities:
-        return []
-
-    # Batch traverse relationships (single SQL query)
-    try:
-        relations = cache.traverse_relationships_batch(entities, max_depth=1)
-    except Exception:
-        logger.debug("Peripheral surfacing failed", exc_info=True)
-        return []
-
-    # Collect unique related files, excluding files already in results
-    seen: dict[str, dict[str, str]] = {}  # file_path -> {relationship, entity}
-    for rel in relations:
-        # Determine the "other" file
-        source = str(rel["source_entity"])
-        target = str(rel["target_entity"])
-        relationship = str(rel["relationship"])
-
-        # Extract file paths from entities
-        source_file = source.split("::")[0] if "::" in source else source
-        target_file = target.split("::")[0] if "::" in target else target
-
-        # Pick the file that's NOT in our results
-        for candidate_file, entity in [(target_file, target), (source_file, source)]:
-            if candidate_file not in result_files and candidate_file not in seen:
-                # Categorize the relationship
-                category = _categorize_relationship(relationship, candidate_file)
-                seen[candidate_file] = {
-                    "file_path": candidate_file,
-                    "relationship": category,
-                    "entity": entity,
-                }
-
-    return list(seen.values())[:max_files]
-
-
-def _categorize_relationship(relationship: str, file_path: str) -> str:
-    """Categorize a relationship for display."""
-    # Check file path patterns first
-    file_lower = file_path.lower()
-    if "test" in file_lower:
-        return "tests"
-    if "admin" in file_lower:
-        return "admin"
-    if "constants" in file_lower or "config" in file_lower:
-        return "config"
-    if "script" in file_lower:
-        return "scripts"
-
-    # Fall back to relationship type
-    return relationship
-
-
 SUGGESTION_MESSAGES: dict[SuggestionType, str] = {
     SuggestionType.TRY_KEYWORD: (
         "Results may be incomplete. Try mode='keyword' for identifier-based search."
@@ -265,6 +182,18 @@ async def search(
     mode: str | None = None,
 ) -> dict[str, Any]:
     """Search the codebase for relevant code snippets.
+
+    Modes:
+      semantic (default): Semantic similarity search. Best for understanding,
+        debugging, and finding conceptually related code.
+      keyword: Identifier-biased hybrid search. Best for "find all X" tasks
+        like listing all callers, all URL patterns, all env vars.
+      exhaustive: Semantic search + grep. Guarantees completeness by also
+        running ripgrep. Best when you need to find EVERY instance.
+
+    The response includes a `confidence_label` (high/medium/low) and
+    `suggestion` when results may be incomplete. Check these fields and
+    consider switching modes if confidence is low.
 
     Args:
         query: Natural language search query
@@ -337,7 +266,7 @@ async def search(
 
         # Surface related files from trace graph
         try:
-            related = _surface_peripherals(response.results, components.cache)
+            related = surface_peripherals(response.results, components.cache)
             if related:
                 result_dict["related_files"] = related
         except Exception:

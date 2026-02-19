@@ -128,7 +128,15 @@ def search(
     language: str | None = typer.Option(None, "--language", "-l", help="Filter by language"),
     chunk_type: str | None = typer.Option(None, "--chunk-type", help="Filter by chunk type"),
     mode: str | None = typer.Option(
-        None, "--mode", "-m", help="Search mode: semantic, keyword, exhaustive"
+        None,
+        "--mode",
+        "-m",
+        help=(
+            "Search mode (default: semantic). "
+            "semantic: best for questions and debugging. "
+            "keyword: best for 'find all X' identifier matching. "
+            "exhaustive: semantic + grep for completeness guarantees."
+        ),
     ),
     exhaustive: bool = typer.Option(False, "--exhaustive", help="Shortcut for --mode exhaustive"),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
@@ -236,6 +244,7 @@ def search(
 
     if json_output:
         from clew.mcp_server import _compact_result_to_dict
+        from clew.search.surfacing import surface_peripherals
 
         results_list = []
         for r in response.results:
@@ -243,13 +252,27 @@ def search(
             if full_content:
                 d["content"] = r.content
             results_list.append(d)
+        suggestion_map = {
+            "try_keyword": "Try --mode keyword for broader identifier matching",
+            "try_exhaustive": "Try --exhaustive for grep-based completeness",
+            "low_confidence": "Low confidence — consider refining query or trying a different mode",
+        }
         output: dict[str, Any] = {
             "query": query,
             "query_enhanced": response.query_enhanced,
             "intent": response.intent.value,
+            "mode": effective_mode or "semantic",
             "total_candidates": response.total_candidates,
+            "confidence": round(response.confidence, 3),
+            "confidence_label": response.confidence_label,
             "results": results_list,
         }
+        if response.suggestion_type.value != "none":
+            output["suggestion"] = suggestion_map.get(
+                response.suggestion_type.value, response.suggestion_type.value
+            )
+        if response.suggested_patterns:
+            output["suggested_patterns"] = response.suggested_patterns
         if grep_results:
             output["grep_results"] = [
                 {
@@ -260,6 +283,14 @@ def search(
                 }
                 for g in grep_results
             ]
+            output["grep_total"] = len(grep_results)
+        # Surface related files from trace graph
+        try:
+            related = surface_peripherals(response.results, components.cache)
+            if related:
+                output["related_files"] = related
+        except Exception:
+            pass
         print(json.dumps(output, indent=2))
         return
 
@@ -269,8 +300,23 @@ def search(
 
     console.print(
         f"[dim]Query: {response.query_enhanced} | Intent: {response.intent.value} | "
-        f"Candidates: {response.total_candidates}[/dim]\n"
+        f"Mode: {effective_mode or 'semantic'} | Candidates: {response.total_candidates}[/dim]"
     )
+    if response.confidence_label != "high":
+        console.print(
+            f"[yellow]Confidence: {response.confidence_label}[/yellow] ({response.confidence:.3f})"
+        )
+    suggestion_map = {
+        "try_keyword": "Try --mode keyword for broader identifier matching",
+        "try_exhaustive": "Try --exhaustive for grep-based completeness",
+        "low_confidence": "Low confidence — consider refining query or trying a different mode",
+    }
+    if response.suggestion_type.value != "none":
+        suggestion_text = suggestion_map.get(
+            response.suggestion_type.value, response.suggestion_type.value
+        )
+        console.print(f"[yellow]{suggestion_text}[/yellow]")
+    console.print()
 
     for _i, result in enumerate(response.results, 1):
         title = f"{result.file_path}"

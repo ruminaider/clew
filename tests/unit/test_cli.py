@@ -51,6 +51,9 @@ class TestSearchCommand:
             query_enhanced="hello world",
             total_candidates=5,
             intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
 
@@ -76,6 +79,9 @@ class TestSearchCommand:
             query_enhanced="hello",
             total_candidates=1,
             intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
 
@@ -93,6 +99,9 @@ class TestSearchCommand:
             query_enhanced="xyz",
             total_candidates=0,
             intent=Mock(value="code"),
+            confidence=0.0,
+            confidence_label="low",
+            suggestion_type=Mock(value="none"),
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
 
@@ -116,6 +125,9 @@ class TestSearchCommand:
             query_enhanced="test",
             total_candidates=0,
             intent=Mock(value="debug"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
 
@@ -383,6 +395,7 @@ def _make_search_result(**overrides: object) -> Mock:
         "is_test": False,
         "importance_score": 0.0,
         "enriched": None,
+        "chunk_id": "src/main.py::function::search",
     }
     defaults.update(overrides)
     return Mock(**defaults)
@@ -398,8 +411,13 @@ class TestSearchJsonOutput:
             query_enhanced="search engine",
             total_candidates=30,
             intent=Mock(value="code"),
+            confidence=0.85,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "search engine", "--json"])
         assert result.exit_code == 0
@@ -407,7 +425,10 @@ class TestSearchJsonOutput:
         assert data["query"] == "search engine"
         assert data["query_enhanced"] == "search engine"
         assert data["intent"] == "code"
+        assert data["mode"] == "semantic"
         assert data["total_candidates"] == 30
+        assert data["confidence"] == 0.85
+        assert data["confidence_label"] == "high"
         assert len(data["results"]) == 1
         r = data["results"][0]
         assert r["file_path"] == "src/main.py"
@@ -429,8 +450,13 @@ class TestSearchJsonOutput:
             query_enhanced="search",
             total_candidates=1,
             intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "search", "--json", "--full"])
         assert result.exit_code == 0
@@ -447,14 +473,163 @@ class TestSearchJsonOutput:
             query_enhanced="xyz",
             total_candidates=0,
             intent=Mock(value="code"),
+            confidence=0.0,
+            confidence_label="low",
+            suggestion_type=Mock(value="low_confidence"),
+            suggested_patterns=None,
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "xyz", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["results"] == []
         assert data["total_candidates"] == 0
+
+
+class TestSearchJsonV3Fields:
+    """Test V3 metadata fields in --json output."""
+
+    @patch("clew.factory.create_components")
+    def test_json_includes_mode_field(self, mock_factory: Mock) -> None:
+        """--json output includes mode field."""
+        mock_response = Mock(
+            results=[],
+            query_enhanced="test",
+            total_candidates=0,
+            intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
+
+        result = runner.invoke(app, ["search", "test", "--json", "--mode", "keyword"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["mode"] == "keyword"
+
+    @patch("clew.factory.create_components")
+    def test_json_default_mode_is_semantic(self, mock_factory: Mock) -> None:
+        mock_response = Mock(
+            results=[],
+            query_enhanced="test",
+            total_candidates=0,
+            intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["mode"] == "semantic"
+
+    @patch("clew.factory.create_components")
+    def test_json_includes_suggestion(self, mock_factory: Mock) -> None:
+        """--json output includes suggestion when confidence is low."""
+        mock_response = Mock(
+            results=[],
+            query_enhanced="test",
+            total_candidates=0,
+            intent=Mock(value="code"),
+            confidence=0.3,
+            confidence_label="low",
+            suggestion_type=Mock(value="try_exhaustive"),
+            suggested_patterns=None,
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "suggestion" in data
+        assert "exhaustive" in data["suggestion"]
+
+    @patch("clew.factory.create_components")
+    def test_json_includes_suggested_patterns(self, mock_factory: Mock) -> None:
+        """--json output includes suggested_patterns when present."""
+        mock_response = Mock(
+            results=[],
+            query_enhanced="test",
+            total_candidates=0,
+            intent=Mock(value="enumeration"),
+            confidence=0.5,
+            confidence_label="medium",
+            suggestion_type=Mock(value="try_exhaustive"),
+            suggested_patterns=["urlpatterns", "path("],
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "suggested_patterns" in data
+        assert data["suggested_patterns"] == ["urlpatterns", "path("]
+
+    @patch("clew.factory.create_components")
+    def test_json_includes_related_files(self, mock_factory: Mock) -> None:
+        """--json output includes related_files from trace graph."""
+        mock_result = _make_search_result(
+            chunk_id="src/main.py::function::search",
+        )
+        mock_response = Mock(
+            results=[mock_result],
+            query_enhanced="search",
+            total_candidates=1,
+            intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = [
+            {
+                "source_entity": "src/main.py::function::search",
+                "relationship": "tests",
+                "target_entity": "tests/test_main.py::TestSearch",
+                "confidence": "static",
+                "depth": 1,
+            }
+        ]
+
+        result = runner.invoke(app, ["search", "search", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "related_files" in data
+        assert len(data["related_files"]) == 1
+        assert data["related_files"][0]["file_path"] == "tests/test_main.py"
+
+    @patch("clew.factory.create_components")
+    def test_json_no_suggestion_when_high_confidence(self, mock_factory: Mock) -> None:
+        """--json output omits suggestion when suggestion_type is none."""
+        mock_response = Mock(
+            results=[],
+            query_enhanced="test",
+            total_candidates=5,
+            intent=Mock(value="code"),
+            confidence=0.95,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "suggestion" not in data
 
 
 class TestTraceJsonOutput:
