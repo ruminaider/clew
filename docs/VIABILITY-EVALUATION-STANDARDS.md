@@ -1,6 +1,6 @@
 # Viability Evaluation Standards
 
-Reusable methodology for running blind, agent-based A/B evaluations of tool effectiveness. Developed through four iterations (V1-V2.3) of evaluating clew against grep baselines.
+Reusable methodology for running blind, agent-based A/B evaluations of tool effectiveness. Developed through four iterations (V1-V2.3) of evaluating clew against grep baselines, with methodology improvements from V3.0 planning review.
 
 These standards apply whenever you need to answer: "Does tool X provide meaningful value over baseline Y for task Z?"
 
@@ -36,17 +36,34 @@ Scorers provide raw ratings. Aggregation, weighting, and winner determination ar
 
 ## Blind Evaluation Pipeline
 
-Every evaluation follows this 6-phase pipeline:
+Every evaluation follows this 7-phase pipeline:
 
 ```
+Phase -1: Scenario validation (verify scenarios against target codebase)
 Phase 0: Pre-flight checks
 Phase 1: Exploration (2 agents per test, independent)
 Phase 2: Sanitization (normalize transcripts)
 Phase 3: Verification (can a reader identify the tool?)
 Phase 4: Scoring (2+ scorers per test, raw ratings only)
 Phase 5: Computation (programmatic aggregation)
+Phase 5.5: Post-hoc feature analysis (optional, qualitative)
 Phase 6: Disagreement resolution (conditional tiebreakers)
 ```
+
+### Phase -1: Scenario Validation
+
+Before any exploration begins, a dedicated validation agent verifies each scenario is testable against the target codebase.
+
+**Steps:**
+
+1. For each scenario, the validation agent searches the target codebase to confirm relevant artifacts exist
+2. Produce a **ground-truth checklist**: a concrete, named list of artifacts (files, classes, functions, endpoints) that a complete answer should reference
+3. Each checklist must contain **≥5 concrete artifacts** — scenarios with fewer are too narrow for meaningful scoring
+4. **Seal checklists** before exploration begins — no post-hoc modification once agents start running
+
+**Replacement protocol:** If a scenario fails validation (insufficient artifacts, ambiguous scope, or structurally unsolvable by one tool), replace it with a new scenario from the same category. Document all replacements.
+
+**Why:** Without validation, scenarios may be untestable or trivial. Ground-truth checklists convert subjective completeness scoring ("did they find enough?") into objective measurement ("did they find X, Y, Z?").
 
 ### Phase 0: Pre-flight
 
@@ -72,10 +89,20 @@ For each test scenario, launch 2 independent agents:
 - Receives the same scenario description as the baseline agent
 - Does not receive hints about tool features — must discover them organically
 
+**Symmetric capability hints:** When testing specific tool features (not just tool existence), both agents should receive symmetric capability hints so the evaluation measures feature effectiveness rather than feature discoverability:
+- Test agent: "This tool supports multiple modes. Run `--help` to see options."
+- Baseline agent: "Your tools support various flags. Run `--help` to see options."
+
+This eliminates coaching asymmetry while letting agents discover features organically. Omit hints when the evaluation intentionally measures discoverability.
+
 **Critical constraints for BOTH agents:**
 - No access to: test plans, CLAUDE.md, codebase documentation, prior evaluation results
 - Start cold with zero codebase knowledge
 - Same scenario text, same working directory
+
+**Soft exploration budget:** Recommend a soft tool-call budget (e.g., ~20 calls) for exploration agents. This standardizes exploration length and makes Discovery Efficiency scoring more comparable across tests. The budget is a soft cap — agents may slightly exceed it — but exploration transcripts significantly beyond the budget should be noted in scoring.
+
+**Why:** Without a budget, agents range from 8 to 30+ calls with no guidance, making discovery efficiency scores less comparable across tests.
 
 **Parallelization:** All test pairs can run in parallel. Each agent is fully independent.
 
@@ -107,9 +134,16 @@ A dedicated sanitization agent (separate from explorers and scorers) processes e
 
 A single verification agent reads all sanitized transcripts and attempts to identify which tool each agent used. For each test, it reports a confidence level (0-100%).
 
-**Pass criteria:** The verifier guesses correctly with >60% confidence on no more than 25% of tests. If it exceeds this threshold, Phase 2 must be re-run with stricter sanitization before scoring proceeds.
+**Pass criteria:** The verifier guesses correctly with >60% confidence on no more than 25% of tests.
 
-**Why this matters:** If a reader can identify the tool from the transcript, the scoring is not truly blind. This gate converts "we tried to anonymize" into "we verified anonymization worked."
+**Escalation on failure:**
+
+1. **First failure:** Re-run Phase 2 with stricter sanitization (normalize query text, remove intermediate reasoning, keep only tool calls + results + final answer)
+2. **Second failure:** Proceed with documented caveat — behavioral fingerprints may persist despite sanitization. The scoring rubric is absolute and tool-independent, which mitigates identification bias.
+
+Pre-register this escalation so no post-hoc justification is needed.
+
+**Why this matters:** If a reader can identify the tool from the transcript, the scoring is not truly blind. This gate converts "we tried to anonymize" into "we verified anonymization worked." The escalation prevents an infinite loop when sanitization can't fully anonymize (which V2.3 demonstrated is realistic).
 
 ### Phase 4: Scoring
 
@@ -124,7 +158,7 @@ A single verification agent reads all sanitized transcripts and attempts to iden
 
 > You are scoring two agent transcripts that attempted the same codebase exploration task. Score each agent independently on [N] dimensions using the rubric provided. Provide integer ratings (1-5) for each dimension.
 >
-> IMPORTANT: Score each agent against the absolute rubric, not relative to the other agent. A score of 3 means "good" regardless of what the other agent scored. Do NOT compute aggregates or declare a winner.
+> IMPORTANT: Score each agent against the absolute rubric, not relative to the other agent. A score of 3 means "adequate" regardless of what the other agent scored. Do NOT compute aggregates or declare a winner.
 
 ### Phase 5: Programmatic Computation
 
@@ -138,6 +172,18 @@ A script (not an agent) performs all aggregation:
 6. Computes category and overall averages
 7. Applies viability thresholds
 8. Flags scorer disagreements (>1 point on any dimension)
+
+**Reusable tooling:** `scripts/viability_compute.py` provides a starting point for programmatic computation. Thresholds and track assignments should be customized per evaluation, but the aggregation logic (weighted average, median tiebreaker, winner determination) is reusable.
+
+### Phase 5.5: Post-hoc Feature Analysis (optional)
+
+After programmatic computation, optionally analyze raw (unsanitized) transcripts for qualitative insights:
+
+- Measure **feature usage**, not tool quality (e.g., "did confidence signaling change agent behavior?", "how often did agents use the new mode?")
+- Does NOT affect verdicts or scores — published alongside quantitative results as a separate section
+- Useful when the version under test adds new user-facing capabilities
+
+**Why:** Quantitative scores tell you IF the tool improved. Post-hoc analysis tells you WHY (or why not). This phase is explicitly separated from scoring to prevent qualitative observations from influencing quantitative verdicts.
 
 ### Phase 6: Disagreement Resolution
 
@@ -174,7 +220,19 @@ These dimensions have been validated across V2.2-V2.3 evaluations. Use as-is or 
 
 ### Rating Scale
 
-Use a 1-5 integer scale with explicit anchors for each dimension. Example:
+Use a 1-5 integer scale. Prefer dimension-specific anchors to reduce inter-scorer variance:
+
+**Dimension-specific anchors (recommended):**
+
+| Score | Discovery Efficiency | Context Precision | Completeness | Relational Insight | Answer Confidence |
+|-------|---------------------|-------------------|--------------|-------------------|-------------------|
+| 5 | ≤3 tool calls | ≤10% noise | All checklist artifacts found | ≥3 unexpected connections | Immediately actionable |
+| 4 | 4-5 tool calls | 10-20% noise | ≥90% found | 2 connections | Needs 1 follow-up read |
+| 3 | 6-8 tool calls | 20-40% noise | ≥70% found | 1 connection | Needs 2-3 follow-ups |
+| 2 | 9-12 tool calls | 40-60% noise | 50-70% found | 0 but tool supports it | Needs significant follow-up |
+| 1 | 12+ calls or gives up | 60%+ noise | <50% found | No relational capability | Not actionable |
+
+**Generic fallback anchors** (for custom dimensions without specific anchors):
 
 | Score | Meaning |
 |-------|---------|
@@ -183,6 +241,17 @@ Use a 1-5 integer scale with explicit anchors for each dimension. Example:
 | 3 | Adequate — meets core criteria but has notable gaps |
 | 2 | Weak — misses important criteria |
 | 1 | Failed — does not meaningfully address the dimension |
+
+### Bonus Discovery
+
+When using ground-truth checklists (from Phase -1), scorers may award bonus credit for valid discoveries beyond the checklist — artifacts that are genuinely relevant but were not anticipated during scenario validation.
+
+**Rules:**
+- The checklist itself is never modified post-hoc
+- Bonus discoveries must be justified in the scorer's notes
+- Bonus credit should not exceed +0.5 on the Completeness dimension (prevents runaway inflation)
+
+**Why:** Without this, agents that find more than expected get no credit, discouraging thorough exploration. The checklist remains the scoring floor; bonus credit rewards genuine insight.
 
 ### Winner Determination
 
@@ -217,6 +286,20 @@ Define three verdict tiers before running evaluations:
 - **Iterate** should be the "there's clearly something here" bar. The tool wins on its designed strengths even if it loses elsewhere.
 - **Kill** is the absence of signal. If the tool can't beat the baseline on ANY test in its target category, it's not viable.
 
+### Regression Guardrails
+
+When re-evaluating after improvements (not the first evaluation), add a regression threshold:
+
+```
+regression_threshold = prior_score - variance_buffer
+```
+
+- **Variance buffer** should be calibrated from observed score variance across runs (e.g., ±0.3 based on V2.2-V2.3 experience)
+- If the new score falls below `regression_threshold`, flag as regression even if it's above the absolute Ship threshold
+- This catches real regressions without failing on noise
+
+**Example:** If V2.3 scored 3.96, set V3.0 regression threshold at 3.96 - 0.30 = 3.66. A V3.0 score of 3.60 would trigger a regression flag even though it's above the absolute Ship threshold of 3.50.
+
 ### Category-Specific Thresholds (optional)
 
 If tests span categories with different expected outcomes (tool-advantaged, mixed, baseline-advantaged), consider category-specific thresholds in addition to global ones:
@@ -225,6 +308,27 @@ If tests span categories with different expected outcomes (tool-advantaged, mixe
 Ship = global avg >= 3.50 AND global wins >= 5/8
 Strong Iterate = tool-advantaged category avg >= X AND wins >= N in that category
 ```
+
+### Multi-Track Evaluation
+
+When an evaluation both validates existing quality AND tests new capabilities, use a multi-track pattern:
+
+**Regression track:**
+- Reuses prior scenarios with default tool configuration
+- Validates that improvements didn't break existing quality
+- Ship threshold = `prior_score - variance_buffer`
+- Can start immediately (no scenario validation needed for reused scenarios)
+
+**Feature track:**
+- New scenarios designed to test new capabilities
+- Independent Ship/Iterate/Kill thresholds
+- Requires Phase -1 scenario validation before exploration
+
+**Rules:**
+- Track separation during scoring: don't mix tracks in a single scorer session
+- Independent thresholds per track — a feature track failure doesn't block shipping if the regression track passes
+- Both tracks use the same pipeline (Phases 0-6) but with independent scenario sets
+- Parallel execution: regression track starts immediately while feature track validates scenarios
 
 ---
 
@@ -241,6 +345,8 @@ Structure tests into 3 tiers:
 | **Baseline-advantaged** (20-30% of tests) | Tasks where the baseline is inherently better | Baseline |
 
 Including baseline-advantaged tests is mandatory. They validate evaluation honesty.
+
+**Mode-negative tests:** When testing specific tool features (e.g., a new search mode), include at least one test where the feature should HURT performance relative to the default mode. This validates the evaluation framework: if the tool wins using the feature on a scenario where the feature should be harmful, the test design is suspect. This generalizes the baseline-advantaged concept to cover within-tool feature testing.
 
 ### Scenario Quality Checklist
 
@@ -260,9 +366,25 @@ Reusing scenarios enables direct comparison but risks "teaching to the test." Th
 
 ---
 
+## Edge Cases
+
+Pre-registered handling for situations that arise during evaluation:
+
+| Situation | Handling | Rationale |
+|-----------|----------|-----------|
+| Agent uses the other tool via Bash | Allowed; sanitize normally | Agents are resourceful — constraining Bash would be artificial |
+| Tool timeout or rate limit | Re-run once; if it recurs, score partial transcript | Infrastructure failure ≠ tool quality |
+| Agent gives up early | Score as-is | Giving up is valid data about tool effectiveness |
+| Agent doesn't discover features | Score as-is | Measures real feature discoverability |
+| Agent produces empty/trivial output | Score as-is with minimum ratings | Don't discard inconvenient data |
+
+**General principle:** Score all exploration transcripts as-is. Only re-run for infrastructure failure (timeout, crash, rate limit), never for suboptimal agent behavior. Suboptimal behavior IS the data.
+
+---
+
 ## Common Pitfalls
 
-Lessons from V1-V2.3:
+Lessons from V1-V3.0:
 
 | Pitfall | Version | Lesson |
 |---------|---------|--------|
@@ -276,6 +398,10 @@ Lessons from V1-V2.3:
 | Single scorer per test | V2.2 | Use 2+ scorers with disagreement resolution protocol |
 | N/A dimension for one tool | V2.2 | Score both tools on all dimensions; don't create asymmetric rubrics |
 | Same model for all agents | V2.2 | Acknowledged limitation; mitigate by using independent sessions |
+| No scenario validation | V3.0 | Validate scenarios against codebase before exploration; produce ground-truth checklists |
+| No exploration budget | V2.3 | Agents ranged 8-30+ calls; soft budget standardizes discovery scoring |
+| Single verification attempt | V2.3 | Pre-register escalation levels for verification gate failure |
+| No edge case protocol | V2.3 | Pre-register handling for agent gives-up, timeout, cross-tool usage |
 
 ---
 
@@ -310,7 +436,9 @@ Every evaluation produces a results document with this structure:
 
 ## References
 
+- V3.0 test plan: `docs/plans/2026-02-18-v3.0-viability-test-plan.md`
 - V2.3 test plan: `docs/plans/2026-02-17-v2.3-viability-test-plan.md`
 - V2.2 results: `docs/plans/2026-02-17-v2.2-viability-results.md`
 - V2.2 test plan: `docs/plans/2026-02-16-v2.1-revised-viability-test-plan.md`
 - V2 results: `docs/plans/2026-02-13-v2-viability-results.md`
+- Computation script: `scripts/viability_compute.py`
