@@ -19,7 +19,7 @@ from clew.exceptions import (
 )
 from clew.factory import Components, create_components
 from clew.indexer.pipeline import detect_language
-from clew.search.models import SearchRequest
+from clew.search.models import SearchRequest, SuggestionType
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,158 @@ def _error_response(error: Exception) -> dict[str, str]:
     return {"error": str(error), "fix": "Check logs for details"}
 
 
+def _get_project_root() -> Path | None:
+    """Detect project root from git root or CWD."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return Path.cwd()
+
+
+def _grep_result_to_dict(result: Any) -> dict[str, Any]:
+    """Convert a GrepResult to a dict."""
+    return {
+        "file_path": result.file_path,
+        "line_number": result.line_number,
+        "line_content": result.line_content,
+        "pattern_matched": result.pattern_matched,
+    }
+
+
+async def _run_exhaustive_search(
+    components: Components, request: SearchRequest
+) -> tuple[Any, list[Any]]:
+    """Run exhaustive search: semantic + grep with deduplication."""
+    try:
+        from clew.search.grep import search_with_grep
+
+        project_root = _get_project_root()
+        if project_root is None:
+            response = await components.search_engine.search(request)
+            return response, []
+
+        cfg = components.config.search
+        return await search_with_grep(
+            components.search_engine,
+            request,
+            project_root,
+            grep_timeout=cfg.grep_timeout,
+            grep_max_count=cfg.grep_max_count,
+            grep_response_cap=cfg.grep_response_cap,
+        )
+    except ImportError:
+        logger.debug("grep module unavailable, falling back to semantic search")
+        response = await components.search_engine.search(request)
+        return response, []
+
+
+def _surface_peripherals(
+    results: list[Any],
+    cache: Any,
+    max_files: int = 5,
+) -> list[dict[str, str]]:
+    """Surface related files from the trace graph for top search results.
+
+    Extracts entity identifiers from top-3 results, batch traverses
+    relationships, filters out files already in results, and categorizes.
+    """
+    if not results:
+        return []
+
+    # Extract entity identifiers from top-3 results
+    entities: list[str] = []
+    result_files: set[str] = {r.file_path for r in results}
+
+    for r in results[:3]:
+        chunk_id = getattr(r, "chunk_id", "")
+        if chunk_id:
+            entities.append(chunk_id)
+        # Also try file_path::class_name.function_name format
+        class_name = getattr(r, "class_name", "")
+        func_name = getattr(r, "function_name", "")
+        if class_name and func_name:
+            entities.append(f"{r.file_path}::{class_name}.{func_name}")
+        elif func_name:
+            entities.append(f"{r.file_path}::{func_name}")
+        elif class_name:
+            entities.append(f"{r.file_path}::{class_name}")
+
+    if not entities:
+        return []
+
+    # Batch traverse relationships (single SQL query)
+    try:
+        relations = cache.traverse_relationships_batch(entities, max_depth=1)
+    except Exception:
+        logger.debug("Peripheral surfacing failed", exc_info=True)
+        return []
+
+    # Collect unique related files, excluding files already in results
+    seen: dict[str, dict[str, str]] = {}  # file_path -> {relationship, entity}
+    for rel in relations:
+        # Determine the "other" file
+        source = str(rel["source_entity"])
+        target = str(rel["target_entity"])
+        relationship = str(rel["relationship"])
+
+        # Extract file paths from entities
+        source_file = source.split("::")[0] if "::" in source else source
+        target_file = target.split("::")[0] if "::" in target else target
+
+        # Pick the file that's NOT in our results
+        for candidate_file, entity in [(target_file, target), (source_file, source)]:
+            if candidate_file not in result_files and candidate_file not in seen:
+                # Categorize the relationship
+                category = _categorize_relationship(relationship, candidate_file)
+                seen[candidate_file] = {
+                    "file_path": candidate_file,
+                    "relationship": category,
+                    "entity": entity,
+                }
+
+    return list(seen.values())[:max_files]
+
+
+def _categorize_relationship(relationship: str, file_path: str) -> str:
+    """Categorize a relationship for display."""
+    # Check file path patterns first
+    file_lower = file_path.lower()
+    if "test" in file_lower:
+        return "tests"
+    if "admin" in file_lower:
+        return "admin"
+    if "constants" in file_lower or "config" in file_lower:
+        return "config"
+    if "script" in file_lower:
+        return "scripts"
+
+    # Fall back to relationship type
+    return relationship
+
+
+SUGGESTION_MESSAGES: dict[SuggestionType, str] = {
+    SuggestionType.TRY_KEYWORD: (
+        "Results may be incomplete. Try mode='keyword' for identifier-based search."
+    ),
+    SuggestionType.TRY_EXHAUSTIVE: (
+        "Low confidence results. Try mode='exhaustive' to combine semantic search with grep."
+    ),
+    SuggestionType.LOW_CONFIDENCE: (
+        "Top results are ambiguous. Consider refining your query or using mode='exhaustive'."
+    ),
+}
+
+
 @mcp.tool()
 async def search(
     query: str,
@@ -110,7 +262,8 @@ async def search(
     intent: str | None = None,
     filters: dict[str, str] | None = None,
     detail: str = "compact",
-) -> list[dict[str, Any]] | dict[str, str]:
+    mode: str | None = None,
+) -> dict[str, Any]:
     """Search the codebase for relevant code snippets.
 
     Args:
@@ -118,12 +271,20 @@ async def search(
         limit: Maximum number of results (default 5)
         collection: Collection to search (default "code")
         active_file: Currently open file path for context boosting
-        intent: Search intent hint (code, docs, debug, location)
+        intent: Search intent hint (code, docs, debug, location, enumeration)
         filters: Metadata filters (language, chunk_type, app_name, layer, is_test)
         detail: Response detail level — "compact" (default) or "full"
+        mode: Search mode — "semantic" (default), "keyword", or "exhaustive"
     """
     try:
         from clew.search.models import QueryIntent
+
+        valid_modes = {"semantic", "keyword", "exhaustive"}
+        if mode is not None and mode not in valid_modes:
+            return {
+                "error": f"Invalid mode: {mode}",
+                "fix": f"Use: {', '.join(sorted(valid_modes))}",
+            }
 
         parsed_intent = None
         if intent:
@@ -132,7 +293,7 @@ async def search(
             except ValueError:
                 return {
                     "error": f"Invalid intent: {intent}",
-                    "fix": "Use: code, docs, debug, location",
+                    "fix": "Use: code, docs, debug, location, enumeration",
                 }
 
         components = _get_components()
@@ -143,9 +304,46 @@ async def search(
             active_file=active_file,
             intent=parsed_intent,
             filters=filters or {},
+            mode=mode,
         )
-        response = await components.search_engine.search(request)
-        return [_result_to_dict(r, detail) for r in response.results]
+
+        grep_results: list[Any] = []
+        if mode == "exhaustive":
+            response, grep_results = await _run_exhaustive_search(components, request)
+        else:
+            response = await components.search_engine.search(request)
+
+        result_dict: dict[str, Any] = {
+            "results": [_result_to_dict(r, detail) for r in response.results],
+            "confidence": response.confidence,
+            "confidence_label": response.confidence_label,
+            "intent": response.intent.value,
+            "mode": mode or "semantic",
+            "total_candidates": response.total_candidates,
+        }
+
+        if grep_results:
+            result_dict["grep_results"] = [_grep_result_to_dict(g) for g in grep_results[:20]]
+            result_dict["grep_total"] = len(grep_results)
+            cfg = components.config.search
+            if len(grep_results) >= cfg.grep_response_cap:
+                result_dict["grep_capped"] = True
+
+        suggestion_msg = SUGGESTION_MESSAGES.get(response.suggestion_type)
+        if suggestion_msg:
+            result_dict["suggestion"] = suggestion_msg
+        if response.suggested_patterns:
+            result_dict["suggested_patterns"] = response.suggested_patterns
+
+        # Surface related files from trace graph
+        try:
+            related = _surface_peripherals(response.results, components.cache)
+            if related:
+                result_dict["related_files"] = related
+        except Exception:
+            logger.debug("Peripheral surfacing failed", exc_info=True)
+
+        return result_dict
     except InvalidFilterError as e:
         return {
             "error": str(e),

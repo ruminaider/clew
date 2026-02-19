@@ -11,6 +11,41 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+CODE_STOP_WORDS = frozenset(
+    {
+        "the",
+        "is",
+        "in",
+        "of",
+        "to",
+        "and",
+        "or",
+        "for",
+        "a",
+        "an",
+        "it",
+        "on",
+        "at",
+        "by",
+        "if",
+        "do",
+        "no",
+        "be",
+        "as",
+        "so",
+        "def",
+        "class",
+        "return",
+        "self",
+        "import",
+        "from",
+        "true",
+        "false",
+        "none",
+        "null",
+    }
+)
+
 CAMEL_CASE_PATTERN = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)")
 IDENTIFIER_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
@@ -109,3 +144,14 @@ def text_to_sparse_vector(text: str) -> SparseVector:
     values = [index_values[i] for i in indices]
 
     return SparseVector(indices=indices, values=values)
+
+
+def filter_stop_words(tokens: list[str]) -> list[str] | None:
+    """Filter stop words from token list.
+
+    Returns None if >80% of terms would be removed (Decision 6A safeguard).
+    """
+    filtered = [t for t in tokens if t not in CODE_STOP_WORDS]
+    if len(filtered) < len(tokens) * 0.2:
+        return None  # >80% removed, caller should keep unfiltered
+    return filtered

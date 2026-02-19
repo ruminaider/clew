@@ -763,9 +763,7 @@ class CacheDB:
                 if cand_lang != "unknown" and cand_lang != language:
                     lang_penalty = 1
 
-            is_generated = (
-                1 if any(m in file_path for m in _GENERATED_PATH_MARKERS) else 0
-            )
+            is_generated = 1 if any(m in file_path for m in _GENERATED_PATH_MARKERS) else 0
 
             row = conn.execute(
                 "SELECT COUNT(*) FROM code_relationships "
@@ -777,6 +775,63 @@ class CacheDB:
             return (lang_penalty, is_generated, edge_count, candidate)
 
         return min(candidates, key=score)
+
+    def traverse_relationships_batch(
+        self,
+        entities: list[str],
+        direction: str = "both",
+        max_depth: int = 1,
+    ) -> list[dict[str, object]]:
+        """Batch traverse relationships for multiple entities in a single query.
+
+        More efficient than calling traverse_relationships() per entity
+        when surfacing peripheral files for search results.
+        """
+        if not entities:
+            return []
+
+        results: list[dict[str, object]] = []
+
+        with self._get_state_conn() as conn:
+            placeholders = ",".join("?" * len(entities))
+
+            if direction in ("outbound", "both"):
+                rows = conn.execute(
+                    f"SELECT source_entity, relationship, target_entity, file_path, confidence "
+                    f"FROM code_relationships WHERE source_entity IN ({placeholders})",
+                    entities,
+                ).fetchall()
+                for row in rows:
+                    results.append(
+                        {
+                            "source_entity": row[0],
+                            "relationship": row[1],
+                            "target_entity": row[2],
+                            "file_path": row[3],
+                            "confidence": row[4],
+                            "depth": 1,
+                        }
+                    )
+
+            if direction in ("inbound", "both"):
+                rows = conn.execute(
+                    f"SELECT source_entity, relationship, target_entity, file_path, confidence "
+                    f"FROM code_relationships WHERE target_entity IN ({placeholders})",
+                    entities,
+                ).fetchall()
+                for row in rows:
+                    results.append(
+                        {
+                            "source_entity": row[0],
+                            "relationship": row[1],
+                            "target_entity": row[2],
+                            "file_path": row[3],
+                            "confidence": row[4],
+                            "depth": 1,
+                        }
+                    )
+
+        return results
 
     def traverse_relationships(
         self,

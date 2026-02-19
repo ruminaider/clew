@@ -46,6 +46,67 @@ class TestClassifyIntent:
         assert classify_intent("how does order processing work") != QueryIntent.LOCATION
 
 
+class TestEnumerationIntent:
+    """Tests for ENUMERATION intent classification (Decision 10A: false-positive suite)."""
+
+    # True positives
+    def test_find_all_url_patterns(self) -> None:
+        assert classify_intent("find all URL patterns") == QueryIntent.ENUMERATION
+
+    def test_list_all_models(self) -> None:
+        assert classify_intent("list all models") == QueryIntent.ENUMERATION
+
+    def test_every_instance_of_error_class(self) -> None:
+        assert classify_intent("every instance of ValidationError") == QueryIntent.ENUMERATION
+
+    def test_all_callers_of_function(self) -> None:
+        assert classify_intent("all callers of process_order") == QueryIntent.ENUMERATION
+
+    def test_enumerate_api_endpoints(self) -> None:
+        assert classify_intent("enumerate all API endpoints") == QueryIntent.ENUMERATION
+
+    def test_count_all_models(self) -> None:
+        assert classify_intent("count all models") == QueryIntent.ENUMERATION
+
+    def test_all_references_to_user(self) -> None:
+        assert classify_intent("all references to User model") == QueryIntent.ENUMERATION
+
+    def test_how_many_views(self) -> None:
+        assert classify_intent("how many views are there") == QueryIntent.ENUMERATION
+
+    def test_all_uses_of_decorator(self) -> None:
+        assert classify_intent("all uses of @login_required") == QueryIntent.ENUMERATION
+
+    def test_all_instances_of_class(self) -> None:
+        assert classify_intent("all instances of Order class") == QueryIntent.ENUMERATION
+
+    # False positives (should NOT be ENUMERATION)
+    def test_find_auth_handler_is_location(self) -> None:
+        assert classify_intent("find the auth handler") == QueryIntent.LOCATION
+
+    def test_find_all_bugs_is_debug(self) -> None:
+        """DEBUG > ENUMERATION priority."""
+        assert classify_intent("find all bugs in auth") == QueryIntent.DEBUG
+
+    def test_how_many_errors_is_debug(self) -> None:
+        """DEBUG > ENUMERATION because 'error' is hard DEBUG keyword."""
+        assert classify_intent("how many errors in production") == QueryIntent.DEBUG
+
+    def test_explain_all_middleware_is_docs(self) -> None:
+        assert classify_intent("explain all the middleware") == QueryIntent.DOCS
+
+    def test_handles_all_requests_is_code(self) -> None:
+        """'all' without enumeration phrase prefix is NOT ENUMERATION."""
+        assert classify_intent("the auth handler handles all requests") == QueryIntent.CODE
+
+    def test_list_all_documentation_is_docs(self) -> None:
+        """'documentation' matches DOCS phrase, DOCS wins over ENUMERATION."""
+        assert classify_intent("list all documentation files") == QueryIntent.DOCS
+
+    def test_find_all_endpoints_is_enumeration(self) -> None:
+        assert classify_intent("find all API endpoints") == QueryIntent.ENUMERATION
+
+
 class TestIntentCollectionPreference:
     def test_docs_prefers_docs_collection(self) -> None:
         assert get_intent_collection_preference(QueryIntent.DOCS) == "docs"
@@ -58,3 +119,6 @@ class TestIntentCollectionPreference:
 
     def test_location_prefers_code_collection(self) -> None:
         assert get_intent_collection_preference(QueryIntent.LOCATION) == "code"
+
+    def test_enumeration_prefers_code_collection(self) -> None:
+        assert get_intent_collection_preference(QueryIntent.ENUMERATION) == "code"

@@ -5,6 +5,7 @@ Returns SearchResponse with query_enhanced and total_candidates fields.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import statistics
 from typing import TYPE_CHECKING
@@ -13,7 +14,13 @@ from clew.models import SearchConfig
 
 from .filters import build_qdrant_filter
 from .intent import classify_intent
-from .models import QueryIntent, SearchRequest, SearchResponse, SearchResult
+from .models import (
+    QueryIntent,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    SuggestionType,
+)
 from .rerank import should_skip_rerank
 
 if TYPE_CHECKING:
@@ -52,17 +59,30 @@ class SearchEngine:
         intent = request.intent or classify_intent(query)
         logger.debug("Intent classified: query=%r intent=%s", query, intent.value)
 
+        # Step 2.5: Mode routing — override intent based on explicit mode
+        effective_request = request
+        if request.mode == "keyword":
+            intent = QueryIntent.ENUMERATION
+            new_limit = max(request.limit, self._config.enumeration_limit)
+            effective_request = dataclasses.replace(request, limit=new_limit)
+        elif request.mode == "semantic":
+            if intent == QueryIntent.ENUMERATION:
+                intent = QueryIntent.CODE
+        # mode="exhaustive" and mode=None: no override needed
+
         # Step 3: Use the collection from the request (user-specified or default)
-        collection = request.collection
+        collection = effective_request.collection
 
         # Step 4: Hybrid search with configurable candidate limit (Tradeoff B)
-        query_filter = build_qdrant_filter(request.filters) if request.filters else None
+        query_filter = (
+            build_qdrant_filter(effective_request.filters) if effective_request.filters else None
+        )
         candidates = await self._hybrid.search(
             query=query_enhanced,
             collection=collection,
             limit=self._config.rerank_candidates,
             intent=intent,
-            active_file=request.active_file,
+            active_file=effective_request.active_file,
             query_filter=query_filter,
         )
 
@@ -74,10 +94,13 @@ class SearchEngine:
                 query_enhanced=query_enhanced,
                 total_candidates=0,
                 intent=intent,
+                confidence=0.0,
+                confidence_label="low",
+                suggestion_type=SuggestionType.TRY_EXHAUSTIVE,
             )
 
-        # Step 5: Rerank (if applicable)
-        results = self._maybe_rerank(query_enhanced, candidates)
+        # Step 5: Rerank (if applicable, skip for ENUMERATION)
+        results, was_reranked = self._maybe_rerank(query_enhanced, candidates, intent=intent)
 
         # Step 5.4: Apply importance boost (before test demotion)
         results = self._apply_importance_boost(results)
@@ -90,13 +113,32 @@ class SearchEngine:
         results = self._deduplicate(results)
 
         # Step 6: Apply limit
-        results = results[: request.limit]
+        results = results[: effective_request.limit]
+
+        # Step 7: Compute confidence
+        confidence, confidence_label, suggestion_type = self._compute_confidence(
+            results, was_reranked
+        )
+
+        # Step 8: Generate suggested patterns if needed
+        suggested_patterns: list[str] | None = None
+        if suggestion_type != SuggestionType.NONE:
+            try:
+                from clew.search.grep import generate_grep_patterns
+
+                suggested_patterns = generate_grep_patterns(query, results, intent)
+            except ImportError:
+                pass
 
         return SearchResponse(
             results=results,
             query_enhanced=query_enhanced,
             total_candidates=total_candidates,
             intent=intent,
+            confidence=confidence,
+            confidence_label=confidence_label,
+            suggestion_type=suggestion_type,
+            suggested_patterns=suggested_patterns,
         )
 
     @staticmethod
@@ -149,10 +191,68 @@ class SearchEngine:
             logger.debug("Applied test demotion factor=%.2f to %d results", factor, demoted)
         return results
 
-    def _maybe_rerank(self, query: str, candidates: list[SearchResult]) -> list[SearchResult]:
-        """Rerank candidates if conditions are met."""
+    def _compute_confidence(
+        self, results: list[SearchResult], was_reranked: bool
+    ) -> tuple[float, str, SuggestionType]:
+        """Compute confidence score, label, and suggestion from results.
+
+        Uses different scoring regimes depending on whether reranking occurred:
+        - Reranked: confidence = top score (reranker scores are calibrated 0-1)
+        - RRF: confidence = score gap between top-5 and rest (RRF scores are small)
+        """
+        if not results:
+            return 0.0, "low", SuggestionType.TRY_EXHAUSTIVE
+
+        if was_reranked:
+            confidence = results[0].score
+            high_t = self._config.confidence_high_threshold_reranked
+            med_t = self._config.confidence_medium_threshold_reranked
+        else:
+            # RRF path: use score gap of top-5 vs rest
+            scores = [r.score for r in results]
+            if len(scores) > 5:
+                confidence = scores[4] - scores[5] if len(scores) > 5 else scores[-1]
+            else:
+                confidence = scores[-1] if scores else 0.0
+            high_t = self._config.confidence_high_threshold_rrf
+            med_t = self._config.confidence_medium_threshold_rrf
+
+        # Ambiguity detection: small gap between #1 and #2
+        suggestion_type = SuggestionType.NONE
+        if len(results) >= 2:
+            gap = results[0].score - results[1].score
+            if gap < self._config.ambiguity_threshold:
+                suggestion_type = SuggestionType.LOW_CONFIDENCE
+
+        if confidence >= high_t:
+            label = "high"
+        elif confidence >= med_t:
+            label = "medium"
+            if suggestion_type == SuggestionType.NONE:
+                suggestion_type = SuggestionType.TRY_KEYWORD
+        else:
+            label = "low"
+            suggestion_type = SuggestionType.TRY_EXHAUSTIVE
+
+        return confidence, label, suggestion_type
+
+    def _maybe_rerank(
+        self,
+        query: str,
+        candidates: list[SearchResult],
+        *,
+        intent: QueryIntent | None = None,
+    ) -> tuple[list[SearchResult], bool]:
+        """Rerank candidates if conditions are met.
+
+        Returns (results, was_reranked) tuple.
+        Skips reranking for ENUMERATION intent.
+        """
         if not self._reranker:
-            return candidates
+            return candidates, False
+
+        if intent == QueryIntent.ENUMERATION:
+            return candidates, False
 
         scores = [c.score for c in candidates]
         variance = statistics.variance(scores) if len(scores) > 1 else 0.0
@@ -167,7 +267,7 @@ class SearchEngine:
             high_confidence_threshold=self._config.high_confidence_threshold,
             low_variance_threshold=self._config.low_variance_threshold,
         ):
-            return candidates
+            return candidates, False
 
         rerank_results = self._reranker.rerank(
             query=query,
@@ -180,4 +280,4 @@ class SearchEngine:
         for result, rr in zip(reranked, rerank_results):
             result.score = rr.relevance_score
 
-        return reranked
+        return reranked, True

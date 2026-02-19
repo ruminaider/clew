@@ -127,6 +127,10 @@ def search(
     ),
     language: str | None = typer.Option(None, "--language", "-l", help="Filter by language"),
     chunk_type: str | None = typer.Option(None, "--chunk-type", help="Filter by chunk type"),
+    mode: str | None = typer.Option(
+        None, "--mode", "-m", help="Search mode: semantic, keyword, exhaustive"
+    ),
+    exhaustive: bool = typer.Option(False, "--exhaustive", help="Shortcut for --mode exhaustive"),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON"),
     json_output: bool = typer.Option(False, "--json", help="Compact JSON to stdout"),
     full_content: bool = typer.Option(False, "--full", help="Include full content (with --json)"),
@@ -153,6 +157,15 @@ def search(
             console.print(f"[red]Invalid intent: {intent}. Use: code, docs, debug, location[/red]")
             raise typer.Exit(1) from None
 
+    # Mode resolution
+    effective_mode = "exhaustive" if exhaustive else mode
+    valid_modes = {"semantic", "keyword", "exhaustive"}
+    if effective_mode and effective_mode not in valid_modes:
+        console.print(
+            f"[red]Invalid mode: {effective_mode}. Use: {', '.join(sorted(valid_modes))}[/red]"
+        )
+        raise typer.Exit(1)
+
     filters: dict[str, str] = {}
     if language:
         filters["language"] = language
@@ -166,9 +179,26 @@ def search(
         active_file=active_file,
         intent=parsed_intent,
         filters=filters,
+        mode=effective_mode,
     )
 
-    response = asyncio.run(components.search_engine.search(request))
+    grep_results: list[Any] = []
+    if effective_mode == "exhaustive":
+        from clew.search.grep import search_with_grep
+
+        project_root_path = (project_root or Path(".")).resolve()
+        response, grep_results = asyncio.run(
+            search_with_grep(
+                components.search_engine,
+                request,
+                project_root_path,
+                grep_timeout=components.config.search.grep_timeout,
+                grep_max_count=components.config.search.grep_max_count,
+                grep_response_cap=components.config.search.grep_response_cap,
+            )
+        )
+    else:
+        response = asyncio.run(components.search_engine.search(request))
 
     if raw:
         results = [
@@ -185,8 +215,23 @@ def search(
             }
             for r in response.results
         ]
-        # Print JSON to stdout (not stderr console)
-        print(json.dumps(results, indent=2))
+        if grep_results:
+            raw_output: dict[str, Any] = {
+                "results": results,
+                "grep_results": [
+                    {
+                        "file_path": g.file_path,
+                        "line_number": g.line_number,
+                        "line_content": g.line_content,
+                        "pattern_matched": g.pattern_matched,
+                    }
+                    for g in grep_results
+                ],
+            }
+            print(json.dumps(raw_output, indent=2))
+        else:
+            # Print JSON to stdout (not stderr console)
+            print(json.dumps(results, indent=2))
         return
 
     if json_output:
@@ -198,17 +243,27 @@ def search(
             if full_content:
                 d["content"] = r.content
             results_list.append(d)
-        output = {
+        output: dict[str, Any] = {
             "query": query,
             "query_enhanced": response.query_enhanced,
             "intent": response.intent.value,
             "total_candidates": response.total_candidates,
             "results": results_list,
         }
+        if grep_results:
+            output["grep_results"] = [
+                {
+                    "file_path": g.file_path,
+                    "line_number": g.line_number,
+                    "line_content": g.line_content,
+                    "pattern_matched": g.pattern_matched,
+                }
+                for g in grep_results
+            ]
         print(json.dumps(output, indent=2))
         return
 
-    if not response.results:
+    if not response.results and not grep_results:
         console.print("[yellow]No results found.[/yellow]")
         return
 
@@ -231,6 +286,23 @@ def search(
             content = content[:500] + "\n..."
 
         console.print(Panel(content, title=title, title_align="left", border_style="blue"))
+
+    # Show grep results if present
+    if grep_results:
+        console.print(f"\n[bold]Grep results ({len(grep_results)} additional matches):[/bold]")
+        grep_table = Table()
+        grep_table.add_column("File", style="cyan")
+        grep_table.add_column("Line", style="dim")
+        grep_table.add_column("Content")
+        grep_table.add_column("Pattern", style="dim")
+        for g in grep_results[:20]:
+            grep_table.add_row(
+                g.file_path,
+                str(g.line_number),
+                g.line_content[:100],
+                g.pattern_matched,
+            )
+        console.print(grep_table)
 
 
 @app.command()

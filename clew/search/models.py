@@ -13,6 +13,16 @@ class QueryIntent(str, Enum):
     DOCS = "docs"
     DEBUG = "debug"
     LOCATION = "location"
+    ENUMERATION = "enumeration"
+
+
+class SuggestionType(str, Enum):
+    """Suggestion type for low-confidence or intent-specific follow-up."""
+
+    NONE = "none"
+    TRY_KEYWORD = "try_keyword"
+    TRY_EXHAUSTIVE = "try_exhaustive"
+    LOW_CONFIDENCE = "low_confidence"
 
 
 @dataclass
@@ -47,6 +57,7 @@ class SearchRequest:
     intent: QueryIntent | None = None
     filters: dict[str, str] = field(default_factory=dict)
     active_file: str | None = None
+    mode: str | None = None
 
 
 @dataclass
@@ -57,3 +68,16 @@ class SearchResponse:
     query_enhanced: str
     total_candidates: int
     intent: QueryIntent
+    confidence: float = 1.0
+    confidence_label: str = "high"
+    suggestion_type: SuggestionType = SuggestionType.NONE
+    suggested_patterns: list[str] | None = None
+
+
+@dataclass
+class RelatedFile:
+    """A file related to search results, surfaced from the trace graph."""
+
+    file_path: str
+    relationship: str  # "tests", "imported_by", "calls", etc.
+    entity: str  # entity connecting this file to results

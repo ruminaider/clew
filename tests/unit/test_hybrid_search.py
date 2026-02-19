@@ -236,6 +236,56 @@ class TestIntentAdaptiveVectors:
         assert module_pf.using == "signature"
 
 
+class TestEnumerationHybrid:
+    """Tests for ENUMERATION intent hybrid search routing."""
+
+    async def test_enumeration_uses_bm25_heavy_prefetch(
+        self, engine: HybridSearchEngine, mock_qdrant: Mock
+    ) -> None:
+        """ENUMERATION intent should use BM25-heavy prefetches."""
+        await engine.search("find all URL patterns", intent=QueryIntent.ENUMERATION)
+        prefetches = mock_qdrant.query_hybrid.call_args.kwargs["prefetches"]
+        # Should have BM25 with high limit and dense with lower limit
+        bm25_pfs = [p for p in prefetches if p.using == "bm25"]
+        dense_pfs = [p for p in prefetches if p.using != "bm25"]
+        assert len(bm25_pfs) == 1
+        assert bm25_pfs[0].limit >= 200  # enumeration_limit
+        assert len(dense_pfs) == 1
+        assert dense_pfs[0].limit <= 60
+
+    async def test_enumeration_no_module_boost(
+        self, engine: HybridSearchEngine, mock_qdrant: Mock
+    ) -> None:
+        """ENUMERATION with active_file should NOT add module boost."""
+        await engine.search(
+            "find all handlers",
+            intent=QueryIntent.ENUMERATION,
+            active_file="backend/views.py",
+        )
+        prefetches = mock_qdrant.query_hybrid.call_args.kwargs["prefetches"]
+        # Only enumeration prefetches (2), no module boost
+        assert len(prefetches) == 2
+
+    async def test_enumeration_bm25_is_first_prefetch(
+        self, engine: HybridSearchEngine, mock_qdrant: Mock
+    ) -> None:
+        """BM25 should be the first prefetch for ENUMERATION (primary signal)."""
+        await engine.search("list all models", intent=QueryIntent.ENUMERATION)
+        prefetches = mock_qdrant.query_hybrid.call_args.kwargs["prefetches"]
+        assert prefetches[0].using == "bm25"
+        assert prefetches[1].using == "semantic"
+
+    async def test_enumeration_custom_limit(self, mock_qdrant: Mock, mock_embedder: Mock) -> None:
+        """Custom enumeration_limit should be respected."""
+        engine = HybridSearchEngine(
+            qdrant=mock_qdrant, embedder=mock_embedder, enumeration_limit=300
+        )
+        await engine.search("find all endpoints", intent=QueryIntent.ENUMERATION)
+        prefetches = mock_qdrant.query_hybrid.call_args.kwargs["prefetches"]
+        bm25_pf = next(p for p in prefetches if p.using == "bm25")
+        assert bm25_pf.limit == 300
+
+
 class TestImportanceScoreReading:
     """Tests for reading importance_score from Qdrant payload (S5)."""
 

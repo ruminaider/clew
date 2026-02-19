@@ -74,6 +74,15 @@ class SearchConfig(BaseModel):
     test_demotion_factor: float = Field(default=0.80, ge=0.0, le=1.0)
     test_demotion_debug_factor: float = Field(default=0.95, ge=0.0, le=1.0)
     explain_llm_enabled: bool = Field(default=True)
+    confidence_high_threshold_reranked: float = Field(default=0.7, ge=0.0, le=1.0)
+    confidence_medium_threshold_reranked: float = Field(default=0.4, ge=0.0, le=1.0)
+    confidence_high_threshold_rrf: float = Field(default=0.03, ge=0.0, le=1.0)
+    confidence_medium_threshold_rrf: float = Field(default=0.01, ge=0.0, le=1.0)
+    ambiguity_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    enumeration_limit: int = Field(default=200, ge=10, le=1000)
+    grep_timeout: float = Field(default=10.0, ge=1.0, le=60.0)
+    grep_max_count: int = Field(default=500, ge=10, le=5000)
+    grep_response_cap: int = Field(default=100, ge=10, le=500)
 
 
 class ProjectConfig(BaseModel):

@@ -238,10 +238,10 @@ class TestMCPToolsWithMockedBackend:
         with patch("clew.mcp_server._get_components", return_value=mock_components):
             results = await search("authenticate")
 
-        assert isinstance(results, list)
-        assert len(results) == 1
-        assert results[0]["file_path"] == "src/auth.py"
-        assert results[0]["function_name"] == "authenticate"
+        assert isinstance(results, dict)
+        assert len(results["results"]) == 1
+        assert results["results"][0]["file_path"] == "src/auth.py"
+        assert results["results"][0]["function_name"] == "authenticate"
 
     async def test_mcp_get_context_reads_real_file(self, sample_project):
         """MCP get_context reads real files from disk."""

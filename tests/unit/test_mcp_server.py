@@ -165,25 +165,48 @@ class TestErrorResponse:
         assert resp["fix"] == "Check logs for details"
 
 
+def _mock_search_response(**overrides):
+    """Create a mock SearchResponse with defaults."""
+    from clew.search.models import QueryIntent, SuggestionType
+
+    defaults = {
+        "results": [],
+        "query_enhanced": "test",
+        "total_candidates": 0,
+        "intent": QueryIntent.CODE,
+        "confidence": 1.0,
+        "confidence_label": "high",
+        "suggestion_type": SuggestionType.NONE,
+        "suggested_patterns": None,
+    }
+    defaults.update(overrides)
+    return Mock(**defaults)
+
+
 class TestSearchTool:
     @patch("clew.mcp_server._get_components")
     async def test_search_returns_results(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
         result = _mock_search_result()
-        components.search_engine.search.return_value = Mock(results=[result])
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
 
         output = await search("hello")
-        assert isinstance(output, list)
-        assert len(output) == 1
-        assert output[0]["file_path"] == "src/main.py"
-        assert output[0]["score"] == 0.95
+        assert isinstance(output, dict)
+        assert "results" in output
+        assert len(output["results"]) == 1
+        assert output["results"][0]["file_path"] == "src/main.py"
+        assert output["results"][0]["score"] == 0.95
+        assert "confidence" in output
+        assert "confidence_label" in output
 
     @patch("clew.mcp_server._get_components")
     async def test_search_with_custom_params(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
-        components.search_engine.search.return_value = Mock(results=[])
+        components.search_engine.search.return_value = _mock_search_response()
 
         await search("hello", limit=5, collection="docs", active_file="src/app.py")
 
@@ -197,7 +220,7 @@ class TestSearchTool:
     async def test_search_default_params(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
-        components.search_engine.search.return_value = Mock(results=[])
+        components.search_engine.search.return_value = _mock_search_response()
 
         await search("test query")
 
@@ -211,11 +234,11 @@ class TestSearchTool:
     async def test_search_empty_results(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
-        components.search_engine.search.return_value = Mock(results=[])
+        components.search_engine.search.return_value = _mock_search_response()
 
         output = await search("nonexistent")
-        assert isinstance(output, list)
-        assert len(output) == 0
+        assert isinstance(output, dict)
+        assert len(output["results"]) == 0
 
     @patch("clew.mcp_server._get_components")
     async def test_search_multiple_results(self, mock_get):
@@ -226,13 +249,15 @@ class TestSearchTool:
             _mock_search_result(file_path="b.py", score=0.8),
             _mock_search_result(file_path="c.py", score=0.7),
         ]
-        components.search_engine.search.return_value = Mock(results=results)
+        components.search_engine.search.return_value = _mock_search_response(
+            results=results, total_candidates=3
+        )
 
         output = await search("hello")
-        assert len(output) == 3
-        assert output[0]["file_path"] == "a.py"
-        assert output[1]["file_path"] == "b.py"
-        assert output[2]["file_path"] == "c.py"
+        assert len(output["results"]) == 3
+        assert output["results"][0]["file_path"] == "a.py"
+        assert output["results"][1]["file_path"] == "b.py"
+        assert output["results"][2]["file_path"] == "c.py"
 
     @patch("clew.mcp_server._get_components")
     async def test_search_qdrant_error(self, mock_get):
@@ -276,7 +301,7 @@ class TestSearchTool:
     async def test_search_with_intent(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
-        components.search_engine.search.return_value = Mock(results=[])
+        components.search_engine.search.return_value = _mock_search_response()
 
         await search("hello", intent="debug")
 
@@ -284,6 +309,19 @@ class TestSearchTool:
         from clew.search.models import QueryIntent
 
         assert call_args.intent == QueryIntent.DEBUG
+
+    @patch("clew.mcp_server._get_components")
+    async def test_search_with_enumeration_intent(self, mock_get):
+        components = _mock_components()
+        mock_get.return_value = components
+        components.search_engine.search.return_value = _mock_search_response()
+
+        await search("hello", intent="enumeration")
+
+        call_args = components.search_engine.search.call_args[0][0]
+        from clew.search.models import QueryIntent
+
+        assert call_args.intent == QueryIntent.ENUMERATION
 
     @patch("clew.mcp_server._get_components")
     async def test_search_invalid_intent(self, mock_get):
@@ -299,12 +337,58 @@ class TestSearchTool:
     async def test_search_with_filters(self, mock_get):
         components = _mock_components()
         mock_get.return_value = components
-        components.search_engine.search.return_value = Mock(results=[])
+        components.search_engine.search.return_value = _mock_search_response()
 
         await search("hello", filters={"language": "python"})
 
         call_args = components.search_engine.search.call_args[0][0]
         assert call_args.filters == {"language": "python"}
+
+    @patch("clew.mcp_server._get_components")
+    async def test_search_invalid_mode(self, mock_get):
+        components = _mock_components()
+        mock_get.return_value = components
+
+        output = await search("hello", mode="invalid_mode")
+        assert isinstance(output, dict)
+        assert "error" in output
+        assert "Invalid mode" in output["error"]
+
+    @patch("clew.mcp_server._get_components")
+    async def test_search_with_mode_keyword(self, mock_get):
+        components = _mock_components()
+        mock_get.return_value = components
+        components.search_engine.search.return_value = _mock_search_response()
+
+        await search("hello", mode="keyword")
+
+        call_args = components.search_engine.search.call_args[0][0]
+        assert call_args.mode == "keyword"
+
+    @patch("clew.mcp_server._get_components")
+    async def test_search_response_has_confidence(self, mock_get):
+        components = _mock_components()
+        mock_get.return_value = components
+        components.search_engine.search.return_value = _mock_search_response(
+            confidence=0.85, confidence_label="high"
+        )
+
+        output = await search("hello")
+        assert output["confidence"] == 0.85
+        assert output["confidence_label"] == "high"
+
+    @patch("clew.mcp_server._get_components")
+    async def test_search_response_has_suggestion(self, mock_get):
+        from clew.search.models import SuggestionType
+
+        components = _mock_components()
+        mock_get.return_value = components
+        components.search_engine.search.return_value = _mock_search_response(
+            suggestion_type=SuggestionType.TRY_EXHAUSTIVE
+        )
+
+        output = await search("hello")
+        assert "suggestion" in output
 
 
 class TestGetContextTool:
@@ -842,11 +926,14 @@ class TestCompactResponse:
         """search() returns compact results (no content field) by default."""
         components = _mock_components()
         result = _mock_search_result()
-        components.search_engine.search.return_value = Mock(results=[result])
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
         mock_get.return_value = components
 
-        results = await search("test query")
-        assert isinstance(results, list)
+        output = await search("test query")
+        assert isinstance(output, dict)
+        results = output["results"]
         assert len(results) == 1
         assert "snippet" in results[0]
         assert "content" not in results[0]
@@ -858,11 +945,14 @@ class TestCompactResponse:
         """search(detail='full') returns content field."""
         components = _mock_components()
         result = _mock_search_result()
-        components.search_engine.search.return_value = Mock(results=[result])
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
         mock_get.return_value = components
 
-        results = await search("test query", detail="full")
-        assert isinstance(results, list)
+        output = await search("test query", detail="full")
+        assert isinstance(output, dict)
+        results = output["results"]
         assert "content" in results[0]
         assert "snippet" in results[0]
 
@@ -870,7 +960,7 @@ class TestCompactResponse:
     async def test_search_default_limit_is_5(self, mock_get) -> None:
         """search() defaults to limit=5."""
         components = _mock_components()
-        components.search_engine.search.return_value = Mock(results=[])
+        components.search_engine.search.return_value = _mock_search_response()
         mock_get.return_value = components
 
         await search("test query")
@@ -1030,3 +1120,96 @@ class TestHeuristicExplainEnrichment:
 
         explanation = _heuristic_explain("src/main.py", "hello", None, [result], cache=mock_cache)
         assert "Summary:" not in explanation
+
+
+class TestPeripheralSurfacing:
+    """Tests for _surface_peripherals()."""
+
+    @patch("clew.mcp_server._get_components")
+    async def test_search_includes_related_files(self, mock_get):
+        """search() response includes related_files from trace graph."""
+        components = _mock_components()
+        result = _mock_search_result(chunk_id="src/main.py::function::hello")
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        components.cache.traverse_relationships_batch.return_value = [
+            {
+                "source_entity": "src/main.py::function::hello",
+                "relationship": "tests",
+                "target_entity": "tests/test_main.py::TestHello",
+                "file_path": "tests/test_main.py",
+                "confidence": "static",
+                "depth": 1,
+            }
+        ]
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert "related_files" in output
+        assert len(output["related_files"]) == 1
+        assert output["related_files"][0]["file_path"] == "tests/test_main.py"
+
+    @patch("clew.mcp_server._get_components")
+    async def test_no_related_files_when_empty_trace(self, mock_get):
+        components = _mock_components()
+        result = _mock_search_result()
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        components.cache.traverse_relationships_batch.return_value = []
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert "related_files" not in output
+
+    @patch("clew.mcp_server._get_components")
+    async def test_excludes_files_already_in_results(self, mock_get):
+        components = _mock_components()
+        result = _mock_search_result(
+            file_path="src/main.py", chunk_id="src/main.py::function::hello"
+        )
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        # Related file points back to src/main.py which is already in results
+        components.cache.traverse_relationships_batch.return_value = [
+            {
+                "source_entity": "src/main.py::function::hello",
+                "relationship": "calls",
+                "target_entity": "src/main.py::function::helper",
+                "file_path": "src/main.py",
+                "confidence": "static",
+                "depth": 1,
+            }
+        ]
+        mock_get.return_value = components
+
+        output = await search("hello")
+        # src/main.py is already in results, so should not appear in related_files
+        assert "related_files" not in output or len(output.get("related_files", [])) == 0
+
+    @patch("clew.mcp_server._get_components")
+    async def test_caps_at_five_files(self, mock_get):
+        components = _mock_components()
+        result = _mock_search_result(chunk_id="src/main.py::function::hello")
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        # Return 10 related files
+        components.cache.traverse_relationships_batch.return_value = [
+            {
+                "source_entity": "src/main.py::function::hello",
+                "relationship": "calls",
+                "target_entity": f"lib/module{i}.py::func{i}",
+                "file_path": f"lib/module{i}.py",
+                "confidence": "static",
+                "depth": 1,
+            }
+            for i in range(10)
+        ]
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert "related_files" in output
+        assert len(output["related_files"]) <= 5
