@@ -184,9 +184,16 @@ async def search(
         result_dict: dict[str, Any] = {
             "results": [_result_to_dict(r, detail) for r in response.results],
             "confidence": response.confidence,
+            "confidence_label": response.confidence_label,
             "intent": response.intent.value,
             "total_candidates": response.total_candidates,
         }
+
+        # Include mode/escalation info when non-default
+        if response.mode_used != "semantic":
+            result_dict["mode_used"] = response.mode_used
+        if response.auto_escalated:
+            result_dict["auto_escalated"] = response.auto_escalated
 
         return result_dict
     except InvalidFilterError as e:

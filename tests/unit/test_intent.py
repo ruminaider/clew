@@ -107,6 +107,52 @@ class TestEnumerationIntent:
         assert classify_intent("find all API endpoints") == QueryIntent.ENUMERATION
 
 
+class TestBroadenedEnumeration:
+    """V4.1: Broader ENUMERATION detection for agent-style queries."""
+
+    # True positives: "all [noun]" patterns
+    def test_all_celery_tasks(self) -> None:
+        assert classify_intent("all Celery tasks") == QueryIntent.ENUMERATION
+
+    def test_all_api_endpoints(self) -> None:
+        assert classify_intent("all API endpoints") == QueryIntent.ENUMERATION
+
+    def test_all_django_models(self) -> None:
+        assert classify_intent("all Django models") == QueryIntent.ENUMERATION
+
+    def test_all_places_where(self) -> None:
+        assert classify_intent("all places where we send email") == QueryIntent.ENUMERATION
+
+    def test_show_all_routes(self) -> None:
+        assert classify_intent("show all URL routes") == QueryIntent.ENUMERATION
+
+    def test_get_all_serializers(self) -> None:
+        assert classify_intent("get all serializer classes") == QueryIntent.ENUMERATION
+
+    def test_all_models_that_inherit(self) -> None:
+        assert classify_intent("all models that inherit from Base") == QueryIntent.ENUMERATION
+
+    def test_all_of_the_middleware(self) -> None:
+        assert classify_intent("all of the middleware classes") == QueryIntent.ENUMERATION
+
+    # False positives: non-enumerative "all"
+    def test_handles_all_still_code(self) -> None:
+        assert classify_intent("the auth handler handles all requests") == QueryIntent.CODE
+
+    def test_processes_all_still_code(self) -> None:
+        assert classify_intent("the pipeline processes all events") == QueryIntent.CODE
+
+    def test_for_all_still_code(self) -> None:
+        assert classify_intent("validation for all inputs") == QueryIntent.CODE
+
+    def test_supports_all_still_code(self) -> None:
+        assert classify_intent("supports all payment methods") == QueryIntent.CODE
+
+    def test_all_alone_not_enumeration(self) -> None:
+        """Bare 'all' without a noun after it should not trigger ENUMERATION."""
+        assert classify_intent("that's all") == QueryIntent.CODE
+
+
 class TestIntentCollectionPreference:
     def test_docs_prefers_docs_collection(self) -> None:
         assert get_intent_collection_preference(QueryIntent.DOCS) == "docs"

@@ -146,12 +146,8 @@ class SearchEngine:
                 results = self._merge_grep_results(results, grep_search_results)
                 auto_escalated = True
                 mode_used = "exhaustive"
-        elif (
-            suggestion_type == SuggestionType.TRY_EXHAUSTIVE
-            and self._project_root
-            and not effective_request.mode
-        ):
-            # Low confidence, post-hoc escalation (synchronous)
+        elif self._should_post_hoc_grep(suggestion_type, intent, effective_request.mode):
+            # Medium or low confidence, post-hoc escalation
             grep_search_results = await self._run_grep_async(query_enhanced, intent)
             if grep_search_results:
                 results = self._merge_grep_results(results, grep_search_results)
@@ -172,6 +168,33 @@ class SearchEngine:
             suggestion_type=suggestion_type,
             mode_used=mode_used,
             auto_escalated=auto_escalated,
+        )
+
+    def _should_post_hoc_grep(
+        self,
+        suggestion_type: SuggestionType,
+        intent: QueryIntent,
+        mode: str | None,
+    ) -> bool:
+        """Determine if post-hoc grep should run after seeing search results.
+
+        Triggers on medium confidence (TRY_KEYWORD) and low confidence
+        (TRY_EXHAUSTIVE), but only for intents where grep adds value.
+        LOCATION and DEBUG intents are excluded — location queries target
+        specific symbols (grep wouldn't help), and debug queries need
+        semantic context, not exhaustive matches.
+        """
+        if self._project_root is None:
+            return False
+        if not self._config.auto_escalation_enabled:
+            return False
+        if mode is not None:
+            return False
+        if intent in (QueryIntent.LOCATION, QueryIntent.DEBUG):
+            return False
+        return suggestion_type in (
+            SuggestionType.TRY_EXHAUSTIVE,
+            SuggestionType.TRY_KEYWORD,
         )
 
     def _should_augment_with_grep(self, intent: QueryIntent, mode: str | None) -> bool:

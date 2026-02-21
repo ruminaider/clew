@@ -243,11 +243,11 @@ Use a 1-5 integer scale. Prefer dimension-specific anchors to reduce inter-score
 
 | Score | Discovery Efficiency | Context Precision | Completeness | Relational Insight | Answer Confidence |
 |-------|---------------------|-------------------|--------------|-------------------|-------------------|
-| 5 | ≤3 tool calls | ≤10% noise | All checklist artifacts found | ≥3 unexpected connections | Immediately actionable |
-| 4 | 4-5 tool calls | 10-20% noise | ≥90% found | 2 connections | Needs 1 follow-up read |
-| 3 | 6-8 tool calls | 20-40% noise | ≥70% found | 1 connection | Needs 2-3 follow-ups |
-| 2 | 9-12 tool calls | 40-60% noise | 50-70% found | 0 but tool supports it | Needs significant follow-up |
-| 1 | 12+ calls or gives up | 60%+ noise | <50% found | No relational capability | Not actionable |
+| 5 | ≤5 tool calls | ≤10% noise | All checklist artifacts found | ≥3 unexpected connections | Immediately actionable |
+| 4 | 6-7 tool calls | 10-20% noise | ≥90% found | 2 connections | Needs 1 follow-up read |
+| 3 | 8-12 tool calls | 20-40% noise | ≥70% found | 1 connection | Needs 2-3 follow-ups |
+| 2 | 13-15 tool calls | 40-60% noise | 50-70% found | 0 but tool supports it | Needs significant follow-up |
+| 1 | 15+ calls or gives up | 60%+ noise | <50% found | No relational capability | Not actionable |
 
 **Generic fallback anchors** (for custom dimensions without specific anchors):
 
