@@ -1,8 +1,9 @@
 """Grep integration for exhaustive search mode.
 
 Provides pattern generation from search queries and results,
-ripgrep execution with timeout and error handling, and
-a search_with_grep() orchestration function used by both MCP and CLI.
+ripgrep execution with timeout and error handling,
+deduplication against semantic results, and conversion
+of GrepResult objects to SearchResult objects.
 """
 
 from __future__ import annotations
@@ -16,8 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clew.search.engine import SearchEngine
-    from clew.search.models import QueryIntent, SearchRequest, SearchResponse, SearchResult
+    from clew.search.models import QueryIntent, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -268,42 +268,23 @@ def _deduplicate_grep(
     return [g for g in grep_results if (g.file_path, g.line_number) not in semantic_ranges]
 
 
-async def search_with_grep(
-    engine: SearchEngine,
-    request: SearchRequest,
-    project_root: Path,
-    grep_timeout: float = 10.0,
-    grep_max_count: int = 500,
-    grep_response_cap: int = 100,
-) -> tuple[SearchResponse, list[GrepResult]]:
-    """Run semantic search then grep, deduplicate results.
+def grep_results_to_search_results(grep_results: list[GrepResult]) -> list[SearchResult]:
+    """Convert GrepResult objects to SearchResult objects.
 
-    Both MCP and CLI call this function.
-
-    Returns:
-        Tuple of (SearchResponse, list[GrepResult])
+    Grep results get score=0.0 (unranked) and source="grep" to distinguish
+    them from semantic results in the combined results array.
     """
-    # 1. Run semantic search
-    response = await engine.search(request)
+    from clew.search.models import SearchResult
 
-    # 2. Generate patterns from query and results
-    patterns = generate_grep_patterns(request.query, response.results, response.intent)
-
-    if not patterns:
-        return response, []
-
-    # 3. Run grep
-    grep_results = await run_grep(
-        patterns,
-        project_root,
-        timeout=grep_timeout,
-        max_count=grep_max_count,
-    )
-
-    # 4. Deduplicate: remove grep hits that overlap with semantic results
-    unique_grep = _deduplicate_grep(grep_results, response.results)
-
-    # 5. Cap at response limit
-    unique_grep = unique_grep[:grep_response_cap]
-
-    return response, unique_grep
+    return [
+        SearchResult(
+            content=g.line_content,
+            file_path=g.file_path,
+            score=0.0,
+            chunk_type="grep_match",
+            line_start=g.line_number,
+            line_end=g.line_number,
+            source="grep",
+        )
+        for g in grep_results
+    ]

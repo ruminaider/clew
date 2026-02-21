@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from clew.indexer.pipeline import IndexingPipeline
 from clew.models import ProjectConfig
 from clew.search.engine import SearchEngine
 from clew.search.enhance import QueryEnhancer
+from clew.search.enrichment import CacheResultEnricher
 from clew.search.hybrid import HybridSearchEngine
 from clew.search.rerank import RerankProvider
 
@@ -35,6 +37,23 @@ class Components:
     enhancer: QueryEnhancer | None
     reranker: RerankProvider | None
     description_provider: DescriptionProvider | None = None
+    project_root: Path | None = None
+
+
+def _get_project_root() -> Path | None:
+    """Detect project root from git root or CWD."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return Path.cwd()
 
 
 def create_components(
@@ -83,11 +102,19 @@ def create_components(
     if env.VOYAGE_API_KEY:
         reranker = RerankProvider(api_key=env.VOYAGE_API_KEY)
 
+    # Detect project root for grep integration
+    resolved_root = project_root or _get_project_root()
+
+    # Result enricher (needs project_root to relativize paths)
+    enricher = CacheResultEnricher(cache, project_root=resolved_root)
+
     search_engine = SearchEngine(
         hybrid_engine=hybrid,
         reranker=reranker,
         enhancer=enhancer,
         search_config=config.search,
+        project_root=resolved_root,
+        enricher=enricher,
     )
 
     # NL Description provider (optional)
@@ -119,4 +146,5 @@ def create_components(
         enhancer=enhancer,
         reranker=reranker,
         description_provider=description_provider,
+        project_root=resolved_root,
     )

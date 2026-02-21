@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Viability evaluation computation script.
 
-Pre-registered mechanical aggregation for V3.0 viability evaluation.
+Pre-registered mechanical aggregation for V4 viability evaluation.
 Reads scorer ratings, computes weighted averages, determines winners,
 applies verdict thresholds. No agent judgment — pure arithmetic.
 
@@ -52,7 +52,7 @@ TRACK_A_SHIP_AVG = max(3.50, V23_SCORE - REGRESSION_BUFFER)  # 3.66
 
 # Track assignments
 TRACK_A_TESTS = {"A1", "A2", "A3", "A4", "B1", "B2", "C1", "C2"}
-TRACK_B_TESTS = {"D1", "D2", "D3", "D4"}
+TRACK_B_TESTS = {"E1", "E2", "E3", "E4"}
 
 
 @dataclass
@@ -191,13 +191,11 @@ def apply_verdicts(results: list[TestResult]) -> dict:
     grep_avg = sum(r.grep_weighted for r in results) / len(results) if results else 0
 
     # Verdict logic (pre-registered, frozen)
-    if (track_a_avg >= TRACK_A_SHIP_AVG and track_a_wins >= 5
-            and track_b_avg >= 3.50 and track_b_wins >= 3):
-        verdict = "Ship (Improved)"
-    elif (track_a_avg >= TRACK_A_SHIP_AVG and track_a_wins >= 5
-            and track_b_avg >= 3.00 and track_b_wins >= 2):
-        verdict = "Ship (Maintained)"
-    elif track_a_avg >= 3.00 and track_a_wins >= 4:
+    total_wins = track_a_wins + track_b_wins
+    if (overall_avg >= TRACK_A_SHIP_AVG and total_wins >= 7
+            and track_a_avg >= TRACK_A_SHIP_AVG):
+        verdict = "Ship"
+    elif overall_avg >= 3.30 and total_wins >= 6:
         verdict = "Iterate"
     else:
         verdict = "Kill"
@@ -306,7 +304,7 @@ def main() -> None:
     verdict_info = apply_verdicts(results)
 
     # Output
-    print(f"# V3.0 Viability Computation Results")
+    print(f"# V4 Viability Computation Results")
     print()
     print(f"**Verdict: {verdict_info['verdict']}**")
     print()
@@ -321,7 +319,7 @@ def main() -> None:
 
     # Track B summary
     tb = verdict_info["track_b"]
-    print(f"## Track B (Modes)")
+    print(f"## Track B (V4-Advantaged)")
     print(f"- Clew avg: {tb['clew_avg']}/5.0")
     print(f"- Grep avg: {tb['grep_avg']}/5.0")
     print(f"- Win/Loss: {tb['clew_wins']} clew / {tb['grep_wins']} grep / {tb['ties']} tie")
@@ -330,8 +328,12 @@ def main() -> None:
     # Overall
     ov = verdict_info["overall"]
     print(f"## Overall")
-    print(f"- Clew avg: {ov['clew_avg']}/5.0")
+    print(f"- Clew avg: {ov['clew_avg']}/5.0 (Ship threshold: {TRACK_A_SHIP_AVG:.2f})")
     print(f"- Grep avg: {ov['grep_avg']}/5.0")
+    total_wins = ta["clew_wins"] + tb["clew_wins"]
+    total_grep = ta["grep_wins"] + tb["grep_wins"]
+    total_ties = ta["ties"] + tb["ties"]
+    print(f"- Win/Loss: {total_wins} clew / {total_grep} grep / {total_ties} tie (Ship threshold: 7/12)")
     print()
 
     # Results table

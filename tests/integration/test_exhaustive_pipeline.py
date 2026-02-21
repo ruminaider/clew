@@ -1,4 +1,9 @@
-"""Integration tests for exhaustive search pipeline (semantic + grep)."""
+"""Integration tests for exhaustive search pipeline (semantic + grep).
+
+V4 removed the standalone search_with_grep() function. Exhaustive behavior
+is now handled internally by SearchEngine via auto-escalation. These tests
+verify the engine-integrated exhaustive mode.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,11 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from clew.search.grep import search_with_grep
+from clew.models import SearchConfig
+from clew.search.engine import SearchEngine
 from clew.search.models import (
     QueryIntent,
     SearchRequest,
-    SearchResponse,
     SearchResult,
 )
 
@@ -41,23 +46,6 @@ def _make_result(
     )
 
 
-def _make_response(results: list[SearchResult] | None = None) -> SearchResponse:
-    return SearchResponse(
-        results=results or [_make_result()],
-        query_enhanced="test query",
-        total_candidates=10,
-        intent=QueryIntent.CODE,
-        confidence=0.8,
-        confidence_label="high",
-    )
-
-
-def _mock_engine(response: SearchResponse | None = None) -> Mock:
-    engine = Mock()
-    engine.search = AsyncMock(return_value=response or _make_response())
-    return engine
-
-
 def _make_rg_match(file_path: str, line_number: int, text: str, matched: str) -> str:
     return json.dumps(
         {
@@ -72,49 +60,32 @@ def _make_rg_match(file_path: str, line_number: int, text: str, matched: str) ->
     )
 
 
-class TestSearchWithGrep:
-    """Integration tests for the search_with_grep orchestration function."""
+def _make_engine(
+    semantic_results: list[SearchResult] | None = None,
+    project_root: Path | None = Path("/project"),
+) -> SearchEngine:
+    """Create a SearchEngine with mock hybrid and project_root for grep."""
+    hybrid = Mock()
+    hybrid.search = AsyncMock(return_value=semantic_results or [_make_result()])
+    return SearchEngine(
+        hybrid_engine=hybrid,
+        search_config=SearchConfig(),
+        project_root=project_root,
+    )
+
+
+class TestExhaustiveMode:
+    """Test exhaustive mode via SearchEngine (replaces search_with_grep tests)."""
 
     @pytest.mark.asyncio
-    async def test_returns_both_semantic_and_grep_results(self):
-        """search_with_grep returns semantic response and grep results."""
-        rg_output = "\n".join(
-            [
-                _make_rg_match("src/other.py", 20, "def bar(): pass", "bar"),
-                _make_rg_match("src/another.py", 30, "class Baz:", "Baz"),
-            ]
-        )
-        mock_process = AsyncMock()
-        mock_process.communicate = AsyncMock(return_value=(rg_output.encode(), b""))
-        mock_process.returncode = 0
-
-        engine = _mock_engine()
-
-        with patch(
-            "clew.search.grep.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        ):
-            request = SearchRequest(query="foo bar", mode="exhaustive")
-            response, grep_results = await search_with_grep(engine, request, Path("/project"))
-
-        assert len(response.results) == 1  # semantic result
-        assert response.results[0].function_name == "foo"
-        assert len(grep_results) >= 1  # grep found additional results
-
-    @pytest.mark.asyncio
-    async def test_deduplication_works(self):
-        """Grep results overlapping with semantic results are removed."""
-        semantic_result = _make_result(
-            file_path="src/main.py", line_start=5, line_end=15, function_name="foo"
-        )
-        engine = _mock_engine(_make_response([semantic_result]))
+    async def test_exhaustive_returns_combined_results(self):
+        """Exhaustive mode returns both semantic and grep results."""
+        engine = _make_engine()
 
         rg_output = "\n".join(
             [
-                # This overlaps with semantic result (line 10 is within 5-15)
-                _make_rg_match("src/main.py", 10, "  x = 1", "foo"),
-                # This does NOT overlap
-                _make_rg_match("src/other.py", 10, "  y = 2", "foo"),
+                _make_rg_match("src/other.py", 20, "def bar(): pass", "process_order"),
+                _make_rg_match("src/another.py", 30, "class Baz:", "process_order"),
             ]
         )
         mock_process = AsyncMock()
@@ -125,71 +96,92 @@ class TestSearchWithGrep:
             "clew.search.grep.asyncio.create_subprocess_exec",
             return_value=mock_process,
         ):
-            request = SearchRequest(query="foo", mode="exhaustive")
-            response, grep_results = await search_with_grep(engine, request, Path("/project"))
-
-        assert len(grep_results) == 1
-        assert grep_results[0].file_path == "src/other.py"
-
-    @pytest.mark.asyncio
-    async def test_grep_capping(self):
-        """Grep results are capped at grep_response_cap."""
-        rg_lines = [_make_rg_match(f"src/file_{i}.py", i, f"line {i}", "foo") for i in range(50)]
-        mock_process = AsyncMock()
-        mock_process.communicate = AsyncMock(return_value=("\n".join(rg_lines).encode(), b""))
-        mock_process.returncode = 0
-
-        engine = _mock_engine()
-
-        with patch(
-            "clew.search.grep.asyncio.create_subprocess_exec",
-            return_value=mock_process,
-        ):
-            request = SearchRequest(query="foo", mode="exhaustive")
-            response, grep_results = await search_with_grep(
-                engine, request, Path("/project"), grep_response_cap=10
+            request = SearchRequest(
+                query="find all process_order usages",
+                mode="exhaustive",
+                intent=QueryIntent.ENUMERATION,
             )
+            response = await engine.search(request)
 
-        assert len(grep_results) <= 10
+        semantic_items = [r for r in response.results if r.source == "semantic"]
+        grep_items = [r for r in response.results if r.source == "grep"]
+        assert len(semantic_items) >= 1
+        assert len(grep_items) >= 1
+
+    @pytest.mark.asyncio
+    async def test_deduplication(self):
+        """Grep results overlapping semantic results are deduplicated."""
+        semantic_result = _make_result(
+            file_path="src/main.py", line_start=5, line_end=15, function_name="process_order"
+        )
+        engine = _make_engine(semantic_results=[semantic_result])
+
+        rg_output = "\n".join(
+            [
+                # Overlaps with semantic (line 10 is within 5-15)
+                _make_rg_match("src/main.py", 10, "  x = 1", "process_order"),
+                # Does NOT overlap
+                _make_rg_match("src/other.py", 10, "  y = 2", "process_order"),
+            ]
+        )
+        mock_process = AsyncMock()
+        mock_process.communicate = AsyncMock(return_value=(rg_output.encode(), b""))
+        mock_process.returncode = 0
+
+        with patch(
+            "clew.search.grep.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ):
+            request = SearchRequest(
+                query="find all process_order usages",
+                mode="exhaustive",
+                intent=QueryIntent.ENUMERATION,
+            )
+            response = await engine.search(request)
+
+        grep_items = [r for r in response.results if r.source == "grep"]
+        assert len(grep_items) == 1
+        assert grep_items[0].file_path == "src/other.py"
 
     @pytest.mark.asyncio
     async def test_graceful_fallback_rg_not_available(self):
         """When rg is not installed, only semantic results are returned."""
-        engine = _mock_engine()
+        engine = _make_engine()
 
         with patch(
             "clew.search.grep.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ):
-            request = SearchRequest(query="foo bar", mode="exhaustive")
-            response, grep_results = await search_with_grep(engine, request, Path("/project"))
+            request = SearchRequest(
+                query="find all process_order usages",
+                mode="exhaustive",
+                intent=QueryIntent.ENUMERATION,
+            )
+            response = await engine.search(request)
 
-        assert len(response.results) == 1
-        assert grep_results == []
-
-    @pytest.mark.asyncio
-    async def test_no_patterns_generated(self):
-        """When no patterns can be generated, only semantic results returned."""
-        # Empty query with no result names
-        result = _make_result(function_name="", class_name="")
-        engine = _mock_engine(_make_response([result]))
-
-        request = SearchRequest(query="", mode="exhaustive")
-        response, grep_results = await search_with_grep(engine, request, Path("/project"))
-
-        assert len(response.results) == 1
-        assert grep_results == []
+        assert len(response.results) >= 1
+        assert all(r.source == "semantic" for r in response.results)
 
     @pytest.mark.asyncio
     async def test_engine_search_called_once(self):
-        """Engine.search is called exactly once (not duplicated)."""
-        engine = _mock_engine()
+        """Hybrid search is called exactly once (not duplicated)."""
+        hybrid = Mock()
+        hybrid.search = AsyncMock(return_value=[_make_result()])
+        engine = SearchEngine(
+            hybrid_engine=hybrid,
+            search_config=SearchConfig(),
+            project_root=Path("/project"),
+        )
 
         with patch(
             "clew.search.grep.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ):
-            request = SearchRequest(query="foo bar", mode="exhaustive")
-            await search_with_grep(engine, request, Path("/project"))
+            request = SearchRequest(
+                query="find all process_order usages",
+                mode="exhaustive",
+                intent=QueryIntent.ENUMERATION,
+            )
+            await engine.search(request)
 
-        engine.search.assert_awaited_once_with(request)
+        hybrid.search.assert_awaited_once()

@@ -5,9 +5,11 @@ Returns SearchResponse with query_enhanced and total_candidates fields.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import statistics
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clew.models import SearchConfig
@@ -25,6 +27,7 @@ from .rerank import should_skip_rerank
 
 if TYPE_CHECKING:
     from clew.search.enhance import QueryEnhancer
+    from clew.search.enrichment import ResultEnricher
     from clew.search.hybrid import HybridSearchEngine
     from clew.search.rerank import RerankProvider
 
@@ -40,11 +43,15 @@ class SearchEngine:
         reranker: RerankProvider | None = None,
         enhancer: QueryEnhancer | None = None,
         search_config: SearchConfig | None = None,
+        project_root: Path | None = None,
+        enricher: ResultEnricher | None = None,
     ) -> None:
         self._hybrid = hybrid_engine
         self._reranker = reranker
         self._enhancer = enhancer
         self._config = search_config or SearchConfig()
+        self._project_root = project_root
+        self._enricher = enricher
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         """Execute full search pipeline and return SearchResponse."""
@@ -70,6 +77,11 @@ class SearchEngine:
                 intent = QueryIntent.CODE
         # mode="exhaustive" and mode=None: no override needed
 
+        # Step 2.6: Start concurrent grep for ENUMERATION intent
+        grep_task: asyncio.Task[list[SearchResult]] | None = None
+        if self._should_augment_with_grep(intent, effective_request.mode):
+            grep_task = asyncio.ensure_future(self._run_grep_async(query_enhanced, intent))
+
         # Step 3: Use the collection from the request (user-specified or default)
         collection = effective_request.collection
 
@@ -89,6 +101,9 @@ class SearchEngine:
         total_candidates = len(candidates)
 
         if not candidates:
+            # Cancel grep task if search returned nothing
+            if grep_task is not None:
+                grep_task.cancel()
             return SearchResponse(
                 results=[],
                 query_enhanced=query_enhanced,
@@ -120,15 +135,32 @@ class SearchEngine:
             results, was_reranked
         )
 
-        # Step 8: Generate suggested patterns if needed
-        suggested_patterns: list[str] | None = None
-        if suggestion_type != SuggestionType.NONE:
-            try:
-                from clew.search.grep import generate_grep_patterns
+        # Step 8: Collect grep results
+        mode_used = "semantic"
+        auto_escalated = False
 
-                suggested_patterns = generate_grep_patterns(query, results, intent)
-            except ImportError:
-                pass
+        if grep_task is not None:
+            # Await concurrent grep (may already be done)
+            grep_search_results = await grep_task
+            if grep_search_results:
+                results = self._merge_grep_results(results, grep_search_results)
+                auto_escalated = True
+                mode_used = "exhaustive"
+        elif (
+            suggestion_type == SuggestionType.TRY_EXHAUSTIVE
+            and self._project_root
+            and not effective_request.mode
+        ):
+            # Low confidence, post-hoc escalation (synchronous)
+            grep_search_results = await self._run_grep_async(query_enhanced, intent)
+            if grep_search_results:
+                results = self._merge_grep_results(results, grep_search_results)
+                auto_escalated = True
+                mode_used = "exhaustive"
+
+        # Step 9: Enrich results with relationship context
+        if self._enricher:
+            results = self._enricher.enrich(results[:5]) + results[5:]
 
         return SearchResponse(
             results=results,
@@ -138,8 +170,95 @@ class SearchEngine:
             confidence=confidence,
             confidence_label=confidence_label,
             suggestion_type=suggestion_type,
-            suggested_patterns=suggested_patterns,
+            mode_used=mode_used,
+            auto_escalated=auto_escalated,
         )
+
+    def _should_augment_with_grep(self, intent: QueryIntent, mode: str | None) -> bool:
+        """Determine if grep should run concurrently with semantic search.
+
+        Returns True for ENUMERATION intent when:
+        - project_root is available
+        - auto_escalation is enabled
+        - mode is not explicitly "semantic" or "keyword" (hard floor)
+        """
+        if self._project_root is None:
+            return False
+        if not self._config.auto_escalation_enabled:
+            return False
+        if mode in ("semantic", "keyword"):
+            return False
+        return intent == QueryIntent.ENUMERATION
+
+    async def _run_grep_async(self, query: str, intent: QueryIntent) -> list[SearchResult]:
+        """Run grep search and return results as SearchResult objects.
+
+        Uses generate_grep_patterns + run_grep + dedup. Returns empty list
+        on any failure (grep is best-effort).
+        """
+        if self._project_root is None:
+            return []
+
+        try:
+            from clew.search.grep import generate_grep_patterns, run_grep
+
+            patterns = generate_grep_patterns(query, [], intent)
+            if not patterns:
+                return []
+
+            grep_results = await run_grep(
+                patterns,
+                self._project_root,
+                timeout=self._config.auto_escalation_timeout,
+                max_count=self._config.grep_max_count,
+            )
+
+            # Convert GrepResult -> SearchResult
+            search_results: list[SearchResult] = []
+            for gr in grep_results:
+                search_results.append(
+                    SearchResult(
+                        content=gr.line_content,
+                        file_path=gr.file_path,
+                        score=0.0,
+                        line_start=gr.line_number,
+                        line_end=gr.line_number,
+                        source="grep",
+                    )
+                )
+
+            return search_results
+        except Exception:
+            logger.debug("Grep augmentation failed", exc_info=True)
+            return []
+
+    def _merge_grep_results(
+        self,
+        semantic_results: list[SearchResult],
+        grep_results: list[SearchResult],
+    ) -> list[SearchResult]:
+        """Merge grep results into semantic results, deduplicating by file+line.
+
+        Caps merged grep results at grep_response_cap to prevent noise.
+        """
+        # Build set of covered file+line ranges from semantic results
+        covered: set[tuple[str, int]] = set()
+        for r in semantic_results:
+            for line in range(r.line_start, r.line_end + 1):
+                covered.add((r.file_path, line))
+
+        # Add non-overlapping grep results up to cap
+        cap = self._config.grep_response_cap
+        merged = list(semantic_results)
+        added = 0
+        for gr in grep_results:
+            if added >= cap:
+                break
+            if (gr.file_path, gr.line_start) not in covered:
+                merged.append(gr)
+                added += 1
+
+        return merged
 
     @staticmethod
     def _deduplicate(results: list[SearchResult]) -> list[SearchResult]:

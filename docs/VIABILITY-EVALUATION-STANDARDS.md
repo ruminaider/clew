@@ -185,6 +185,23 @@ After programmatic computation, optionally analyze raw (unsanitized) transcripts
 
 **Why:** Quantitative scores tell you IF the tool improved. Post-hoc analysis tells you WHY (or why not). This phase is explicitly separated from scoring to prevent qualitative observations from influencing quantitative verdicts.
 
+### Phase 5.5a: Version-Specific Criterion Overrides (optional)
+
+By default, Phase 5.5 findings do NOT affect verdicts — they are qualitative context only. However, version-specific evaluation handoffs MAY pre-register feature-adoption criteria that elevate specific Phase 5.5 findings to verdict-affecting status.
+
+**Requirements for overrides:**
+
+1. The override MUST be documented in the evaluation handoff BEFORE any agents run
+2. Criteria definitions MUST be unambiguous — define what "visible", "actionable", "adopted" mean in measurable terms
+3. The handoff MUST explicitly state which Phase 5.5 findings are elevated to verdict-affecting status and which remain qualitative-only
+4. If elevated, the handoff MUST define separate criteria for:
+   - **Feature present in output** — the tool produced the feature's data (e.g., "grep results appear in results array")
+   - **Agent reacted to feature** — the agent changed behavior because of the feature (e.g., "agent read additional files surfaced by enrichment")
+
+   These must be counted separately to prevent double-counting the same observation.
+
+**Rationale:** V3 evaluation needed feature-adoption criteria (feature visibility, agent behavior change) that were treated as separate from the quantitative scoring, creating a contradiction: Phase 5.5 "does NOT affect verdicts" yet the evaluation used Phase 5.5 findings as KILL criteria. This override mechanism resolves the contradiction by making the elevation explicit and pre-registered.
+
 ### Phase 6: Disagreement Resolution
 
 If any scorer pair disagrees by >1 point on any dimension for a test:

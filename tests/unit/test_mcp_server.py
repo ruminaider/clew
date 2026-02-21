@@ -33,6 +33,8 @@ def _mock_search_result(**overrides):
         "app_name": "",
         "layer": "",
         "chunk_id": "src/main.py::function::hello",
+        "source": "semantic",
+        "context": "",
     }
     defaults.update(overrides)
     return Mock(**defaults)
@@ -200,7 +202,6 @@ class TestSearchTool:
         assert output["results"][0]["file_path"] == "src/main.py"
         assert output["results"][0]["score"] == 0.95
         assert "confidence" in output
-        assert "confidence_label" in output
 
     @patch("clew.mcp_server._get_components")
     async def test_search_with_custom_params(self, mock_get):
@@ -375,10 +376,10 @@ class TestSearchTool:
 
         output = await search("hello")
         assert output["confidence"] == 0.85
-        assert output["confidence_label"] == "high"
 
     @patch("clew.mcp_server._get_components")
-    async def test_search_response_has_suggestion(self, mock_get):
+    async def test_search_response_no_metadata_in_output(self, mock_get):
+        """V4: MCP output does not include confidence_label, suggestion, or related_files."""
         from clew.search.models import SuggestionType
 
         components = _mock_components()
@@ -388,7 +389,9 @@ class TestSearchTool:
         )
 
         output = await search("hello")
-        assert "suggestion" in output
+        assert "suggestion" not in output
+        assert "confidence_label" not in output
+        assert "related_files" not in output
 
 
 class TestGetContextTool:
@@ -1122,94 +1125,70 @@ class TestHeuristicExplainEnrichment:
         assert "Summary:" not in explanation
 
 
-class TestPeripheralSurfacing:
-    """Tests for _surface_peripherals()."""
+class TestV4ResultFields:
+    """Test V4 source and context fields in search result dicts."""
 
     @patch("clew.mcp_server._get_components")
-    async def test_search_includes_related_files(self, mock_get):
-        """search() response includes related_files from trace graph."""
+    async def test_source_field_included_for_grep(self, mock_get):
+        """Results with source='grep' include source in output dict."""
+        components = _mock_components()
+        result = _mock_search_result(source="grep")
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert output["results"][0]["source"] == "grep"
+
+    @patch("clew.mcp_server._get_components")
+    async def test_source_field_omitted_for_semantic(self, mock_get):
+        """Results with source='semantic' omit source from output dict."""
+        components = _mock_components()
+        result = _mock_search_result(source="semantic")
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert "source" not in output["results"][0]
+
+    @patch("clew.mcp_server._get_components")
+    async def test_context_field_included_when_present(self, mock_get):
+        """Results with non-empty context include context in output dict."""
+        components = _mock_components()
+        result = _mock_search_result(context="Called by: handler")
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert output["results"][0]["context"] == "Called by: handler"
+
+    @patch("clew.mcp_server._get_components")
+    async def test_context_field_omitted_when_empty(self, mock_get):
+        """Results with empty context omit context from output dict."""
+        components = _mock_components()
+        result = _mock_search_result(context="")
+        components.search_engine.search.return_value = _mock_search_response(
+            results=[result], total_candidates=1
+        )
+        mock_get.return_value = components
+
+        output = await search("hello")
+        assert "context" not in output["results"][0]
+
+    @patch("clew.mcp_server._get_components")
+    async def test_no_related_files_in_output(self, mock_get):
+        """V4 search output does not include top-level related_files."""
         components = _mock_components()
         result = _mock_search_result(chunk_id="src/main.py::function::hello")
         components.search_engine.search.return_value = _mock_search_response(
             results=[result], total_candidates=1
         )
-        components.cache.traverse_relationships_batch.return_value = [
-            {
-                "source_entity": "src/main.py::function::hello",
-                "relationship": "tests",
-                "target_entity": "tests/test_main.py::TestHello",
-                "file_path": "tests/test_main.py",
-                "confidence": "static",
-                "depth": 1,
-            }
-        ]
-        mock_get.return_value = components
-
-        output = await search("hello")
-        assert "related_files" in output
-        assert len(output["related_files"]) == 1
-        assert output["related_files"][0]["file_path"] == "tests/test_main.py"
-
-    @patch("clew.mcp_server._get_components")
-    async def test_no_related_files_when_empty_trace(self, mock_get):
-        components = _mock_components()
-        result = _mock_search_result()
-        components.search_engine.search.return_value = _mock_search_response(
-            results=[result], total_candidates=1
-        )
-        components.cache.traverse_relationships_batch.return_value = []
         mock_get.return_value = components
 
         output = await search("hello")
         assert "related_files" not in output
-
-    @patch("clew.mcp_server._get_components")
-    async def test_excludes_files_already_in_results(self, mock_get):
-        components = _mock_components()
-        result = _mock_search_result(
-            file_path="src/main.py", chunk_id="src/main.py::function::hello"
-        )
-        components.search_engine.search.return_value = _mock_search_response(
-            results=[result], total_candidates=1
-        )
-        # Related file points back to src/main.py which is already in results
-        components.cache.traverse_relationships_batch.return_value = [
-            {
-                "source_entity": "src/main.py::function::hello",
-                "relationship": "calls",
-                "target_entity": "src/main.py::function::helper",
-                "file_path": "src/main.py",
-                "confidence": "static",
-                "depth": 1,
-            }
-        ]
-        mock_get.return_value = components
-
-        output = await search("hello")
-        # src/main.py is already in results, so should not appear in related_files
-        assert "related_files" not in output or len(output.get("related_files", [])) == 0
-
-    @patch("clew.mcp_server._get_components")
-    async def test_caps_at_five_files(self, mock_get):
-        components = _mock_components()
-        result = _mock_search_result(chunk_id="src/main.py::function::hello")
-        components.search_engine.search.return_value = _mock_search_response(
-            results=[result], total_candidates=1
-        )
-        # Return 10 related files
-        components.cache.traverse_relationships_batch.return_value = [
-            {
-                "source_entity": "src/main.py::function::hello",
-                "relationship": "calls",
-                "target_entity": f"lib/module{i}.py::func{i}",
-                "file_path": f"lib/module{i}.py",
-                "confidence": "static",
-                "depth": 1,
-            }
-            for i in range(10)
-        ]
-        mock_get.return_value = components
-
-        output = await search("hello")
-        assert "related_files" in output
-        assert len(output["related_files"]) <= 5

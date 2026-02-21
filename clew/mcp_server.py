@@ -19,8 +19,7 @@ from clew.exceptions import (
 )
 from clew.factory import Components, create_components
 from clew.indexer.pipeline import detect_language
-from clew.search.models import SearchRequest, SuggestionType
-from clew.search.surfacing import surface_peripherals
+from clew.search.models import SearchRequest
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +79,12 @@ def _compact_result_to_dict(result: Any) -> dict[str, Any]:
     enriched = getattr(result, "enriched", None)
     if enriched is not None:
         d["enriched"] = enriched
+    source = getattr(result, "source", "semantic")
+    if source != "semantic":
+        d["source"] = source
+    context = getattr(result, "context", "")
+    if context:
+        d["context"] = context
     return d
 
 
@@ -120,56 +125,6 @@ def _get_project_root() -> Path | None:
     return Path.cwd()
 
 
-def _grep_result_to_dict(result: Any) -> dict[str, Any]:
-    """Convert a GrepResult to a dict."""
-    return {
-        "file_path": result.file_path,
-        "line_number": result.line_number,
-        "line_content": result.line_content,
-        "pattern_matched": result.pattern_matched,
-    }
-
-
-async def _run_exhaustive_search(
-    components: Components, request: SearchRequest
-) -> tuple[Any, list[Any]]:
-    """Run exhaustive search: semantic + grep with deduplication."""
-    try:
-        from clew.search.grep import search_with_grep
-
-        project_root = _get_project_root()
-        if project_root is None:
-            response = await components.search_engine.search(request)
-            return response, []
-
-        cfg = components.config.search
-        return await search_with_grep(
-            components.search_engine,
-            request,
-            project_root,
-            grep_timeout=cfg.grep_timeout,
-            grep_max_count=cfg.grep_max_count,
-            grep_response_cap=cfg.grep_response_cap,
-        )
-    except ImportError:
-        logger.debug("grep module unavailable, falling back to semantic search")
-        response = await components.search_engine.search(request)
-        return response, []
-
-
-SUGGESTION_MESSAGES: dict[SuggestionType, str] = {
-    SuggestionType.TRY_KEYWORD: (
-        "Results may be incomplete. Try mode='keyword' for identifier-based search."
-    ),
-    SuggestionType.TRY_EXHAUSTIVE: (
-        "Low confidence results. Try mode='exhaustive' to combine semantic search with grep."
-    ),
-    SuggestionType.LOW_CONFIDENCE: (
-        "Top results are ambiguous. Consider refining your query or using mode='exhaustive'."
-    ),
-}
-
-
 @mcp.tool()
 async def search(
     query: str,
@@ -183,18 +138,6 @@ async def search(
 ) -> dict[str, Any]:
     """Search the codebase for relevant code snippets.
 
-    Modes:
-      semantic (default): Semantic similarity search. Best for understanding,
-        debugging, and finding conceptually related code.
-      keyword: Identifier-biased hybrid search. Best for "find all X" tasks
-        like listing all callers, all URL patterns, all env vars.
-      exhaustive: Semantic search + grep. Guarantees completeness by also
-        running ripgrep. Best when you need to find EVERY instance.
-
-    The response includes a `confidence_label` (high/medium/low) and
-    `suggestion` when results may be incomplete. Check these fields and
-    consider switching modes if confidence is low.
-
     Args:
         query: Natural language search query
         limit: Maximum number of results (default 5)
@@ -203,7 +146,7 @@ async def search(
         intent: Search intent hint (code, docs, debug, location, enumeration)
         filters: Metadata filters (language, chunk_type, app_name, layer, is_test)
         detail: Response detail level — "compact" (default) or "full"
-        mode: Search mode — "semantic" (default), "keyword", or "exhaustive"
+        mode: Search mode override — "semantic", "keyword", or "exhaustive"
     """
     try:
         from clew.search.models import QueryIntent
@@ -236,41 +179,14 @@ async def search(
             mode=mode,
         )
 
-        grep_results: list[Any] = []
-        if mode == "exhaustive":
-            response, grep_results = await _run_exhaustive_search(components, request)
-        else:
-            response = await components.search_engine.search(request)
+        response = await components.search_engine.search(request)
 
         result_dict: dict[str, Any] = {
             "results": [_result_to_dict(r, detail) for r in response.results],
             "confidence": response.confidence,
-            "confidence_label": response.confidence_label,
             "intent": response.intent.value,
-            "mode": mode or "semantic",
             "total_candidates": response.total_candidates,
         }
-
-        if grep_results:
-            result_dict["grep_results"] = [_grep_result_to_dict(g) for g in grep_results[:20]]
-            result_dict["grep_total"] = len(grep_results)
-            cfg = components.config.search
-            if len(grep_results) >= cfg.grep_response_cap:
-                result_dict["grep_capped"] = True
-
-        suggestion_msg = SUGGESTION_MESSAGES.get(response.suggestion_type)
-        if suggestion_msg:
-            result_dict["suggestion"] = suggestion_msg
-        if response.suggested_patterns:
-            result_dict["suggested_patterns"] = response.suggested_patterns
-
-        # Surface related files from trace graph
-        try:
-            related = surface_peripherals(response.results, components.cache)
-            if related:
-                result_dict["related_files"] = related
-        except Exception:
-            logger.debug("Peripheral surfacing failed", exc_info=True)
 
         return result_dict
     except InvalidFilterError as e:

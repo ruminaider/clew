@@ -3,9 +3,42 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def extract_entity_ids(
+    results: list[Any],
+    max_results: int = 3,
+    relativize: Callable[[str], str] | None = None,
+) -> tuple[list[str], set[str]]:
+    """Extract entity identifiers and result file paths from search results.
+
+    If relativize is provided, it converts absolute file paths to relative
+    paths matching the relationship database format.
+    """
+    _rel = relativize or (lambda x: x)
+    entities: list[str] = []
+    result_files: set[str] = {r.file_path for r in results}
+
+    for r in results[:max_results]:
+        chunk_id = getattr(r, "chunk_id", "")
+        if chunk_id:
+            entities.append(chunk_id)
+        # Also try file_path::class_name.function_name format
+        rel_path = _rel(r.file_path)
+        class_name = getattr(r, "class_name", "")
+        func_name = getattr(r, "function_name", "")
+        if class_name and func_name:
+            entities.append(f"{rel_path}::{class_name}.{func_name}")
+        elif func_name:
+            entities.append(f"{rel_path}::{func_name}")
+        elif class_name:
+            entities.append(f"{rel_path}::{class_name}")
+
+    return entities, result_files
 
 
 def surface_peripherals(
@@ -21,23 +54,7 @@ def surface_peripherals(
     if not results:
         return []
 
-    # Extract entity identifiers from top-3 results
-    entities: list[str] = []
-    result_files: set[str] = {r.file_path for r in results}
-
-    for r in results[:3]:
-        chunk_id = getattr(r, "chunk_id", "")
-        if chunk_id:
-            entities.append(chunk_id)
-        # Also try file_path::class_name.function_name format
-        class_name = getattr(r, "class_name", "")
-        func_name = getattr(r, "function_name", "")
-        if class_name and func_name:
-            entities.append(f"{r.file_path}::{class_name}.{func_name}")
-        elif func_name:
-            entities.append(f"{r.file_path}::{func_name}")
-        elif class_name:
-            entities.append(f"{r.file_path}::{class_name}")
+    entities, result_files = extract_entity_ids(results, max_results=3)
 
     if not entities:
         return []

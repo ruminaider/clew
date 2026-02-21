@@ -12,6 +12,7 @@ from clew.search.grep import (
     GrepResult,
     _deduplicate_grep,
     generate_grep_patterns,
+    grep_results_to_search_results,
     run_grep,
 )
 from clew.search.models import SearchResult
@@ -310,6 +311,47 @@ class TestRunGrep:
             idx = cmd_args.index("-e")
             pattern = cmd_args[idx + 1]
             assert "(foo)|(bar)|(baz)" == pattern
+
+class TestGrepResultsToSearchResults:
+    """Test GrepResult -> SearchResult conversion."""
+
+    def test_basic_conversion(self):
+        grep_results = [
+            GrepResult("src/main.py", 42, "def process_order():", "process_order"),
+        ]
+        search_results = grep_results_to_search_results(grep_results)
+        assert len(search_results) == 1
+        r = search_results[0]
+        assert r.file_path == "src/main.py"
+        assert r.line_start == 42
+        assert r.line_end == 42
+        assert r.score == 0.0
+        assert r.source == "grep"
+        assert r.chunk_type == "grep_match"
+        assert r.content == "def process_order():"
+
+    def test_multiple_results(self):
+        grep_results = [
+            GrepResult("a.py", 1, "line1", "pat"),
+            GrepResult("b.py", 2, "line2", "pat"),
+            GrepResult("c.py", 3, "line3", "pat"),
+        ]
+        search_results = grep_results_to_search_results(grep_results)
+        assert len(search_results) == 3
+        assert all(r.source == "grep" for r in search_results)
+        assert all(r.score == 0.0 for r in search_results)
+
+    def test_empty_input(self):
+        assert grep_results_to_search_results([]) == []
+
+    def test_preserves_content(self):
+        """Line content is preserved including special characters."""
+        grep_results = [
+            GrepResult("main.py", 1, '    raise ValueError("bad input")', "ValueError"),
+        ]
+        search_results = grep_results_to_search_results(grep_results)
+        assert search_results[0].content == '    raise ValueError("bad input")'
+
 
     @pytest.mark.asyncio
     async def test_rg_skips_non_match_types(self):

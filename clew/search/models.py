@@ -45,6 +45,8 @@ class SearchResult:
     docstring: str = ""
     is_test: bool = False
     importance_score: float = 0.0
+    source: str = "semantic"
+    context: str = ""
 
 
 @dataclass
@@ -72,6 +74,8 @@ class SearchResponse:
     confidence_label: str = "high"
     suggestion_type: SuggestionType = SuggestionType.NONE
     suggested_patterns: list[str] | None = None
+    mode_used: str = "semantic"
+    auto_escalated: bool = False
 
 
 @dataclass

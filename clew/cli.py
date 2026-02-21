@@ -190,23 +190,7 @@ def search(
         mode=effective_mode,
     )
 
-    grep_results: list[Any] = []
-    if effective_mode == "exhaustive":
-        from clew.search.grep import search_with_grep
-
-        project_root_path = (project_root or Path(".")).resolve()
-        response, grep_results = asyncio.run(
-            search_with_grep(
-                components.search_engine,
-                request,
-                project_root_path,
-                grep_timeout=components.config.search.grep_timeout,
-                grep_max_count=components.config.search.grep_max_count,
-                grep_response_cap=components.config.search.grep_response_cap,
-            )
-        )
-    else:
-        response = asyncio.run(components.search_engine.search(request))
+    response = asyncio.run(components.search_engine.search(request))
 
     if raw:
         results = [
@@ -220,31 +204,15 @@ def search(
                 "language": r.language,
                 "class_name": r.class_name,
                 "function_name": r.function_name,
+                "source": getattr(r, "source", "semantic"),
             }
             for r in response.results
         ]
-        if grep_results:
-            raw_output: dict[str, Any] = {
-                "results": results,
-                "grep_results": [
-                    {
-                        "file_path": g.file_path,
-                        "line_number": g.line_number,
-                        "line_content": g.line_content,
-                        "pattern_matched": g.pattern_matched,
-                    }
-                    for g in grep_results
-                ],
-            }
-            print(json.dumps(raw_output, indent=2))
-        else:
-            # Print JSON to stdout (not stderr console)
-            print(json.dumps(results, indent=2))
+        print(json.dumps(results, indent=2))
         return
 
     if json_output:
         from clew.mcp_server import _compact_result_to_dict
-        from clew.search.surfacing import surface_peripherals
 
         results_list = []
         for r in response.results:
@@ -252,70 +220,29 @@ def search(
             if full_content:
                 d["content"] = r.content
             results_list.append(d)
-        suggestion_map = {
-            "try_keyword": "Try --mode keyword for broader identifier matching",
-            "try_exhaustive": "Try --exhaustive for grep-based completeness",
-            "low_confidence": "Low confidence — consider refining query or trying a different mode",
-        }
         output: dict[str, Any] = {
             "query": query,
             "query_enhanced": response.query_enhanced,
             "intent": response.intent.value,
-            "mode": effective_mode or "semantic",
+            "mode": getattr(response, "mode_used", effective_mode or "semantic"),
             "total_candidates": response.total_candidates,
             "confidence": round(response.confidence, 3),
-            "confidence_label": response.confidence_label,
             "results": results_list,
         }
-        if response.suggestion_type.value != "none":
-            output["suggestion"] = suggestion_map.get(
-                response.suggestion_type.value, response.suggestion_type.value
-            )
-        if response.suggested_patterns:
-            output["suggested_patterns"] = response.suggested_patterns
-        if grep_results:
-            output["grep_results"] = [
-                {
-                    "file_path": g.file_path,
-                    "line_number": g.line_number,
-                    "line_content": g.line_content,
-                    "pattern_matched": g.pattern_matched,
-                }
-                for g in grep_results
-            ]
-            output["grep_total"] = len(grep_results)
-        # Surface related files from trace graph
-        try:
-            related = surface_peripherals(response.results, components.cache)
-            if related:
-                output["related_files"] = related
-        except Exception:
-            pass
         print(json.dumps(output, indent=2))
         return
 
-    if not response.results and not grep_results:
+    if not response.results:
         console.print("[yellow]No results found.[/yellow]")
         return
 
+    mode_used = getattr(response, "mode_used", effective_mode or "semantic")
     console.print(
         f"[dim]Query: {response.query_enhanced} | Intent: {response.intent.value} | "
-        f"Mode: {effective_mode or 'semantic'} | Candidates: {response.total_candidates}[/dim]"
+        f"Mode: {mode_used} | Candidates: {response.total_candidates}[/dim]"
     )
-    if response.confidence_label != "high":
-        console.print(
-            f"[yellow]Confidence: {response.confidence_label}[/yellow] ({response.confidence:.3f})"
-        )
-    suggestion_map = {
-        "try_keyword": "Try --mode keyword for broader identifier matching",
-        "try_exhaustive": "Try --exhaustive for grep-based completeness",
-        "low_confidence": "Low confidence — consider refining query or trying a different mode",
-    }
-    if response.suggestion_type.value != "none":
-        suggestion_text = suggestion_map.get(
-            response.suggestion_type.value, response.suggestion_type.value
-        )
-        console.print(f"[yellow]{suggestion_text}[/yellow]")
+    if getattr(response, "auto_escalated", False):
+        console.print("[cyan]Auto-escalated to exhaustive (ENUMERATION detected)[/cyan]")
     console.print()
 
     for _i, result in enumerate(response.results, 1):
@@ -333,21 +260,16 @@ def search(
 
         console.print(Panel(content, title=title, title_align="left", border_style="blue"))
 
-    # Show grep results if present
-    if grep_results:
-        console.print(f"\n[bold]Grep results ({len(grep_results)} additional matches):[/bold]")
+    # Show grep results if present (grep items are in results with source="grep")
+    grep_items = [r for r in response.results if getattr(r, "source", "semantic") == "grep"]
+    if grep_items:
+        console.print(f"\n[bold]Grep results ({len(grep_items)} additional matches):[/bold]")
         grep_table = Table()
         grep_table.add_column("File", style="cyan")
         grep_table.add_column("Line", style="dim")
         grep_table.add_column("Content")
-        grep_table.add_column("Pattern", style="dim")
-        for g in grep_results[:20]:
-            grep_table.add_row(
-                g.file_path,
-                str(g.line_number),
-                g.line_content[:100],
-                g.pattern_matched,
-            )
+        for g in grep_items[:20]:
+            grep_table.add_row(g.file_path, str(g.line_start), g.content[:100])
         console.print(grep_table)
 
 

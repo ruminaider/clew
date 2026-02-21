@@ -73,6 +73,7 @@ class TestSearchCommand:
             language="python",
             class_name="",
             function_name="hello",
+            source="semantic",
         )
         mock_response = Mock(
             results=[mock_result],
@@ -396,6 +397,8 @@ def _make_search_result(**overrides: object) -> Mock:
         "importance_score": 0.0,
         "enriched": None,
         "chunk_id": "src/main.py::function::search",
+        "source": "semantic",
+        "context": "",
     }
     defaults.update(overrides)
     return Mock(**defaults)
@@ -415,9 +418,9 @@ class TestSearchJsonOutput:
             confidence_label="high",
             suggestion_type=Mock(value="none"),
             suggested_patterns=None,
+            mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "search engine", "--json"])
         assert result.exit_code == 0
@@ -428,7 +431,6 @@ class TestSearchJsonOutput:
         assert data["mode"] == "semantic"
         assert data["total_candidates"] == 30
         assert data["confidence"] == 0.85
-        assert data["confidence_label"] == "high"
         assert len(data["results"]) == 1
         r = data["results"][0]
         assert r["file_path"] == "src/main.py"
@@ -454,9 +456,9 @@ class TestSearchJsonOutput:
             confidence_label="high",
             suggestion_type=Mock(value="none"),
             suggested_patterns=None,
+            mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "search", "--json", "--full"])
         assert result.exit_code == 0
@@ -477,9 +479,9 @@ class TestSearchJsonOutput:
             confidence_label="low",
             suggestion_type=Mock(value="low_confidence"),
             suggested_patterns=None,
+            mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "xyz", "--json"])
         assert result.exit_code == 0
@@ -488,8 +490,8 @@ class TestSearchJsonOutput:
         assert data["total_candidates"] == 0
 
 
-class TestSearchJsonV3Fields:
-    """Test V3 metadata fields in --json output."""
+class TestSearchJsonV4Fields:
+    """Test V4 metadata fields in --json output."""
 
     @patch("clew.factory.create_components")
     def test_json_includes_mode_field(self, mock_factory: Mock) -> None:
@@ -503,9 +505,9 @@ class TestSearchJsonV3Fields:
             confidence_label="high",
             suggestion_type=Mock(value="none"),
             suggested_patterns=None,
+            mode_used="keyword",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "test", "--json", "--mode", "keyword"])
         assert result.exit_code == 0
@@ -523,9 +525,9 @@ class TestSearchJsonV3Fields:
             confidence_label="high",
             suggestion_type=Mock(value="none"),
             suggested_patterns=None,
+            mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "test", "--json"])
         assert result.exit_code == 0
@@ -533,86 +535,8 @@ class TestSearchJsonV3Fields:
         assert data["mode"] == "semantic"
 
     @patch("clew.factory.create_components")
-    def test_json_includes_suggestion(self, mock_factory: Mock) -> None:
-        """--json output includes suggestion when confidence is low."""
-        mock_response = Mock(
-            results=[],
-            query_enhanced="test",
-            total_candidates=0,
-            intent=Mock(value="code"),
-            confidence=0.3,
-            confidence_label="low",
-            suggestion_type=Mock(value="try_exhaustive"),
-            suggested_patterns=None,
-        )
-        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
-
-        result = runner.invoke(app, ["search", "test", "--json"])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert "suggestion" in data
-        assert "exhaustive" in data["suggestion"]
-
-    @patch("clew.factory.create_components")
-    def test_json_includes_suggested_patterns(self, mock_factory: Mock) -> None:
-        """--json output includes suggested_patterns when present."""
-        mock_response = Mock(
-            results=[],
-            query_enhanced="test",
-            total_candidates=0,
-            intent=Mock(value="enumeration"),
-            confidence=0.5,
-            confidence_label="medium",
-            suggestion_type=Mock(value="try_exhaustive"),
-            suggested_patterns=["urlpatterns", "path("],
-        )
-        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
-
-        result = runner.invoke(app, ["search", "test", "--json"])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert "suggested_patterns" in data
-        assert data["suggested_patterns"] == ["urlpatterns", "path("]
-
-    @patch("clew.factory.create_components")
-    def test_json_includes_related_files(self, mock_factory: Mock) -> None:
-        """--json output includes related_files from trace graph."""
-        mock_result = _make_search_result(
-            chunk_id="src/main.py::function::search",
-        )
-        mock_response = Mock(
-            results=[mock_result],
-            query_enhanced="search",
-            total_candidates=1,
-            intent=Mock(value="code"),
-            confidence=0.9,
-            confidence_label="high",
-            suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
-        )
-        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = [
-            {
-                "source_entity": "src/main.py::function::search",
-                "relationship": "tests",
-                "target_entity": "tests/test_main.py::TestSearch",
-                "confidence": "static",
-                "depth": 1,
-            }
-        ]
-
-        result = runner.invoke(app, ["search", "search", "--json"])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert "related_files" in data
-        assert len(data["related_files"]) == 1
-        assert data["related_files"][0]["file_path"] == "tests/test_main.py"
-
-    @patch("clew.factory.create_components")
-    def test_json_no_suggestion_when_high_confidence(self, mock_factory: Mock) -> None:
-        """--json output omits suggestion when suggestion_type is none."""
+    def test_json_output_has_core_fields(self, mock_factory: Mock) -> None:
+        """--json output has query, intent, mode, confidence, results."""
         mock_response = Mock(
             results=[],
             query_enhanced="test",
@@ -622,14 +546,86 @@ class TestSearchJsonV3Fields:
             confidence_label="high",
             suggestion_type=Mock(value="none"),
             suggested_patterns=None,
+            mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
-        mock_factory.return_value.cache.traverse_relationships_batch.return_value = []
 
         result = runner.invoke(app, ["search", "test", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert "suggestion" not in data
+        assert "query" in data
+        assert "intent" in data
+        assert "mode" in data
+        assert "confidence" in data
+        assert "results" in data
+
+    @patch("clew.factory.create_components")
+    def test_json_mode_from_response(self, mock_factory: Mock) -> None:
+        """mode field comes from response.mode_used."""
+        mock_response = Mock(
+            results=[],
+            query_enhanced="test",
+            total_candidates=0,
+            intent=Mock(value="enumeration"),
+            confidence=0.5,
+            confidence_label="medium",
+            suggestion_type=Mock(value="try_exhaustive"),
+            suggested_patterns=None,
+            mode_used="exhaustive",
+            auto_escalated=True,
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["mode"] == "exhaustive"
+
+    @patch("clew.factory.create_components")
+    def test_json_result_includes_source_when_grep(self, mock_factory: Mock) -> None:
+        """Results with source='grep' include source field in JSON."""
+        mock_result = _make_search_result(source="grep")
+        mock_response = Mock(
+            results=[mock_result],
+            query_enhanced="test",
+            total_candidates=1,
+            intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
+            mode_used="exhaustive",
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        r = data["results"][0]
+        assert r["source"] == "grep"
+
+    @patch("clew.factory.create_components")
+    def test_json_result_includes_context_when_enriched(self, mock_factory: Mock) -> None:
+        """Results with non-empty context include context field in JSON."""
+        mock_result = _make_search_result(context="Called by: handler")
+        mock_response = Mock(
+            results=[mock_result],
+            query_enhanced="test",
+            total_candidates=1,
+            intent=Mock(value="code"),
+            confidence=0.9,
+            confidence_label="high",
+            suggestion_type=Mock(value="none"),
+            suggested_patterns=None,
+            mode_used="semantic",
+        )
+        mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
+
+        result = runner.invoke(app, ["search", "test", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        r = data["results"][0]
+        assert r["context"] == "Called by: handler"
 
 
 class TestTraceJsonOutput:
