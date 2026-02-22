@@ -179,7 +179,6 @@ def _mock_search_response(**overrides):
         "confidence": 1.0,
         "confidence_label": "high",
         "suggestion_type": SuggestionType.NONE,
-        "suggested_patterns": None,
         "mode_used": "semantic",
         "auto_escalated": False,
     }

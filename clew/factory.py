@@ -95,7 +95,11 @@ def create_components(
             enhancer = QueryEnhancer(terminology_path)
 
     # Search components
-    hybrid = HybridSearchEngine(qdrant=qdrant, embedder=embedder)
+    hybrid = HybridSearchEngine(
+        qdrant=qdrant,
+        embedder=embedder,
+        enumeration_limit=config.search.enumeration_limit,
+    )
 
     # Reranker (optional -- only if API key available)
     reranker: RerankProvider | None = None

@@ -73,6 +73,7 @@ class TestCreateComponentsDefaultConfig:
         _patch_all["HybridSearchEngine"].assert_called_once_with(
             qdrant=_patch_all["QdrantManager"].return_value,
             embedder=_patch_all["create_embedding_provider"].return_value,
+            enumeration_limit=200,
         )
 
     def test_creates_search_engine(self, _patch_all: dict[str, MagicMock]) -> None:

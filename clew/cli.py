@@ -242,7 +242,7 @@ def search(
         f"Mode: {mode_used} | Candidates: {response.total_candidates}[/dim]"
     )
     if getattr(response, "auto_escalated", False):
-        console.print("[cyan]Auto-escalated to exhaustive (ENUMERATION detected)[/cyan]")
+        console.print("[cyan]Auto-escalated to exhaustive (low confidence)[/cyan]")
     console.print()
 
     for _i, result in enumerate(response.results, 1):

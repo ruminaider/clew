@@ -54,9 +54,7 @@ class CacheResultEnricher(ResultEnricher):
         if not results:
             return results
 
-        entities, _ = extract_entity_ids(
-            results, max_results=5, relativize=self._relativize
-        )
+        entities, _ = extract_entity_ids(results, max_results=5, relativize=self._relativize)
         if not entities:
             return results
 
@@ -81,9 +79,7 @@ class CacheResultEnricher(ResultEnricher):
         # Build context for each result
         for result in results:
             rel_path = self._relativize(result.file_path)
-            context_parts = _build_context_for_result(
-                result, rel_path, entities, entity_rels
-            )
+            context_parts = _build_context_for_result(result, rel_path, entities, entity_rels)
             if context_parts:
                 result.context = " | ".join(context_parts)
 

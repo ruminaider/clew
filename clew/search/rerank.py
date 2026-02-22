@@ -33,18 +33,14 @@ def should_skip_rerank(
     query: str,
     num_candidates: int,
     top_score: float,
-    score_variance: float,
     *,
     no_rerank_threshold: int = 10,
     high_confidence_threshold: float = 0.92,
-    low_variance_threshold: float = 0.1,
 ) -> bool:
     """Determine if reranking should be skipped."""
     if num_candidates <= no_rerank_threshold:
         return True
     if top_score > high_confidence_threshold:
-        return True
-    if score_variance < low_variance_threshold:
         return True
     if "/" in query or query.endswith((".py", ".ts", ".js")):
         return True

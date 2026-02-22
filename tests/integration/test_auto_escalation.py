@@ -53,20 +53,23 @@ def _make_rg_match(file_path: str, line_number: int, text: str, matched: str) ->
 
 
 class TestAutoEscalationPipeline:
-    """Integration tests for the full auto-escalation pipeline."""
+    """Integration tests for the full auto-escalation pipeline.
+
+    Auto-escalation is purely post-hoc, triggered by low confidence
+    (flat score distribution, gap_ratio < 0.20) on CODE/DOCS queries.
+    """
 
     @pytest.mark.asyncio
-    async def test_full_pipeline_enumeration_query(self):
-        """ENUMERATION query produces both semantic and grep results, auto_escalated=True."""
-        # Set up hybrid engine returning semantic results
+    async def test_full_pipeline_low_confidence_post_hoc_grep(self):
+        """Low-confidence CODE query triggers post-hoc grep, auto_escalated=True."""
+        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
         semantic_results = [
-            _make_result(
-                score=0.85,
-                file_path="src/main.py",
-                line_start=1,
-                line_end=10,
-                function_name="process_order",
-            ),
+            _make_result(score=0.50, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.49, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.48, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.47, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.44, file_path="f.py", line_start=1, line_end=10),
         ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
@@ -92,10 +95,7 @@ class TestAutoEscalationPipeline:
             "clew.search.grep.asyncio.create_subprocess_exec",
             return_value=mock_process,
         ):
-            request = SearchRequest(
-                query="find all url routes",
-                intent=QueryIntent.ENUMERATION,
-            )
+            request = SearchRequest(query="webhook handler code")
             response = await engine.search(request)
 
         # Should have both semantic and grep results
@@ -109,8 +109,8 @@ class TestAutoEscalationPipeline:
     @pytest.mark.asyncio
     async def test_full_pipeline_no_escalation(self):
         """High-confidence CODE query does not trigger subprocess."""
-        # Return many results for high confidence
-        semantic_results = [_make_result(score=0.9 - i * 0.05) for i in range(10)]
+        # Peaky distribution: gap_ratio = (1.0 - 0.3) / 1.0 = 0.70 → HIGH
+        semantic_results = [_make_result(score=1.0 - i * 0.08) for i in range(10)]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
 
@@ -137,14 +137,20 @@ class TestAutoEscalationPipeline:
     @pytest.mark.asyncio
     async def test_deduplication_in_merge(self):
         """Grep results overlapping semantic results are deduplicated in merge."""
+        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
         semantic_results = [
             _make_result(
-                score=0.85,
+                score=0.50,
                 file_path="src/main.py",
                 line_start=5,
                 line_end=15,
                 function_name="process_order",
             ),
+            _make_result(score=0.49, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.48, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.47, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.44, file_path="e.py", line_start=1, line_end=10),
         ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
@@ -170,13 +176,10 @@ class TestAutoEscalationPipeline:
             "clew.search.grep.asyncio.create_subprocess_exec",
             return_value=mock_process,
         ):
-            request = SearchRequest(
-                query="find all process_order usages",
-                intent=QueryIntent.ENUMERATION,
-            )
+            request = SearchRequest(query="process_order usages")
             response = await engine.search(request)
 
-        # Should have 1 semantic + 1 non-overlapping grep (overlapping one deduped)
+        # Should have non-overlapping grep result (overlapping one deduped)
         grep_items = [r for r in response.results if r.source == "grep"]
         assert len(grep_items) == 1
         assert grep_items[0].file_path == "src/other.py"
@@ -184,7 +187,15 @@ class TestAutoEscalationPipeline:
     @pytest.mark.asyncio
     async def test_graceful_fallback_rg_not_available(self):
         """When rg is not installed, only semantic results are returned."""
-        semantic_results = [_make_result()]
+        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
+        semantic_results = [
+            _make_result(score=0.50, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.49, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.48, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.47, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.44, file_path="f.py", line_start=1, line_end=10),
+        ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
 
@@ -198,10 +209,7 @@ class TestAutoEscalationPipeline:
             "clew.search.grep.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ):
-            request = SearchRequest(
-                query="find all url routes",
-                intent=QueryIntent.ENUMERATION,
-            )
+            request = SearchRequest(query="webhook handler code")
             response = await engine.search(request)
 
         # Should fall back gracefully to semantic-only results

@@ -312,6 +312,7 @@ class TestRunGrep:
             pattern = cmd_args[idx + 1]
             assert "(foo)|(bar)|(baz)" == pattern
 
+
 class TestGrepResultsToSearchResults:
     """Test GrepResult -> SearchResult conversion."""
 
@@ -351,7 +352,6 @@ class TestGrepResultsToSearchResults:
         ]
         search_results = grep_results_to_search_results(grep_results)
         assert search_results[0].content == '    raise ValueError("bad input")'
-
 
     @pytest.mark.asyncio
     async def test_rg_skips_non_match_types(self):

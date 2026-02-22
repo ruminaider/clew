@@ -37,129 +37,148 @@ def _make_engine(config: SearchConfig | None = None) -> SearchEngine:
 
 
 class TestComputeConfidence:
-    """Test _compute_confidence method."""
+    """Test _compute_confidence using gap ratio (scale-invariant).
+
+    gap_ratio = (top - 5th) / top
+    HIGH >= 0.30, MEDIUM >= 0.20, LOW < 0.20
+    """
 
     def test_empty_results_returns_low(self):
         engine = _make_engine()
-        confidence, label, suggestion = engine._compute_confidence([], was_reranked=False)
+        confidence, label, suggestion = engine._compute_confidence([])
         assert confidence == 0.0
         assert label == "low"
         assert suggestion == SuggestionType.TRY_EXHAUSTIVE
 
-    def test_reranked_high_confidence(self):
+    def test_high_confidence_peaky_distribution(self):
+        """Clear winner: top=1.0, 5th=0.3 → gap_ratio=0.70 → HIGH."""
         engine = _make_engine()
-        results = [_make_result(0.85), _make_result(0.3)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert confidence == 0.85
+        results = [
+            _make_result(1.0),
+            _make_result(0.6),
+            _make_result(0.5),
+            _make_result(0.4),
+            _make_result(0.3),
+        ]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == pytest.approx(0.70, abs=0.01)
         assert label == "high"
+        assert suggestion == SuggestionType.NONE
 
-    def test_reranked_medium_confidence(self):
+    def test_medium_confidence_moderate_spread(self):
+        """Moderate spread: top=1.0, 5th=0.75 → gap_ratio=0.25 → MEDIUM."""
         engine = _make_engine()
-        # V4.1: medium threshold lowered to 0.35, high to 0.65
-        results = [_make_result(0.5), _make_result(0.1)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert confidence == 0.5
+        results = [
+            _make_result(1.0),
+            _make_result(0.9),
+            _make_result(0.85),
+            _make_result(0.8),
+            _make_result(0.75),
+        ]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == pytest.approx(0.25, abs=0.01)
         assert label == "medium"
+        assert suggestion == SuggestionType.TRY_KEYWORD
 
-    def test_reranked_borderline_high(self):
-        """V4.1: 0.65 is the new high threshold for reranked scores."""
+    def test_low_confidence_flat_distribution(self):
+        """Flat distribution: top=0.5, 5th=0.45 → gap_ratio=0.10 → LOW."""
         engine = _make_engine()
-        results = [_make_result(0.66), _make_result(0.3)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert confidence == 0.66
-        assert label == "high"
-
-    def test_reranked_borderline_medium(self):
-        """V4.1: 0.64 is just below the new high threshold."""
-        engine = _make_engine()
-        results = [_make_result(0.64), _make_result(0.1)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert confidence == 0.64
-        assert label == "medium"
-
-    def test_reranked_low_confidence(self):
-        engine = _make_engine()
-        results = [_make_result(0.2), _make_result(0.05)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert confidence == 0.2
+        results = [
+            _make_result(0.50),
+            _make_result(0.49),
+            _make_result(0.48),
+            _make_result(0.47),
+            _make_result(0.45),
+        ]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == pytest.approx(0.10, abs=0.01)
         assert label == "low"
         assert suggestion == SuggestionType.TRY_EXHAUSTIVE
 
-    def test_rrf_high_confidence(self):
-        """RRF path uses score gap of top-5 vs rest."""
+    def test_borderline_high(self):
+        """Exactly at high threshold: gap_ratio=0.30 → HIGH."""
         engine = _make_engine()
-        # 6+ results needed to compute gap between #5 and #6
         results = [
-            _make_result(0.10),
-            _make_result(0.09),
-            _make_result(0.08),
-            _make_result(0.07),
-            _make_result(0.07),
-            _make_result(0.005),  # big gap from #5
+            _make_result(1.0),
+            _make_result(0.9),
+            _make_result(0.8),
+            _make_result(0.75),
+            _make_result(0.70),
         ]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=False)
-        # confidence = scores[4] - scores[5] = 0.07 - 0.005 = 0.065
-        assert confidence == pytest.approx(0.065, abs=1e-9)
-        assert label == "high"  # 0.065 >= 0.06 (rrf high threshold)
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == pytest.approx(0.30, abs=0.01)
+        assert label == "high"
 
-    def test_rrf_medium_confidence(self):
+    def test_borderline_medium(self):
+        """Just above medium threshold: gap_ratio≈0.21 → MEDIUM."""
+        engine = _make_engine()
+        results = [
+            _make_result(1.0),
+            _make_result(0.95),
+            _make_result(0.90),
+            _make_result(0.85),
+            _make_result(0.79),
+        ]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == pytest.approx(0.21, abs=0.01)
+        assert label == "medium"
+
+    def test_scale_invariant_small_scores(self):
+        """Gap ratio works the same with small RRF-scale scores."""
         engine = _make_engine()
         results = [
             _make_result(0.10),
-            _make_result(0.09),
-            _make_result(0.08),
-            _make_result(0.07),
             _make_result(0.06),
-            _make_result(0.03),  # moderate gap from #5
+            _make_result(0.05),
+            _make_result(0.04),
+            _make_result(0.03),
         ]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=False)
-        # confidence = 0.06 - 0.03 = 0.03
-        assert confidence == pytest.approx(0.03, abs=1e-9)
-        assert label == "medium"  # 0.03 >= 0.02 and < 0.06
+        confidence, label, suggestion = engine._compute_confidence(results)
+        # gap_ratio = (0.10 - 0.03) / 0.10 = 0.70 → HIGH
+        assert confidence == pytest.approx(0.70, abs=0.01)
+        assert label == "high"
 
-    def test_rrf_low_confidence(self):
+    def test_scale_invariant_large_scores(self):
+        """Gap ratio works the same with large reranker scores."""
         engine = _make_engine()
         results = [
-            _make_result(0.10),
-            _make_result(0.09),
-            _make_result(0.08),
-            _make_result(0.07),
-            _make_result(0.06),
-            _make_result(0.05),  # tiny gap
+            _make_result(1.5),
+            _make_result(0.9),
+            _make_result(0.7),
+            _make_result(0.6),
+            _make_result(0.45),
         ]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=False)
-        # confidence = 0.06 - 0.05 = 0.01
-        assert confidence == pytest.approx(0.01, abs=1e-9)
-        assert label == "low"  # 0.01 < 0.02
+        confidence, label, suggestion = engine._compute_confidence(results)
+        # gap_ratio = (1.5 - 0.45) / 1.5 = 0.70 → HIGH
+        assert confidence == pytest.approx(0.70, abs=0.01)
+        assert label == "high"
 
-    def test_rrf_fewer_than_6_results(self):
-        """When fewer than 6 results, use last score as confidence."""
+    def test_fewer_than_5_results_uses_last(self):
+        """With fewer than 5 results, anchor is the last available score."""
         engine = _make_engine()
-        results = [_make_result(0.10), _make_result(0.08), _make_result(0.07)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=False)
-        assert confidence == pytest.approx(0.07, abs=1e-9)
-        assert label == "high"  # 0.07 >= 0.06
+        results = [_make_result(1.0), _make_result(0.5)]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        # gap_ratio = (1.0 - 0.5) / 1.0 = 0.50 → HIGH
+        assert confidence == pytest.approx(0.50, abs=0.01)
+        assert label == "high"
 
-    def test_ambiguity_detection(self):
-        """Small gap between #1 and #2 triggers LOW_CONFIDENCE."""
-        engine = _make_engine()
-        results = [_make_result(0.80), _make_result(0.79)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert suggestion == SuggestionType.LOW_CONFIDENCE
-
-    def test_no_ambiguity_with_large_gap(self):
-        """Large gap between #1 and #2 does not trigger ambiguity."""
-        engine = _make_engine()
-        results = [_make_result(0.90), _make_result(0.70)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert suggestion == SuggestionType.NONE
-
-    def test_single_result_no_ambiguity(self):
+    def test_single_result_uses_zero_anchor(self):
+        """Single result: anchor=0 → gap_ratio=1.0 → HIGH."""
         engine = _make_engine()
         results = [_make_result(0.90)]
-        confidence, label, suggestion = engine._compute_confidence(results, was_reranked=True)
-        assert suggestion == SuggestionType.NONE
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == pytest.approx(1.0, abs=0.01)
         assert label == "high"
+        assert suggestion == SuggestionType.NONE
+
+    def test_zero_top_score_returns_low(self):
+        """Top score of 0 returns low confidence."""
+        engine = _make_engine()
+        results = [_make_result(0.0)]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == 0.0
+        assert label == "low"
+        assert suggestion == SuggestionType.TRY_EXHAUSTIVE
 
 
 class TestMaybeRerank:
@@ -171,20 +190,6 @@ class TestMaybeRerank:
         results, was_reranked = engine._maybe_rerank("test", candidates)
         assert results == candidates
         assert was_reranked is False
-
-    def test_enumeration_skips_rerank(self):
-        """ENUMERATION intent skips reranking even with reranker present."""
-        reranker = Mock()
-        engine = SearchEngine(
-            hybrid_engine=Mock(),
-            reranker=reranker,
-        )
-        candidates = [_make_result(0.5) for _ in range(20)]
-        results, was_reranked = engine._maybe_rerank(
-            "find all models", candidates, intent=QueryIntent.ENUMERATION
-        )
-        assert was_reranked is False
-        reranker.rerank.assert_not_called()
 
     def test_reranking_returns_true(self):
         """When reranking happens, returns True."""
@@ -198,7 +203,6 @@ class TestMaybeRerank:
         config = SearchConfig(
             no_rerank_threshold=1,
             high_confidence_threshold=0.99,
-            low_variance_threshold=0.001,
         )
         engine = SearchEngine(
             hybrid_engine=Mock(),
@@ -250,69 +254,10 @@ class TestAutoEscalation:
     """Test autonomous grep escalation behavior."""
 
     @pytest.mark.asyncio
-    async def test_enumeration_triggers_grep(self):
-        """ENUMERATION intent with project_root triggers grep, results have source='grep'."""
-        engine = _make_engine_with_grep()
-        request = SearchRequest(query="find all url routes", intent=QueryIntent.ENUMERATION)
-
-        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = [
-                SearchResult(
-                    content="urlpatterns = [",
-                    file_path="src/urls.py",
-                    score=0.0,
-                    line_start=5,
-                    line_end=5,
-                    source="grep",
-                )
-            ]
-            response = await engine.search(request)
-
-        mock_grep.assert_awaited_once()
-        grep_results = [r for r in response.results if r.source == "grep"]
-        assert len(grep_results) >= 1
-        assert response.auto_escalated is True
-        assert response.mode_used == "exhaustive"
-
-    @pytest.mark.asyncio
-    async def test_semantic_mode_no_escalation(self):
-        """mode='semantic' prevents grep even for ENUMERATION intent."""
-        engine = _make_engine_with_grep()
-        request = SearchRequest(
-            query="find all models",
-            intent=QueryIntent.ENUMERATION,
-            mode="semantic",
-        )
-
-        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = []
-            response = await engine.search(request)
-
-        mock_grep.assert_not_awaited()
-        assert response.auto_escalated is False
-
-    @pytest.mark.asyncio
-    async def test_keyword_mode_no_escalation(self):
-        """mode='keyword' prevents grep even for ENUMERATION intent."""
-        engine = _make_engine_with_grep()
-        request = SearchRequest(
-            query="find all models",
-            intent=QueryIntent.ENUMERATION,
-            mode="keyword",
-        )
-
-        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = []
-            response = await engine.search(request)
-
-        mock_grep.assert_not_awaited()
-        assert response.auto_escalated is False
-
-    @pytest.mark.asyncio
     async def test_no_project_root_no_escalation(self):
         """project_root=None never runs grep."""
         engine = _make_engine_with_grep(project_root=None)
-        request = SearchRequest(query="find all url routes", intent=QueryIntent.ENUMERATION)
+        request = SearchRequest(query="webhook handler code")
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
             mock_grep.return_value = []
@@ -324,15 +269,14 @@ class TestAutoEscalation:
     @pytest.mark.asyncio
     async def test_high_confidence_no_post_escalation(self):
         """High confidence CODE query does not trigger post-hoc grep escalation."""
-        # Return 6 results with gap > 0.06 between #5 and #6 → high confidence
-        # Each with distinct file_path to survive deduplication
+        # Peaky distribution: gap_ratio = (1.0 - 0.3) / 1.0 = 0.70 → HIGH
         results = [
-            _make_result(0.10, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.095, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.09, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.085, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.08, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.01, file_path="f.py", line_start=1, line_end=10),
+            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.7, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.5, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.4, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.3, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.1, file_path="f.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="handle payment", intent=QueryIntent.CODE)
@@ -347,54 +291,45 @@ class TestAutoEscalation:
         assert response.auto_escalated is False
 
     @pytest.mark.asyncio
-    async def test_medium_confidence_code_triggers_post_hoc_grep(self):
-        """V4.1: Medium confidence CODE query triggers post-hoc grep."""
-        # RRF scores: large #1-#2 gap (avoids ambiguity), small #5-#6 gap → medium
-        # Gap #1-#2 = 0.20 - 0.10 = 0.10 > ambiguity threshold (0.05)
-        # RRF confidence = scores[4] - scores[5] = 0.08 - 0.055 = 0.025 → medium
-        # Each result has distinct file_path to survive deduplication
+    async def test_medium_confidence_code_no_post_hoc_grep(self):
+        """Medium confidence CODE query does NOT trigger post-hoc grep.
+
+        Only TRY_EXHAUSTIVE (low confidence) triggers grep.
+        Medium confidence (TRY_KEYWORD) is good enough.
+        """
+        # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
         results = [
-            _make_result(0.20, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.10, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.09, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.085, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.08, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.055, file_path="f.py", line_start=1, line_end=10),
+            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.9, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.85, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.8, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.75, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.7, file_path="f.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="webhook handling code")
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = [
-                SearchResult(
-                    content="verify_webhook()",
-                    file_path="src/webhooks.py",
-                    score=0.0,
-                    line_start=10,
-                    line_end=10,
-                    source="grep",
-                )
-            ]
+            mock_grep.return_value = []
             response = await engine.search(request)
 
-        mock_grep.assert_awaited_once()
-        assert response.auto_escalated is True
+        mock_grep.assert_not_awaited()
+        assert response.auto_escalated is False
 
     @pytest.mark.asyncio
     async def test_medium_confidence_location_no_post_hoc_grep(self):
-        """V4.1: Medium confidence LOCATION query does NOT trigger post-hoc grep."""
+        """LOCATION intent never triggers post-hoc grep regardless of confidence."""
+        # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
         results = [
-            _make_result(0.20, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.10, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.09, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.085, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.08, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.055, file_path="f.py", line_start=1, line_end=10),
+            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.9, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.85, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.8, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.75, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.7, file_path="f.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
-        request = SearchRequest(
-            query="find the checkout handler", intent=QueryIntent.LOCATION
-        )
+        request = SearchRequest(query="find the checkout handler", intent=QueryIntent.LOCATION)
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
             mock_grep.return_value = []
@@ -405,10 +340,18 @@ class TestAutoEscalation:
 
     @pytest.mark.asyncio
     async def test_grep_results_appended_with_source_grep(self):
-        """Merged grep results retain source='grep'."""
-        semantic = [_make_result(0.8, file_path="src/main.py", line_start=1, line_end=10)]
+        """Merged grep results retain source='grep' after post-hoc escalation."""
+        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
+        semantic = [
+            _make_result(0.50, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.49, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.48, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.47, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.45, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.44, file_path="f.py", line_start=1, line_end=10),
+        ]
         engine = _make_engine_with_grep(semantic_results=semantic)
-        request = SearchRequest(query="find all url routes", intent=QueryIntent.ENUMERATION)
+        request = SearchRequest(query="webhook handler code")
 
         grep_hit = SearchResult(
             content="path('/api/', views.api)",
@@ -455,39 +398,6 @@ class TestAutoEscalation:
         assert response.results[0].context == ""
 
 
-class TestShouldAugmentWithGrep:
-    """Test _should_augment_with_grep decision logic."""
-
-    def test_enumeration_with_project_root(self):
-        engine = _make_engine_with_grep()
-        assert engine._should_augment_with_grep(QueryIntent.ENUMERATION, None) is True
-
-    def test_code_intent_no_augment(self):
-        engine = _make_engine_with_grep()
-        assert engine._should_augment_with_grep(QueryIntent.CODE, None) is False
-
-    def test_no_project_root(self):
-        engine = _make_engine_with_grep(project_root=None)
-        assert engine._should_augment_with_grep(QueryIntent.ENUMERATION, None) is False
-
-    def test_semantic_mode_blocks(self):
-        engine = _make_engine_with_grep()
-        assert engine._should_augment_with_grep(QueryIntent.ENUMERATION, "semantic") is False
-
-    def test_keyword_mode_blocks(self):
-        engine = _make_engine_with_grep()
-        assert engine._should_augment_with_grep(QueryIntent.ENUMERATION, "keyword") is False
-
-    def test_exhaustive_mode_allows(self):
-        engine = _make_engine_with_grep()
-        assert engine._should_augment_with_grep(QueryIntent.ENUMERATION, "exhaustive") is True
-
-    def test_auto_escalation_disabled(self):
-        config = SearchConfig(auto_escalation_enabled=False)
-        engine = _make_engine_with_grep(config=config)
-        assert engine._should_augment_with_grep(QueryIntent.ENUMERATION, None) is False
-
-
 class TestShouldPostHocGrep:
     """Test _should_post_hoc_grep decision logic (V4.1)."""
 
@@ -498,42 +408,55 @@ class TestShouldPostHocGrep:
             is True
         )
 
-    def test_medium_confidence_code_triggers(self):
+    def test_medium_confidence_code_no_trigger(self):
+        """V4.2: TRY_KEYWORD (medium) no longer triggers grep escalation."""
         engine = _make_engine_with_grep()
         assert (
             engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.CODE, None)
-            is True
+            is False
         )
 
     def test_high_confidence_no_trigger(self):
         engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.NONE, QueryIntent.CODE, None) is False
-        )
+        assert engine._should_post_hoc_grep(SuggestionType.NONE, QueryIntent.CODE, None) is False
 
-    def test_location_intent_excluded(self):
+    def test_location_low_confidence_triggers(self):
+        """LOCATION with LOW confidence escalates (enumeration queries route here)."""
         engine = _make_engine_with_grep()
         assert (
-            engine._should_post_hoc_grep(
-                SuggestionType.TRY_KEYWORD, QueryIntent.LOCATION, None
-            )
+            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.LOCATION, None)
+            is True
+        )
+
+    def test_location_medium_confidence_no_trigger(self):
+        """LOCATION with MEDIUM confidence does not escalate."""
+        engine = _make_engine_with_grep()
+        assert (
+            engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.LOCATION, None)
             is False
         )
 
     def test_debug_intent_excluded(self):
         engine = _make_engine_with_grep()
         assert (
-            engine._should_post_hoc_grep(
-                SuggestionType.TRY_EXHAUSTIVE, QueryIntent.DEBUG, None
-            )
+            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.DEBUG, None)
             is False
         )
 
-    def test_docs_intent_triggers(self):
+    def test_docs_intent_low_triggers(self):
+        """V4.2: DOCS with TRY_EXHAUSTIVE still triggers grep."""
+        engine = _make_engine_with_grep()
+        assert (
+            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.DOCS, None)
+            is True
+        )
+
+    def test_docs_intent_medium_no_trigger(self):
+        """V4.2: DOCS with TRY_KEYWORD no longer triggers grep."""
         engine = _make_engine_with_grep()
         assert (
             engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.DOCS, None)
-            is True
+            is False
         )
 
     def test_explicit_mode_blocks(self):
@@ -568,8 +491,22 @@ class TestMergeGrepResults:
         engine = _make_engine_with_grep()
         semantic = [_make_result(0.8, file_path="a.py", line_start=5, line_end=10)]
         grep = [
-            SearchResult(content="x", file_path="a.py", score=0.0, line_start=7, line_end=7, source="grep"),
-            SearchResult(content="y", file_path="b.py", score=0.0, line_start=1, line_end=1, source="grep"),
+            SearchResult(
+                content="x",
+                file_path="a.py",
+                score=0.0,
+                line_start=7,
+                line_end=7,
+                source="grep",
+            ),
+            SearchResult(
+                content="y",
+                file_path="b.py",
+                score=0.0,
+                line_start=1,
+                line_end=1,
+                source="grep",
+            ),
         ]
         merged = engine._merge_grep_results(semantic, grep)
         # a.py:7 is within 5-10 so should be deduped, b.py:1 should remain
@@ -587,7 +524,14 @@ class TestMergeGrepResults:
     def test_empty_semantic_returns_grep_only(self):
         engine = _make_engine_with_grep()
         grep = [
-            SearchResult(content="x", file_path="a.py", score=0.0, line_start=1, line_end=1, source="grep"),
+            SearchResult(
+                content="x",
+                file_path="a.py",
+                score=0.0,
+                line_start=1,
+                line_end=1,
+                source="grep",
+            ),
         ]
         merged = engine._merge_grep_results([], grep)
         assert len(merged) == 1

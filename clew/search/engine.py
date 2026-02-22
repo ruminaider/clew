@@ -5,10 +5,8 @@ Returns SearchResponse with query_enhanced and total_candidates fields.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import logging
-import statistics
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -77,11 +75,6 @@ class SearchEngine:
                 intent = QueryIntent.CODE
         # mode="exhaustive" and mode=None: no override needed
 
-        # Step 2.6: Start concurrent grep for ENUMERATION intent
-        grep_task: asyncio.Task[list[SearchResult]] | None = None
-        if self._should_augment_with_grep(intent, effective_request.mode):
-            grep_task = asyncio.ensure_future(self._run_grep_async(query_enhanced, intent))
-
         # Step 3: Use the collection from the request (user-specified or default)
         collection = effective_request.collection
 
@@ -101,9 +94,6 @@ class SearchEngine:
         total_candidates = len(candidates)
 
         if not candidates:
-            # Cancel grep task if search returned nothing
-            if grep_task is not None:
-                grep_task.cancel()
             return SearchResponse(
                 results=[],
                 query_enhanced=query_enhanced,
@@ -114,7 +104,7 @@ class SearchEngine:
                 suggestion_type=SuggestionType.TRY_EXHAUSTIVE,
             )
 
-        # Step 5: Rerank (if applicable, skip for ENUMERATION)
+        # Step 5: Rerank (if applicable)
         results, was_reranked = self._maybe_rerank(query_enhanced, candidates, intent=intent)
 
         # Step 5.4: Apply importance boost (before test demotion)
@@ -131,23 +121,20 @@ class SearchEngine:
         results = results[: effective_request.limit]
 
         # Step 7: Compute confidence
-        confidence, confidence_label, suggestion_type = self._compute_confidence(
-            results, was_reranked
-        )
+        confidence, confidence_label, suggestion_type = self._compute_confidence(results)
 
-        # Step 8: Collect grep results
+        # Step 8: Grep augmentation
         mode_used = "semantic"
         auto_escalated = False
 
-        if grep_task is not None:
-            # Await concurrent grep (may already be done)
-            grep_search_results = await grep_task
+        if effective_request.mode == "exhaustive" and self._project_root is not None:
+            # Explicit exhaustive mode: always run grep (hard override)
+            grep_search_results = await self._run_grep_async(query_enhanced, intent)
             if grep_search_results:
                 results = self._merge_grep_results(results, grep_search_results)
-                auto_escalated = True
-                mode_used = "exhaustive"
+            mode_used = "exhaustive"
         elif self._should_post_hoc_grep(suggestion_type, intent, effective_request.mode):
-            # Medium or low confidence, post-hoc escalation
+            # Autonomous: medium or low confidence, post-hoc escalation
             grep_search_results = await self._run_grep_async(query_enhanced, intent)
             if grep_search_results:
                 results = self._merge_grep_results(results, grep_search_results)
@@ -178,11 +165,9 @@ class SearchEngine:
     ) -> bool:
         """Determine if post-hoc grep should run after seeing search results.
 
-        Triggers on medium confidence (TRY_KEYWORD) and low confidence
-        (TRY_EXHAUSTIVE), but only for intents where grep adds value.
-        LOCATION and DEBUG intents are excluded — location queries target
-        specific symbols (grep wouldn't help), and debug queries need
-        semantic context, not exhaustive matches.
+        Triggers on low confidence (TRY_EXHAUSTIVE) only — medium confidence
+        results are good enough. DEBUG intent is excluded because debug queries
+        need semantic context, not exhaustive pattern matches.
         """
         if self._project_root is None:
             return False
@@ -190,28 +175,9 @@ class SearchEngine:
             return False
         if mode is not None:
             return False
-        if intent in (QueryIntent.LOCATION, QueryIntent.DEBUG):
+        if intent == QueryIntent.DEBUG:
             return False
-        return suggestion_type in (
-            SuggestionType.TRY_EXHAUSTIVE,
-            SuggestionType.TRY_KEYWORD,
-        )
-
-    def _should_augment_with_grep(self, intent: QueryIntent, mode: str | None) -> bool:
-        """Determine if grep should run concurrently with semantic search.
-
-        Returns True for ENUMERATION intent when:
-        - project_root is available
-        - auto_escalation is enabled
-        - mode is not explicitly "semantic" or "keyword" (hard floor)
-        """
-        if self._project_root is None:
-            return False
-        if not self._config.auto_escalation_enabled:
-            return False
-        if mode in ("semantic", "keyword"):
-            return False
-        return intent == QueryIntent.ENUMERATION
+        return suggestion_type == SuggestionType.TRY_EXHAUSTIVE
 
     async def _run_grep_async(self, query: str, intent: QueryIntent) -> list[SearchResult]:
         """Run grep search and return results as SearchResult objects.
@@ -333,50 +299,39 @@ class SearchEngine:
             logger.debug("Applied test demotion factor=%.2f to %d results", factor, demoted)
         return results
 
-    def _compute_confidence(
-        self, results: list[SearchResult], was_reranked: bool
-    ) -> tuple[float, str, SuggestionType]:
-        """Compute confidence score, label, and suggestion from results.
+    def _compute_confidence(self, results: list[SearchResult]) -> tuple[float, str, SuggestionType]:
+        """Compute confidence using score gap ratio (scale-invariant).
 
-        Uses different scoring regimes depending on whether reranking occurred:
-        - Reranked: confidence = top score (reranker scores are calibrated 0-1)
-        - RRF: confidence = score gap between top-5 and rest (RRF scores are small)
+        gap_ratio = (top_score - anchor_score) / top_score
+
+        High ratio → clear winner → high confidence.
+        Low ratio → flat distribution → uncertain results → grep may help.
+
+        Portable across scoring regimes (reranked 0-2, RRF 0.001-0.3)
+        because the metric is relative, not absolute.
         """
         if not results:
             return 0.0, "low", SuggestionType.TRY_EXHAUSTIVE
 
-        if was_reranked:
-            confidence = results[0].score
-            high_t = self._config.confidence_high_threshold_reranked
-            med_t = self._config.confidence_medium_threshold_reranked
+        top = results[0].score
+        if top <= 0:
+            return 0.0, "low", SuggestionType.TRY_EXHAUSTIVE
+
+        # Anchor: 5th result score, or last available if fewer results
+        anchor_idx = min(4, len(results) - 1)
+        anchor = results[anchor_idx].score if anchor_idx > 0 else 0.0
+
+        gap_ratio = (top - anchor) / top
+
+        high_t = self._config.gap_ratio_high_threshold
+        med_t = self._config.gap_ratio_medium_threshold
+
+        if gap_ratio >= high_t:
+            return gap_ratio, "high", SuggestionType.NONE
+        elif gap_ratio >= med_t:
+            return gap_ratio, "medium", SuggestionType.TRY_KEYWORD
         else:
-            # RRF path: use score gap of top-5 vs rest
-            scores = [r.score for r in results]
-            if len(scores) > 5:
-                confidence = scores[4] - scores[5] if len(scores) > 5 else scores[-1]
-            else:
-                confidence = scores[-1] if scores else 0.0
-            high_t = self._config.confidence_high_threshold_rrf
-            med_t = self._config.confidence_medium_threshold_rrf
-
-        # Ambiguity detection: small gap between #1 and #2
-        suggestion_type = SuggestionType.NONE
-        if len(results) >= 2:
-            gap = results[0].score - results[1].score
-            if gap < self._config.ambiguity_threshold:
-                suggestion_type = SuggestionType.LOW_CONFIDENCE
-
-        if confidence >= high_t:
-            label = "high"
-        elif confidence >= med_t:
-            label = "medium"
-            if suggestion_type == SuggestionType.NONE:
-                suggestion_type = SuggestionType.TRY_KEYWORD
-        else:
-            label = "low"
-            suggestion_type = SuggestionType.TRY_EXHAUSTIVE
-
-        return confidence, label, suggestion_type
+            return gap_ratio, "low", SuggestionType.TRY_EXHAUSTIVE
 
     def _maybe_rerank(
         self,
@@ -388,26 +343,19 @@ class SearchEngine:
         """Rerank candidates if conditions are met.
 
         Returns (results, was_reranked) tuple.
-        Skips reranking for ENUMERATION intent.
         """
         if not self._reranker:
             return candidates, False
 
-        if intent == QueryIntent.ENUMERATION:
-            return candidates, False
-
         scores = [c.score for c in candidates]
-        variance = statistics.variance(scores) if len(scores) > 1 else 0.0
         top_score = scores[0] if scores else 0.0
 
         if should_skip_rerank(
             query,
             len(candidates),
             top_score,
-            variance,
             no_rerank_threshold=self._config.no_rerank_threshold,
             high_confidence_threshold=self._config.high_confidence_threshold,
-            low_variance_threshold=self._config.low_variance_threshold,
         ):
             return candidates, False
 

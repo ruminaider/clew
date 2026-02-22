@@ -46,111 +46,76 @@ class TestClassifyIntent:
         assert classify_intent("how does order processing work") != QueryIntent.LOCATION
 
 
-class TestEnumerationIntent:
-    """Tests for ENUMERATION intent classification (Decision 10A: false-positive suite)."""
+class TestEnumerationAutoDetectionRemoved:
+    """ENUMERATION auto-detection was removed (0/45 agent queries matched in V4.1).
 
-    # True positives
-    def test_find_all_url_patterns(self) -> None:
-        assert classify_intent("find all URL patterns") == QueryIntent.ENUMERATION
+    ENUMERATION intent is still available via explicit mode="keyword" override.
+    These tests verify that former ENUMERATION queries now classify as their
+    natural fallback (CODE, DEBUG, DOCS, or LOCATION).
+    """
 
-    def test_list_all_models(self) -> None:
-        assert classify_intent("list all models") == QueryIntent.ENUMERATION
+    def test_find_all_url_patterns_now_location(self) -> None:
+        assert classify_intent("find all URL patterns") == QueryIntent.LOCATION
 
-    def test_every_instance_of_error_class(self) -> None:
-        assert classify_intent("every instance of ValidationError") == QueryIntent.ENUMERATION
+    def test_list_all_models_now_code(self) -> None:
+        assert classify_intent("list all models") == QueryIntent.CODE
 
-    def test_all_callers_of_function(self) -> None:
-        assert classify_intent("all callers of process_order") == QueryIntent.ENUMERATION
+    def test_every_instance_now_code(self) -> None:
+        assert classify_intent("every instance of ValidationError") == QueryIntent.CODE
 
-    def test_enumerate_api_endpoints(self) -> None:
-        assert classify_intent("enumerate all API endpoints") == QueryIntent.ENUMERATION
+    def test_all_callers_now_code(self) -> None:
+        assert classify_intent("all callers of process_order") == QueryIntent.CODE
 
-    def test_count_all_models(self) -> None:
-        assert classify_intent("count all models") == QueryIntent.ENUMERATION
+    def test_enumerate_api_endpoints_now_code(self) -> None:
+        assert classify_intent("enumerate all API endpoints") == QueryIntent.CODE
 
-    def test_all_references_to_user(self) -> None:
-        assert classify_intent("all references to User model") == QueryIntent.ENUMERATION
+    def test_all_celery_tasks_now_code(self) -> None:
+        assert classify_intent("all Celery tasks") == QueryIntent.CODE
 
-    def test_how_many_views(self) -> None:
-        assert classify_intent("how many views are there") == QueryIntent.ENUMERATION
-
-    def test_all_uses_of_decorator(self) -> None:
-        assert classify_intent("all uses of @login_required") == QueryIntent.ENUMERATION
-
-    def test_all_instances_of_class(self) -> None:
-        assert classify_intent("all instances of Order class") == QueryIntent.ENUMERATION
-
-    # False positives (should NOT be ENUMERATION)
-    def test_find_auth_handler_is_location(self) -> None:
+    def test_find_auth_handler_still_location(self) -> None:
         assert classify_intent("find the auth handler") == QueryIntent.LOCATION
 
-    def test_find_all_bugs_is_debug(self) -> None:
-        """DEBUG > ENUMERATION priority."""
+    def test_find_all_bugs_still_debug(self) -> None:
         assert classify_intent("find all bugs in auth") == QueryIntent.DEBUG
 
-    def test_how_many_errors_is_debug(self) -> None:
-        """DEBUG > ENUMERATION because 'error' is hard DEBUG keyword."""
+    def test_how_many_errors_still_debug(self) -> None:
         assert classify_intent("how many errors in production") == QueryIntent.DEBUG
 
-    def test_explain_all_middleware_is_docs(self) -> None:
+    def test_explain_all_middleware_still_docs(self) -> None:
         assert classify_intent("explain all the middleware") == QueryIntent.DOCS
 
-    def test_handles_all_requests_is_code(self) -> None:
-        """'all' without enumeration phrase prefix is NOT ENUMERATION."""
+    def test_handles_all_requests_still_code(self) -> None:
         assert classify_intent("the auth handler handles all requests") == QueryIntent.CODE
 
-    def test_list_all_documentation_is_docs(self) -> None:
-        """'documentation' matches DOCS phrase, DOCS wins over ENUMERATION."""
-        assert classify_intent("list all documentation files") == QueryIntent.DOCS
 
-    def test_find_all_endpoints_is_enumeration(self) -> None:
-        assert classify_intent("find all API endpoints") == QueryIntent.ENUMERATION
+class TestExpandedDebugDetection:
+    """Tests for expanded DEBUG intent detection (V4.2 fix for E4 false positives)."""
 
+    def test_investigate_triggers_debug_with_question(self) -> None:
+        assert classify_intent("why is the payment flow failing?") == QueryIntent.DEBUG
 
-class TestBroadenedEnumeration:
-    """V4.1: Broader ENUMERATION detection for agent-style queries."""
+    def test_not_working_phrase(self) -> None:
+        assert classify_intent("auth middleware not working") == QueryIntent.DEBUG
 
-    # True positives: "all [noun]" patterns
-    def test_all_celery_tasks(self) -> None:
-        assert classify_intent("all Celery tasks") == QueryIntent.ENUMERATION
+    def test_doesnt_work_phrase(self) -> None:
+        assert classify_intent("login doesn't work after deploy") == QueryIntent.DEBUG
 
-    def test_all_api_endpoints(self) -> None:
-        assert classify_intent("all API endpoints") == QueryIntent.ENUMERATION
+    def test_issue_with_error_context(self) -> None:
+        assert classify_intent("issue with timeout error in API") == QueryIntent.DEBUG
 
-    def test_all_django_models(self) -> None:
-        assert classify_intent("all Django models") == QueryIntent.ENUMERATION
+    def test_investigate_with_error_context(self) -> None:
+        assert classify_intent("investigate the 500 error on checkout") == QueryIntent.DEBUG
 
-    def test_all_places_where(self) -> None:
-        assert classify_intent("all places where we send email") == QueryIntent.ENUMERATION
+    def test_two_soft_keywords_triggers_debug(self) -> None:
+        """Two or more soft keywords trigger DEBUG without needing question/error."""
+        assert classify_intent("investigate payment issue") == QueryIntent.DEBUG
 
-    def test_show_all_routes(self) -> None:
-        assert classify_intent("show all URL routes") == QueryIntent.ENUMERATION
+    def test_problem_without_error_context_and_question(self) -> None:
+        """Single soft keyword needs question form or error context."""
+        assert classify_intent("problem with the auth flow") != QueryIntent.DEBUG
 
-    def test_get_all_serializers(self) -> None:
-        assert classify_intent("get all serializer classes") == QueryIntent.ENUMERATION
-
-    def test_all_models_that_inherit(self) -> None:
-        assert classify_intent("all models that inherit from Base") == QueryIntent.ENUMERATION
-
-    def test_all_of_the_middleware(self) -> None:
-        assert classify_intent("all of the middleware classes") == QueryIntent.ENUMERATION
-
-    # False positives: non-enumerative "all"
-    def test_handles_all_still_code(self) -> None:
-        assert classify_intent("the auth handler handles all requests") == QueryIntent.CODE
-
-    def test_processes_all_still_code(self) -> None:
-        assert classify_intent("the pipeline processes all events") == QueryIntent.CODE
-
-    def test_for_all_still_code(self) -> None:
-        assert classify_intent("validation for all inputs") == QueryIntent.CODE
-
-    def test_supports_all_still_code(self) -> None:
-        assert classify_intent("supports all payment methods") == QueryIntent.CODE
-
-    def test_all_alone_not_enumeration(self) -> None:
-        """Bare 'all' without a noun after it should not trigger ENUMERATION."""
-        assert classify_intent("that's all") == QueryIntent.CODE
+    def test_diagnose_with_question(self) -> None:
+        assert classify_intent("why does this diagnose step fail?") == QueryIntent.DEBUG
 
 
 class TestIntentCollectionPreference:

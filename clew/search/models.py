@@ -22,7 +22,6 @@ class SuggestionType(str, Enum):
     NONE = "none"
     TRY_KEYWORD = "try_keyword"
     TRY_EXHAUSTIVE = "try_exhaustive"
-    LOW_CONFIDENCE = "low_confidence"
 
 
 @dataclass
@@ -73,7 +72,6 @@ class SearchResponse:
     confidence: float = 1.0
     confidence_label: str = "high"
     suggestion_type: SuggestionType = SuggestionType.NONE
-    suggested_patterns: list[str] | None = None
     mode_used: str = "semantic"
     auto_escalated: bool = False
 

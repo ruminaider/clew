@@ -14,7 +14,6 @@ class TestShouldSkipRerank:
                 "query",
                 num_candidates=5,
                 top_score=0.5,
-                score_variance=0.5,
             )
             is True
         )
@@ -25,7 +24,6 @@ class TestShouldSkipRerank:
                 "query",
                 num_candidates=10,
                 top_score=0.5,
-                score_variance=0.5,
                 no_rerank_threshold=10,
             )
             is True
@@ -37,20 +35,7 @@ class TestShouldSkipRerank:
                 "query",
                 num_candidates=50,
                 top_score=0.95,
-                score_variance=0.5,
                 high_confidence_threshold=0.92,
-            )
-            is True
-        )
-
-    def test_low_variance(self) -> None:
-        assert (
-            should_skip_rerank(
-                "query",
-                num_candidates=50,
-                top_score=0.5,
-                score_variance=0.05,
-                low_variance_threshold=0.1,
             )
             is True
         )
@@ -62,7 +47,6 @@ class TestShouldSkipRerank:
                 "UserModel",
                 num_candidates=50,
                 top_score=0.5,
-                score_variance=0.5,
             )
             is False
         )
@@ -74,7 +58,6 @@ class TestShouldSkipRerank:
                 "PrescriptionFill",
                 num_candidates=50,
                 top_score=0.5,
-                score_variance=0.5,
             )
             is False
         )
@@ -85,7 +68,6 @@ class TestShouldSkipRerank:
                 "src/auth.py",
                 num_candidates=50,
                 top_score=0.5,
-                score_variance=0.5,
             )
             is True
         )
@@ -96,7 +78,6 @@ class TestShouldSkipRerank:
                 "how does auth work",
                 num_candidates=50,
                 top_score=0.5,
-                score_variance=0.5,
             )
             is False
         )

@@ -417,7 +417,6 @@ class TestSearchJsonOutput:
             confidence=0.85,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -455,7 +454,6 @@ class TestSearchJsonOutput:
             confidence=0.9,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -478,7 +476,6 @@ class TestSearchJsonOutput:
             confidence=0.0,
             confidence_label="low",
             suggestion_type=Mock(value="low_confidence"),
-            suggested_patterns=None,
             mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -504,7 +501,6 @@ class TestSearchJsonV4Fields:
             confidence=0.9,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="keyword",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -524,7 +520,6 @@ class TestSearchJsonV4Fields:
             confidence=0.9,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -545,7 +540,6 @@ class TestSearchJsonV4Fields:
             confidence=0.95,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -570,7 +564,6 @@ class TestSearchJsonV4Fields:
             confidence=0.5,
             confidence_label="medium",
             suggestion_type=Mock(value="try_exhaustive"),
-            suggested_patterns=None,
             mode_used="exhaustive",
             auto_escalated=True,
         )
@@ -593,7 +586,6 @@ class TestSearchJsonV4Fields:
             confidence=0.9,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="exhaustive",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
@@ -616,7 +608,6 @@ class TestSearchJsonV4Fields:
             confidence=0.9,
             confidence_label="high",
             suggestion_type=Mock(value="none"),
-            suggested_patterns=None,
             mode_used="semantic",
         )
         mock_factory.return_value.search_engine.search = AsyncMock(return_value=mock_response)
