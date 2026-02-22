@@ -185,22 +185,40 @@ After programmatic computation, optionally analyze raw (unsanitized) transcripts
 
 **Why:** Quantitative scores tell you IF the tool improved. Post-hoc analysis tells you WHY (or why not). This phase is explicitly separated from scoring to prevent qualitative observations from influencing quantitative verdicts.
 
-### Phase 5.5a: Version-Specific Criterion Overrides (optional)
+### Phase 5.5a: Feature Health Assessment (optional)
 
-By default, Phase 5.5 findings do NOT affect verdicts — they are qualitative context only. However, version-specific evaluation handoffs MAY pre-register feature-adoption criteria that elevate specific Phase 5.5 findings to verdict-affecting status.
+Pre-register a **feature health card** for each new feature being evaluated. Feature health is diagnostic — it measures whether features work as designed, independent of whether the tool produces good results.
 
-**Requirements for overrides:**
+**Health card format:**
 
-1. The override MUST be documented in the evaluation handoff BEFORE any agents run
-2. Criteria definitions MUST be unambiguous — define what "visible", "actionable", "adopted" mean in measurable terms
-3. The handoff MUST explicitly state which Phase 5.5 findings are elevated to verdict-affecting status and which remain qualitative-only
-4. If elevated, the handoff MUST define separate criteria for:
-   - **Feature present in output** — the tool produced the feature's data (e.g., "grep results appear in results array")
-   - **Agent reacted to feature** — the agent changed behavior because of the feature (e.g., "agent read additional files surfaced by enrichment")
+| Feature | Metric | Target | Impact |
+|---------|--------|--------|--------|
+| (feature name) | (measurable metric) | (target range) | Advisory |
 
-   These must be counted separately to prevent double-counting the same observation.
+**Rules:**
+- Feature health metrics are always **Advisory** — published alongside scores as diagnostic context, never verdict-affecting
+- Feature health failure caps the verdict at **Iterate** (never Kill). A tool that produces good results with broken mechanisms should be improved, not killed
+- Health cards must be pre-registered in the evaluation handoff BEFORE any agents run
+- Metrics must be computable from raw (unsanitized) transcripts or tool logs
 
-**Rationale:** V3 evaluation needed feature-adoption criteria (feature visibility, agent behavior change) that were treated as separate from the quantitative scoring, creating a contradiction: Phase 5.5 "does NOT affect verdicts" yet the evaluation used Phase 5.5 findings as KILL criteria. This override mechanism resolves the contradiction by making the elevation explicit and pre-registered.
+**Rationale:** V3.1 demonstrated the problem with verdict-affecting feature criteria: a tool won 3/4 tests but was killed because features were invisible to agents. Feature health should inform iteration priorities, not override outcome quality. Making feature health always advisory prevents perverse incentives (optimizing for metric compliance rather than user outcomes).
+
+### Phase 5.5b: Counterfactual Analysis (optional)
+
+For tools with augmentation or fallback mechanisms, compute the marginal contribution of each mechanism:
+
+1. For each query where augmentation fired, extract the set of results from each source
+2. Compute: `mechanism_unique = final_results - primary_results`
+3. Compute: `marginal_contribution = |mechanism_unique| / |final_results|`
+4. Aggregate: average marginal contribution, % of queries where mechanism found novel results
+
+**Advisory thresholds:**
+- `<10%` average marginal contribution: "mostly noise" — mechanism adds little value
+- `>50%` average marginal contribution: "primary genuinely incomplete" — primary method has real gaps
+
+This analysis runs on raw (unsanitized) transcripts. Results are published in the results document as diagnostic context.
+
+**Tooling:** `scripts/counterfactual_analysis.py` automates this computation from structured behavioral data.
 
 ### Phase 6: Disagreement Resolution
 
@@ -349,6 +367,98 @@ When an evaluation both validates existing quality AND tests new capabilities, u
 
 ---
 
+## Behavioral Metrics
+
+Behavioral metrics measure HOW a tool achieves its results, complementing the scoring rubric which measures WHAT results were achieved. All behavioral metrics are **advisory** — published alongside scores as diagnostic context, never verdict-affecting.
+
+### Escalation Rate
+
+For tools with automatic fallback/augmentation mechanisms:
+
+- **Definition:** `auto_escalated_queries / total_eligible_queries` (from raw clew transcripts). "Eligible" excludes queries where augmentation is architecturally excluded (e.g., LOCATION/DEBUG intents).
+- **Target range:** 15-40% of eligible queries
+- **Advisory ceiling:** 50% ("effectively always-on" — the mechanism fires indiscriminately)
+- **Advisory floor:** 5% ("effectively never activates" — the mechanism's triggers are too narrow)
+
+Escalation rate outside the target range is a diagnostic signal, not a failure. A tool with 80% escalation rate that produces excellent results is still excellent — the escalation rate tells you the mechanism could be more surgical, not that the results are bad.
+
+### Feature Activation Rate
+
+For tools with new user- or agent-facing features:
+
+- **Definition:** `queries_where_feature_activated / total_queries`
+- **0% activation** across all queries means the feature is dead code in practice (regardless of unit test coverage)
+- Published per-feature in the results document
+
+### Reporting
+
+Behavioral metrics are collected during Phase 5.5b and reported in a dedicated section of the results document. The computation script (`scripts/viability_compute.py`) accepts an optional behavioral metrics file and flags values outside advisory ranges.
+
+---
+
+## Rubric Stability Policy
+
+Scoring rubric changes between versions create incomparable absolute scores. This policy manages that tension.
+
+### Anchor Freeze Rule
+
+Once a rubric version produces a **Ship** verdict, its dimension anchors are frozen for all subsequent evaluations using the same test scenarios. This ensures cross-version comparisons are meaningful.
+
+### Change Protocol
+
+If anchors must change (e.g., the evaluation context fundamentally shifted):
+
+1. Document the rationale BEFORE any agents run under the new anchors
+2. Assign a new rubric version identifier (e.g., R1, R2, R3)
+3. Mark absolute scores as **incomparable** to scores from prior rubric versions
+4. Use only **win rates** for cross-version comparison (win/loss is robust to anchor changes since both tools are scored under the same rubric)
+
+### Rubric Version Tracking
+
+Every results document and computation output must include the rubric version used. The computation script includes a `rubric_version` field in its output header.
+
+**History:**
+| Version | Changes | First Used |
+|---------|---------|------------|
+| R1 | Original anchors (Discovery: 5/5 ≤3 calls) | V2.3 |
+| R2 | Relaxed discovery anchors (5/5 ≤5 calls) | V4.1 |
+
+---
+
+## Stability Analysis
+
+Agent-based evaluations have inherent variance — the same tool can score differently across runs due to non-deterministic agent behavior. Stability analysis estimates whether an observed win margin is likely real or could be noise.
+
+### Flip Rate
+
+The **flip rate** is the proportion of test results that changed winner between two consecutive versions:
+
+```
+flip_rate = tests_where_winner_changed / total_tests
+```
+
+Historical flip rates: V2.3→V3.0: 75% (6/8), V3.0→V4: 37.5% (3/8), V4→V4.1: 25% (3/12).
+
+### Noise Probability
+
+Given a flip rate `p` and an observed win margin `m` over `n` tests, estimate the probability that the margin arose from noise alone:
+
+```
+P(noise) = P(|wins - n/2| >= m | each test flips with probability p)
+```
+
+This is modeled as a binomial: if each test result is treated as a coin flip with probability `p` of changing, what's the chance of seeing the observed margin or greater?
+
+### Confidence Flag
+
+If `P(noise) > 30%`, the verdict is flagged as **LOW CONFIDENCE** in the results document. This does not change the verdict — it's an advisory flag that the margin is within the noise floor.
+
+### Computation
+
+The stability analysis is computed by `scripts/viability_compute.py` when provided with historical flip rate data. Cost: 0 additional agents (uses only prior results).
+
+---
+
 ## Test Scenario Design
 
 ### Scenario Categories
@@ -419,6 +529,9 @@ Lessons from V1-V3.0:
 | No exploration budget | V2.3 | Agents ranged 8-30+ calls; soft budget standardizes discovery scoring |
 | Single verification attempt | V2.3 | Pre-register escalation levels for verification gate failure |
 | No edge case protocol | V2.3 | Pre-register handling for agent gives-up, timeout, cross-tool usage |
+| Feature criteria as Kill gate | V3.0-V3.1 | Feature health should cap at Iterate, not override outcome quality |
+| Rubric anchor changes mid-eval | V4→V4.1 | Freeze anchors after Ship; use win rates for cross-rubric comparison |
+| Uncalibrated behavioral metrics | V4.1 | Pre-register advisory thresholds; track escalation rate as diagnostic |
 
 ---
 
@@ -430,7 +543,9 @@ Every evaluation produces a results document with this structure:
 # V[X.Y] Viability Evaluation Results
 
 **Date:** YYYY-MM-DD
+**Rubric Version:** R[N]
 **Verdict:** [Ship / Iterate / Kill]
+**Stability:** [CONFIDENT / LOW CONFIDENCE (P(noise) = X%)]
 **Tool Average:** X.XX/5.0
 **Baseline Average:** X.XX/5.0
 **Win/Loss:** N tool / M baseline
@@ -440,6 +555,10 @@ Every evaluation produces a results document with this structure:
 ## Per-Test Results (table with scores + key reasoning)
 ## Per-Test Dimension Scores (full breakdown)
 ## Category Breakdown (analysis by test category)
+## Behavioral Metrics (escalation rate, feature activation, advisory flags)
+## Counterfactual Analysis (grep marginal contribution, if applicable)
+## Feature Health Cards (per-feature status vs pre-registered targets)
+## Stability Analysis (flip rate, P(noise), confidence flag)
 ## Sanitization Verification Results
 ## Scorer Agreement Analysis
 ## What the Tool Does Well
@@ -459,3 +578,4 @@ Every evaluation produces a results document with this structure:
 - V2.2 test plan: `docs/plans/2026-02-16-v2.1-revised-viability-test-plan.md`
 - V2 results: `docs/plans/2026-02-13-v2-viability-results.md`
 - Computation script: `scripts/viability_compute.py`
+- Counterfactual analysis: `scripts/counterfactual_analysis.py`

@@ -1,0 +1,18 @@
+{
+  "C1": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "B1": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "D1": {
+    "alpha": "clew",
+    "beta": "grep"
+  },
+  "D4": {
+    "alpha": "clew",
+    "beta": "grep"
+  }
+}

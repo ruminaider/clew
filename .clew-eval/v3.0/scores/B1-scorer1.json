@@ -1,0 +1,18 @@
+{
+  "test_id": "B1",
+  "scorer": 1,
+  "alpha": {
+    "discovery": 3,
+    "precision": 5,
+    "completeness": 3,
+    "relational": 3,
+    "confidence": 4
+  },
+  "beta": {
+    "discovery": 2,
+    "precision": 5,
+    "completeness": 5,
+    "relational": 5,
+    "confidence": 5
+  }
+}

@@ -1,0 +1,428 @@
+{
+  "tests": {
+    "A1": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 4,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "A2": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 1,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 1,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 4,
+          "confidence": 5
+        }
+      }
+    },
+    "A3": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 3,
+          "completeness": 4,
+          "relational": 4,
+          "confidence": 4
+        }
+      }
+    },
+    "A4": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "B1": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 4,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 4,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 4,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 3,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 4,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "B2": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 3,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "C1": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 3,
+          "precision": 4,
+          "completeness": 3,
+          "relational": 4,
+          "confidence": 4
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 4,
+          "confidence": 4
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 3,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 1,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "C2": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 4,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 2,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 3,
+          "confidence": 5
+        }
+      },
+      "scorer_3": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 3,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 4,
+          "confidence": 5
+        }
+      }
+    },
+    "E1": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 4,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "E2": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 5,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 1,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 5,
+          "precision": 5,
+          "completeness": 5,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 5,
+          "relational": 4,
+          "confidence": 5
+        }
+      }
+    },
+    "E3": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 5,
+          "completeness": 4,
+          "relational": 5,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 1,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 5,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 4,
+          "relational": 5,
+          "confidence": 5
+        }
+      }
+    },
+    "E4": {
+      "scorer_1": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 3,
+          "relational": 4,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 2,
+          "precision": 4,
+          "completeness": 3,
+          "relational": 4,
+          "confidence": 5
+        }
+      },
+      "scorer_2": {
+        "alpha": {
+          "discovery": 2,
+          "precision": 3,
+          "completeness": 2,
+          "relational": 4,
+          "confidence": 5
+        },
+        "beta": {
+          "discovery": 3,
+          "precision": 3,
+          "completeness": 3,
+          "relational": 4,
+          "confidence": 5
+        }
+      }
+    }
+  }
+}

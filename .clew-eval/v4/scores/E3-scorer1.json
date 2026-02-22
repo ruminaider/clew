@@ -1,0 +1,6 @@
+{
+  "test": "E3",
+  "scorer": 1,
+  "alpha": {"discovery": 1, "precision": 4, "completeness": 4, "relational": 5, "confidence": 5},
+  "beta": {"discovery": 2, "precision": 5, "completeness": 4, "relational": 5, "confidence": 5}
+}

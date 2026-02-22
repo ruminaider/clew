@@ -1,0 +1,6 @@
+{
+  "test": "B2",
+  "scorer": 2,
+  "alpha": {"discovery": 2, "precision": 4, "completeness": 5, "relational": 5, "confidence": 5},
+  "beta": {"discovery": 2, "precision": 3, "completeness": 5, "relational": 5, "confidence": 5}
+}

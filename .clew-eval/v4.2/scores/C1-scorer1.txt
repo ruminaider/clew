@@ -1,0 +1,2 @@
+Agent Alpha: Discovery=3, Precision=5, Completeness=2, Relational=3, Confidence=3
+Agent Beta: Discovery=3, Precision=5, Completeness=5, Relational=4, Confidence=5

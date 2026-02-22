@@ -1,0 +1,302 @@
+{
+  "rubric_version": "R2",
+  "verdict": {
+    "verdict": "Ship",
+    "track_a": {
+      "clew_avg": 4.55,
+      "grep_avg": 4.42,
+      "clew_wins": 4,
+      "grep_wins": 4,
+      "ties": 0,
+      "ship_threshold": 3.66
+    },
+    "track_b": {
+      "clew_avg": 4.14,
+      "grep_avg": 4.15,
+      "clew_wins": 3,
+      "grep_wins": 1,
+      "ties": 0
+    },
+    "overall": {
+      "clew_avg": 4.42,
+      "grep_avg": 4.33,
+      "total_tests": 12
+    },
+    "disagreements": {
+      "tests_with_disagreements": [],
+      "needs_tiebreaker": false
+    }
+  },
+  "per_test": [
+    {
+      "test_id": "A1",
+      "track": "A",
+      "clew_weighted": 4.2,
+      "grep_weighted": 4.85,
+      "winner": "grep",
+      "clew_scores": {
+        "discovery": 4.0,
+        "precision": 5.0,
+        "completeness": 4.0,
+        "relational": 3.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 5.0,
+        "relational": 4.0,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "A2",
+      "track": "A",
+      "clew_weighted": 4.9,
+      "grep_weighted": 3.83,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 4.5,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 4.0,
+        "precision": 4.5,
+        "completeness": 3.0,
+        "relational": 3.0,
+        "confidence": 4.5
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "A3",
+      "track": "A",
+      "clew_weighted": 5.0,
+      "grep_weighted": 4.45,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 5.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 4.5,
+        "precision": 5.0,
+        "completeness": 4.0,
+        "relational": 4.0,
+        "confidence": 4.5
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "A4",
+      "track": "A",
+      "clew_weighted": 4.17,
+      "grep_weighted": 4.72,
+      "winner": "grep",
+      "clew_scores": {
+        "discovery": 4.0,
+        "precision": 4.5,
+        "completeness": 4.5,
+        "relational": 3.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 5.0,
+        "precision": 4.5,
+        "completeness": 5.0,
+        "relational": 4.0,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "B1",
+      "track": "A",
+      "clew_weighted": 4.65,
+      "grep_weighted": 5.0,
+      "winner": "grep",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 4.0,
+        "relational": 4.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 5.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "B2",
+      "track": "A",
+      "clew_weighted": 4.8,
+      "grep_weighted": 4.5,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 4.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 4.5,
+        "precision": 4.5,
+        "completeness": 4.5,
+        "relational": 4.5,
+        "confidence": 4.5
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "C1",
+      "track": "A",
+      "clew_weighted": 3.7,
+      "grep_weighted": 3.7,
+      "winner": "grep",
+      "clew_scores": {
+        "discovery": 3.5,
+        "precision": 4.5,
+        "completeness": 3.0,
+        "relational": 3.5,
+        "confidence": 4.0
+      },
+      "grep_scores": {
+        "discovery": 4.0,
+        "precision": 3.5,
+        "completeness": 4.0,
+        "relational": 2.5,
+        "confidence": 4.5
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "C2",
+      "track": "A",
+      "clew_weighted": 5.0,
+      "grep_weighted": 4.35,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 5.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 4.0,
+        "precision": 5.0,
+        "completeness": 4.0,
+        "relational": 4.0,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "E1",
+      "track": "B",
+      "clew_weighted": 4.88,
+      "grep_weighted": 4.7,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 4.5,
+        "completeness": 5.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 5.0,
+        "precision": 4.5,
+        "completeness": 4.5,
+        "relational": 4.5,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "E2",
+      "track": "B",
+      "clew_weighted": 5.0,
+      "grep_weighted": 4.8,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 5.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "grep_scores": {
+        "discovery": 5.0,
+        "precision": 4.5,
+        "completeness": 5.0,
+        "relational": 4.5,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "E3",
+      "track": "B",
+      "clew_weighted": 4.12,
+      "grep_weighted": 4.8,
+      "winner": "grep",
+      "clew_scores": {
+        "discovery": 4.0,
+        "precision": 5.0,
+        "completeness": 3.5,
+        "relational": 3.5,
+        "confidence": 4.5
+      },
+      "grep_scores": {
+        "discovery": 5.0,
+        "precision": 5.0,
+        "completeness": 4.0,
+        "relational": 5.0,
+        "confidence": 5.0
+      },
+      "disagreements": []
+    },
+    {
+      "test_id": "E4",
+      "track": "B",
+      "clew_weighted": 2.58,
+      "grep_weighted": 2.3,
+      "winner": "clew",
+      "clew_scores": {
+        "discovery": 2.5,
+        "precision": 3.5,
+        "completeness": 1.5,
+        "relational": 3.0,
+        "confidence": 2.0
+      },
+      "grep_scores": {
+        "discovery": 2.0,
+        "precision": 4.0,
+        "completeness": 1.0,
+        "relational": 2.0,
+        "confidence": 2.0
+      },
+      "disagreements": []
+    }
+  ],
+  "stability_analysis": {
+    "flip_rate": 0.3,
+    "win_margin": 2,
+    "p_noise": 0.4646,
+    "confidence_flag": "LOW CONFIDENCE"
+  }
+}

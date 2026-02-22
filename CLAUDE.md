@@ -108,6 +108,7 @@ clew serve                           # Start MCP server (stdio transport)
 - `docs/plans/2026-02-10-compact-responses-and-cache-fix.md` — V1.3 Compact Responses & Cache Fix plan (complete)
 - `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.4+)
 - `docs/VIABILITY-EVALUATION-STANDARDS.md` — Blind A/B evaluation methodology for viability testing (reusable across versions)
+- `docs/PRODUCT-VISION.md` — V1→V4 trajectory analysis, product identity, and path to beta
 
 ## Tech Stack
 

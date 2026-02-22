@@ -1,0 +1,94 @@
+{
+  "results": [
+    {
+      "test_id": "A1",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.3,
+      "reasoning": "Both transcripts show similar structured search patterns and numbered tool calls. Alpha uses 'Tool Calls Used' section at end, Beta uses 'Tool Calls Used: 15' format. Both have similar investigation depth and read line ranges. Minor formatting differences but no clear tool-identifying artifacts."
+    },
+    {
+      "test_id": "A2",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.2,
+      "reasoning": "Both transcripts show systematic search patterns and file reading. Alpha has numbered tool call sections (1-19), Beta has search strategy documentation. Both return absolute file paths and similar code excerpts. No structural leaks detected - differences appear to be agent reasoning style, not tool identity."
+    },
+    {
+      "test_id": "A3",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.25,
+      "reasoning": "Alpha shows 'Tool Calls and Reasoning' section with numbered searches. Beta shows 'Investigation Process' with numbered steps. Both include similar file paths, line numbers, and code snippets. No obvious tool-specific metadata like score fields or result format differences."
+    },
+    {
+      "test_id": "A4",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.2,
+      "reasoning": "Both transcripts document systematic investigation with search calls and file reads. Alpha uses 'Tool Call X-Y' sections, Beta uses 'Tool' prefix for operations. Both return similar content and line ranges. Presentation differences appear stylistic rather than tool-specific."
+    },
+    {
+      "test_id": "B1",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.3,
+      "reasoning": "Alpha has 'Tool Calls and Reasoning' sections, Beta has 'Tool Calls and Reasoning' as well. Both show search patterns and read operations with line numbers. Alpha includes 'search()' function call format, Beta similar. No clear distinguishing artifacts - both could be either tool based on output format."
+    },
+    {
+      "test_id": "B2",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.15,
+      "reasoning": "Both transcripts are highly structured with model field definitions. Alpha focuses on 'Tool Call Summary', Beta has 'Search Process' sections. Both include identical model locations and field descriptions. Very similar content and structure - appears to be agent reasoning differences, not tool differences."
+    },
+    {
+      "test_id": "C1",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.35,
+      "reasoning": "Alpha has 'Tool Calls and Reasoning' with search numbering, Beta has 'Search Process' with steps. Alpha lists '42+ distinct URL endpoints', Beta lists '26 distinct ecomm-related URL patterns'. Count difference could be interpretation, not tool artifact. Both use similar URL pattern formats. Minor variance but no smoking gun."
+    },
+    {
+      "test_id": "C2",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.1,
+      "reasoning": "Both transcripts conclude 'NO Stripe API calls found'. Alpha has detailed 'Search Strategy' table, Beta has 'Search Process' sections. Both document failed searches systematically. Similar negative result handling - no tool-specific patterns detected."
+    },
+    {
+      "test_id": "D1",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.4,
+      "reasoning": "Alpha mentions 'extended=true' parameter in searches, Beta mentions 'mode=\"broad\"' parameter. These appear to be search mode flags that are expected tool features per task instructions, not tool-identifying leaks. Both document Celery task calls similarly. Focus on behavioral differences, not structural tool leaks."
+    },
+    {
+      "test_id": "D2",
+      "alpha_guess": "unknown",
+      "beta_guess": "unknown",
+      "confidence": 0.3,
+      "reasoning": "Both transcripts show environment variable inventory work. Alpha has 'Tool Calls and Reasoning' section, Beta has 'Tool Calls and Exploration'. Both document settings.py reading and env() patterns. Similar file paths and content extracts. No distinguishing tool artifacts."
+    },
+    {
+      "test_id": "D3",
+      "alpha_guess": "tool_2",
+      "beta_guess": "tool_1",
+      "confidence": 0.6,
+      "reasoning": "PARTIAL READ: Alpha transcript shows lines 1-150 only (truncated), Beta likely complete. This suggests different result presentation or truncation behavior. However, I only saw truncated versions of both D3 files, so this is speculative. Without full transcripts, lowering confidence."
+    },
+    {
+      "test_id": "D4",
+      "alpha_guess": "tool_2",
+      "beta_guess": "tool_1",
+      "confidence": 0.55,
+      "reasoning": "PARTIAL READ: Similar to D3 - only saw truncated versions (lines 1-150). Cannot make high-confidence determination without full transcripts. The fact that I only read partial content prevents identification of structural differences that might exist later in the files."
+    }
+  ],
+  "summary": {
+    "identified_count": 2,
+    "high_confidence_count": 0,
+    "pass": true,
+    "notes": "Sanitization appears highly effective. Most tests (10 of 12) show no clear tool-identifying artifacts. The two tests with >0.5 confidence (D3, D4) are based on incomplete reads (only saw first 150 lines) rather than actual tool leaks. Common patterns across all transcripts: both tools return absolute file paths, line numbers, code snippets, and similar search result formats. The main differences are in agent reasoning style (how results are organized/presented) rather than tool output structure. Mode flags like 'extended=true' and 'mode=\"broad\"' appear in transcripts but are documented as expected tool features per task instructions, not leaks. PASS: Only 2 tests identified at >0.6 confidence, well below the 3-test threshold."
+  }
+}

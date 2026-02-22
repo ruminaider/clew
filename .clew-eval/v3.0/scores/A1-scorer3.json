@@ -1,0 +1,1 @@
+{"test_id": "A1", "scorer": "scorer_3", "alpha": {"discovery": 3, "precision": 5, "completeness": 4, "relational": 5, "confidence": 5}, "beta": {"discovery": 1, "precision": 5, "completeness": 5, "relational": 5, "confidence": 5}}

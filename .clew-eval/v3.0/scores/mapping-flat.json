@@ -1,0 +1,14 @@
+{
+  "A1": {"alpha": "grep", "beta": "clew"},
+  "A2": {"alpha": "clew", "beta": "grep"},
+  "A3": {"alpha": "clew", "beta": "grep"},
+  "A4": {"alpha": "grep", "beta": "clew"},
+  "B1": {"alpha": "clew", "beta": "grep"},
+  "B2": {"alpha": "grep", "beta": "clew"},
+  "C1": {"alpha": "clew", "beta": "grep"},
+  "C2": {"alpha": "clew", "beta": "grep"},
+  "D1": {"alpha": "clew", "beta": "grep"},
+  "D2": {"alpha": "clew", "beta": "grep"},
+  "D3": {"alpha": "clew", "beta": "grep"},
+  "D4": {"alpha": "grep", "beta": "clew"}
+}

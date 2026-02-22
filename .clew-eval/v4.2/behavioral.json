@@ -1,0 +1,35 @@
+{
+  "total_queries": 12,
+  "escalated_queries": 5,
+  "feature_activations": {
+    "auto_escalation": {"activated": 5, "total": 12},
+    "debug_detection": {"activated": 2, "total": 3},
+    "reranker_activation": {"activated": 12, "total": 12}
+  },
+  "feature_health_cards": [
+    {
+      "feature": "Post-hoc grep escalation",
+      "metric": "escalation rate",
+      "target": "10-20%",
+      "actual": "42% (5/12)",
+      "status": "ABOVE_CEILING",
+      "notes": "Improved from V4.1 49% but still above target. Queries A2, A4, B1, B2, E1 escalated via post-hoc grep. Reranker now runs (variance skip removed) but confidence values for multi-term queries still below medium threshold (0.35)."
+    },
+    {
+      "feature": "Reranker activation",
+      "metric": "% queries where reranker runs",
+      "target": ">=70%",
+      "actual": "100% (12/12)",
+      "status": "PASS",
+      "notes": "Variance skip removed in V4.2. All queries now get reranked. Score range 0.27-1.67 (calibrated Voyage reranker scores), vs V4.1 0.001-0.314 (raw RRF scores)."
+    },
+    {
+      "feature": "DEBUG intent detection",
+      "metric": "% debugging queries classified as DEBUG",
+      "target": ">=80% of E4-type queries",
+      "actual": "67% (2/3)",
+      "status": "PARTIAL_PASS",
+      "notes": "A3 (pharmacy API error) correctly classified as DEBUG. E4b (investigate bug) correctly classified. E4 primary query (investigate failure) classified as CODE — 'failure' does not match soft keyword 'fail' (exact word matching). Expanded DEBUG detection helps but word boundary matching limits coverage."
+    }
+  ]
+}

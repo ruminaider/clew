@@ -1,0 +1,18 @@
+{
+  "test_id": "D3",
+  "scorer": 3,
+  "alpha": {
+    "discovery": 4,
+    "precision": 4,
+    "completeness": 2,
+    "relational": 5,
+    "confidence": 5
+  },
+  "beta": {
+    "discovery": 1,
+    "precision": 2,
+    "completeness": 1,
+    "relational": 4,
+    "confidence": 4
+  }
+}

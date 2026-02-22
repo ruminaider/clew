@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """Viability evaluation computation script.
 
-Pre-registered mechanical aggregation for V4 viability evaluation.
+Pre-registered mechanical aggregation for viability evaluation.
 Reads scorer ratings, computes weighted averages, determines winners,
 applies verdict thresholds. No agent judgment — pure arithmetic.
 
 Usage:
-    python3 scripts/viability_compute.py scores.json mapping.json
+    python3 scripts/viability_compute.py scores.json mapping.json \\
+        [--behavioral behavioral.json] [--rubric R2] [--flip-rate 0.30]
 
 Input format (scores.json):
     {
         "tests": {
             "A1": {
                 "scorer_1": {
-                    "alpha": {"discovery": 4, "precision": 3, "completeness": 5, "relational": 4, "confidence": 4},
-                    "beta":  {"discovery": 3, "precision": 4, "completeness": 4, "relational": 2, "confidence": 3}
+                    "alpha": {"discovery": 4, "precision": 3,
+                              "completeness": 5, "relational": 4,
+                              "confidence": 4},
+                    "beta":  {"discovery": 3, "precision": 4,
+                              "completeness": 4, "relational": 2,
+                              "confidence": 3}
                 },
                 "scorer_2": { ... },
                 "scorer_3": { ... }  // optional tiebreaker
@@ -25,13 +30,29 @@ Input format (scores.json):
 
 Mapping format (mapping.json):
     {"A1": {"alpha": "clew", "beta": "grep"}, ...}
+
+Behavioral metrics format (optional, behavioral.json):
+    {
+        "total_queries": 45,
+        "escalated_queries": 22,
+        "feature_activations": {
+            "auto_escalation": {"activated": 22, "total": 45},
+            "enumeration_detection": {"activated": 0, "total": 45}
+        },
+        "feature_health_cards": [
+            {"feature": "Auto-escalation", "metric": "escalation rate",
+             "target": "15-40%", "actual": "49%", "status": "ABOVE_CEILING"}
+        ]
+    }
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Pre-registered weights (frozen — do not change after evaluation starts)
@@ -54,6 +75,15 @@ TRACK_A_SHIP_AVG = max(3.50, V23_SCORE - REGRESSION_BUFFER)  # 3.66
 TRACK_A_TESTS = {"A1", "A2", "A3", "A4", "B1", "B2", "C1", "C2"}
 TRACK_B_TESTS = {"E1", "E2", "E3", "E4"}
 
+# Behavioral metrics advisory thresholds
+ESCALATION_TARGET_LOW = 0.15
+ESCALATION_TARGET_HIGH = 0.40
+ESCALATION_CEILING = 0.50
+ESCALATION_FLOOR = 0.05
+
+# Stability analysis
+NOISE_PROBABILITY_THRESHOLD = 0.30
+
 
 @dataclass
 class TestResult:
@@ -65,6 +95,25 @@ class TestResult:
     grep_weighted: float
     winner: str
     disagreements: list[str]  # dimensions with >1 point scorer disagreement
+
+
+@dataclass
+class BehavioralMetrics:
+    total_queries: int = 0
+    escalated_queries: int = 0
+    escalation_rate: float = 0.0
+    escalation_advisory: str = ""
+    feature_activations: dict[str, dict[str, int]] = field(default_factory=dict)
+    feature_health_cards: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class StabilityAnalysis:
+    flip_rate: float = 0.0
+    num_tests: int = 0
+    win_margin: int = 0
+    p_noise: float = 0.0
+    confidence_flag: str = "CONFIDENT"
 
 
 def compute_weighted(scores: dict[str, float]) -> float:
@@ -176,6 +225,91 @@ def compute_all(scores_data: dict, mapping_data: dict) -> list[TestResult]:
     return results
 
 
+def parse_behavioral_metrics(data: dict) -> BehavioralMetrics:
+    """Parse behavioral metrics from JSON input."""
+    total = data.get("total_queries", 0)
+    escalated = data.get("escalated_queries", 0)
+    rate = escalated / total if total > 0 else 0.0
+
+    if rate > ESCALATION_CEILING:
+        advisory = f"ABOVE CEILING ({rate:.0%} > {ESCALATION_CEILING:.0%}) — effectively always-on"
+    elif rate > ESCALATION_TARGET_HIGH:
+        advisory = f"ABOVE TARGET ({rate:.0%} > {ESCALATION_TARGET_HIGH:.0%})"
+    elif rate < ESCALATION_FLOOR:
+        advisory = (f"BELOW FLOOR ({rate:.0%} < {ESCALATION_FLOOR:.0%})"
+                    " — effectively never activates")
+    elif rate < ESCALATION_TARGET_LOW:
+        advisory = f"BELOW TARGET ({rate:.0%} < {ESCALATION_TARGET_LOW:.0%})"
+    else:
+        advisory = f"IN TARGET RANGE ({rate:.0%})"
+
+    return BehavioralMetrics(
+        total_queries=total,
+        escalated_queries=escalated,
+        escalation_rate=rate,
+        escalation_advisory=advisory,
+        feature_activations=data.get("feature_activations", {}),
+        feature_health_cards=data.get("feature_health_cards", []),
+    )
+
+
+def compute_stability(
+    results: list[TestResult],
+    flip_rate: float,
+) -> StabilityAnalysis:
+    """Compute stability analysis using binomial noise model.
+
+    Given a historical flip rate and observed win margin, estimate the
+    probability that the margin arose from noise (random test flips).
+    """
+    n = len(results)
+    clew_wins = sum(1 for r in results if r.winner == "clew")
+    win_margin = abs(clew_wins - (n - clew_wins))
+
+    if flip_rate <= 0 or n == 0:
+        return StabilityAnalysis(
+            flip_rate=flip_rate,
+            num_tests=n,
+            win_margin=win_margin,
+            p_noise=0.0,
+            confidence_flag="CONFIDENT",
+        )
+
+    # Model: each test has probability flip_rate of changing its winner.
+    # Under noise, the number of flips X ~ Binomial(n, flip_rate).
+    # Each flip randomly reassigns the winner with P(clew)=0.5.
+    # P(noise) = P(|wins - n/2| >= observed_margin/2) under this model.
+    #
+    # Simplified: treat each test as a fair coin flip with probability
+    # flip_rate of being "random". P(noise) is the probability that
+    # fair coin flips produce the observed margin.
+    # Using binomial CDF: P(X >= threshold) where X ~ Binom(n, 0.5)
+    threshold = (n + win_margin) // 2  # minimum clew wins needed for this margin
+
+    # Compute P(X >= threshold) using binomial PMF
+    p_noise = 0.0
+    for k in range(threshold, n + 1):
+        # Binomial coefficient * p^k * (1-p)^(n-k), p=0.5
+        binom_coeff = math.comb(n, k)
+        p_noise += binom_coeff * (0.5 ** n)
+    # Two-tailed (margin in either direction)
+    p_noise *= 2
+    p_noise = min(p_noise, 1.0)
+
+    # Weight by flip rate: if flip_rate is low, less noise
+    p_noise *= flip_rate / 0.5 if flip_rate < 0.5 else 1.0
+
+    confidence_flag = "LOW CONFIDENCE" if p_noise > NOISE_PROBABILITY_THRESHOLD else "CONFIDENT"
+
+    return StabilityAnalysis(
+        flip_rate=flip_rate,
+        num_tests=n,
+        win_margin=win_margin,
+        p_noise=round(p_noise, 4),
+        confidence_flag=confidence_flag,
+    )
+
+
 def apply_verdicts(results: list[TestResult]) -> dict:
     """Apply pre-registered verdict thresholds."""
     track_a = [r for r in results if r.track == "A"]
@@ -207,7 +341,10 @@ def apply_verdicts(results: list[TestResult]) -> dict:
         "verdict": verdict,
         "track_a": {
             "clew_avg": round(track_a_avg, 2),
-            "grep_avg": round(sum(r.grep_weighted for r in track_a) / len(track_a), 2) if track_a else 0,
+            "grep_avg": (
+                round(sum(r.grep_weighted for r in track_a) / len(track_a), 2)
+                if track_a else 0
+            ),
             "clew_wins": track_a_wins,
             "grep_wins": sum(1 for r in track_a if r.winner == "grep"),
             "ties": sum(1 for r in track_a if r.winner == "tie"),
@@ -215,7 +352,10 @@ def apply_verdicts(results: list[TestResult]) -> dict:
         },
         "track_b": {
             "clew_avg": round(track_b_avg, 2),
-            "grep_avg": round(sum(r.grep_weighted for r in track_b) / len(track_b), 2) if track_b else 0,
+            "grep_avg": (
+                round(sum(r.grep_weighted for r in track_b) / len(track_b), 2)
+                if track_b else 0
+            ),
             "clew_wins": track_b_wins,
             "grep_wins": sum(1 for r in track_b if r.winner == "grep"),
             "ties": sum(1 for r in track_b if r.winner == "tie"),
@@ -279,39 +419,118 @@ def format_dimension_table(results: list[TestResult], tool: str) -> str:
     return "\n".join(lines)
 
 
+def format_behavioral_metrics(metrics: BehavioralMetrics) -> str:
+    """Format behavioral metrics as markdown."""
+    lines: list[str] = []
+    lines.append("## Behavioral Metrics (Advisory)")
+    lines.append("")
+
+    # Escalation rate
+    lines.append("### Escalation Rate")
+    lines.append(f"- Escalated queries: {metrics.escalated_queries}/{metrics.total_queries} "
+                 f"({metrics.escalation_rate:.0%})")
+    lines.append(f"- Target range: {ESCALATION_TARGET_LOW:.0%}-{ESCALATION_TARGET_HIGH:.0%}")
+    lines.append(f"- **Advisory: {metrics.escalation_advisory}**")
+    lines.append("")
+
+    # Feature activations
+    if metrics.feature_activations:
+        lines.append("### Feature Activation Rates")
+        lines.append("")
+        lines.append("| Feature | Activated | Total | Rate |")
+        lines.append("|---------|-----------|-------|------|")
+        for name, data in metrics.feature_activations.items():
+            activated = data.get("activated", 0)
+            total = data.get("total", 0)
+            rate = activated / total if total > 0 else 0.0
+            flag = " (dead code)" if activated == 0 and total > 0 else ""
+            lines.append(f"| {name} | {activated} | {total} | {rate:.0%}{flag} |")
+        lines.append("")
+
+    # Feature health cards
+    if metrics.feature_health_cards:
+        lines.append("### Feature Health Cards")
+        lines.append("")
+        lines.append("| Feature | Metric | Target | Actual | Status |")
+        lines.append("|---------|--------|--------|--------|--------|")
+        for card in metrics.feature_health_cards:
+            lines.append(
+                f"| {card['feature']} | {card['metric']} | {card['target']} | "
+                f"{card['actual']} | {card['status']} |"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_stability_analysis(stability: StabilityAnalysis) -> str:
+    """Format stability analysis as markdown."""
+    lines: list[str] = []
+    lines.append("## Stability Analysis")
+    lines.append("")
+    lines.append(f"- Historical flip rate: {stability.flip_rate:.0%}")
+    lines.append(f"- Number of tests: {stability.num_tests}")
+    lines.append(f"- Observed win margin: {stability.win_margin}")
+    lines.append(f"- P(noise): {stability.p_noise:.1%}")
+    lines.append(f"- **Confidence: {stability.confidence_flag}**")
+    if stability.confidence_flag == "LOW CONFIDENCE":
+        lines.append(f"  - Win margin is within the noise floor (P(noise) > "
+                     f"{NOISE_PROBABILITY_THRESHOLD:.0%})")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
-    if len(sys.argv) != 3:
-        print("Usage: python3 scripts/viability_compute.py scores.json mapping.json")
-        print()
-        print("See script docstring for input format.")
+    parser = argparse.ArgumentParser(
+        description="Viability evaluation computation — pre-registered mechanical aggregation."
+    )
+    parser.add_argument("scores", type=Path, help="Path to scores.json")
+    parser.add_argument("mapping", type=Path, help="Path to mapping.json")
+    parser.add_argument("--behavioral", type=Path, default=None,
+                        help="Path to behavioral metrics JSON (optional)")
+    parser.add_argument("--rubric", type=str, default="R1",
+                        help="Rubric version identifier (default: R1)")
+    parser.add_argument("--flip-rate", type=float, default=0.0,
+                        help="Historical flip rate for stability analysis (0.0-1.0)")
+    args = parser.parse_args()
+
+    if not args.scores.exists():
+        print(f"Error: {args.scores} not found")
+        sys.exit(1)
+    if not args.mapping.exists():
+        print(f"Error: {args.mapping} not found")
         sys.exit(1)
 
-    scores_path = Path(sys.argv[1])
-    mapping_path = Path(sys.argv[2])
-
-    if not scores_path.exists():
-        print(f"Error: {scores_path} not found")
-        sys.exit(1)
-    if not mapping_path.exists():
-        print(f"Error: {mapping_path} not found")
-        sys.exit(1)
-
-    scores_data = json.loads(scores_path.read_text())
-    mapping_data = json.loads(mapping_path.read_text())
+    scores_data = json.loads(args.scores.read_text())
+    mapping_data = json.loads(args.mapping.read_text())
 
     # Compute
     results = compute_all(scores_data, mapping_data)
     verdict_info = apply_verdicts(results)
 
-    # Output
-    print(f"# V4 Viability Computation Results")
+    # Parse behavioral metrics if provided
+    behavioral: BehavioralMetrics | None = None
+    if args.behavioral and args.behavioral.exists():
+        behavioral = parse_behavioral_metrics(json.loads(args.behavioral.read_text()))
+
+    # Compute stability if flip rate provided
+    stability: StabilityAnalysis | None = None
+    if args.flip_rate > 0:
+        stability = compute_stability(results, args.flip_rate)
+
+    # Output header
+    print("# Viability Computation Results")
     print()
-    print(f"**Verdict: {verdict_info['verdict']}**")
+    print(f"**Rubric Version:** {args.rubric}")
+    verdict_line = f"**Verdict: {verdict_info['verdict']}**"
+    if stability and stability.confidence_flag == "LOW CONFIDENCE":
+        verdict_line += f" (LOW CONFIDENCE — P(noise) = {stability.p_noise:.1%})"
+    print(verdict_line)
     print()
 
     # Track A summary
     ta = verdict_info["track_a"]
-    print(f"## Track A (Regression)")
+    print("## Track A (Regression)")
     print(f"- Clew avg: {ta['clew_avg']}/5.0 (Ship threshold: {ta['ship_threshold']})")
     print(f"- Grep avg: {ta['grep_avg']}/5.0")
     print(f"- Win/Loss: {ta['clew_wins']} clew / {ta['grep_wins']} grep / {ta['ties']} tie")
@@ -319,7 +538,7 @@ def main() -> None:
 
     # Track B summary
     tb = verdict_info["track_b"]
-    print(f"## Track B (V4-Advantaged)")
+    print("## Track B (Feature)")
     print(f"- Clew avg: {tb['clew_avg']}/5.0")
     print(f"- Grep avg: {tb['grep_avg']}/5.0")
     print(f"- Win/Loss: {tb['clew_wins']} clew / {tb['grep_wins']} grep / {tb['ties']} tie")
@@ -327,13 +546,14 @@ def main() -> None:
 
     # Overall
     ov = verdict_info["overall"]
-    print(f"## Overall")
+    print("## Overall")
     print(f"- Clew avg: {ov['clew_avg']}/5.0 (Ship threshold: {TRACK_A_SHIP_AVG:.2f})")
     print(f"- Grep avg: {ov['grep_avg']}/5.0")
     total_wins = ta["clew_wins"] + tb["clew_wins"]
     total_grep = ta["grep_wins"] + tb["grep_wins"]
     total_ties = ta["ties"] + tb["ties"]
-    print(f"- Win/Loss: {total_wins} clew / {total_grep} grep / {total_ties} tie (Ship threshold: 7/12)")
+    print(f"- Win/Loss: {total_wins} clew / {total_grep} grep / "
+          f"{total_ties} tie (Ship threshold: 7/12)")
     print()
 
     # Results table
@@ -349,6 +569,14 @@ def main() -> None:
     print()
     print(format_dimension_table(results, "grep"))
     print()
+
+    # Behavioral metrics
+    if behavioral:
+        print(format_behavioral_metrics(behavioral))
+
+    # Stability analysis
+    if stability:
+        print(format_stability_analysis(stability))
 
     # Disagreements
     dis = verdict_info["disagreements"]
@@ -366,7 +594,8 @@ def main() -> None:
         print()
 
     # JSON output for downstream processing
-    json_output = {
+    json_output: dict = {
+        "rubric_version": args.rubric,
         "verdict": verdict_info,
         "per_test": [
             {
@@ -383,7 +612,23 @@ def main() -> None:
         ],
     }
 
-    json_path = scores_path.parent / "viability_results.json"
+    if behavioral:
+        json_output["behavioral_metrics"] = {
+            "escalation_rate": round(behavioral.escalation_rate, 4),
+            "escalation_advisory": behavioral.escalation_advisory,
+            "feature_activations": behavioral.feature_activations,
+            "feature_health_cards": behavioral.feature_health_cards,
+        }
+
+    if stability:
+        json_output["stability_analysis"] = {
+            "flip_rate": stability.flip_rate,
+            "win_margin": stability.win_margin,
+            "p_noise": stability.p_noise,
+            "confidence_flag": stability.confidence_flag,
+        }
+
+    json_path = args.scores.parent / "viability_results.json"
     json_path.write_text(json.dumps(json_output, indent=2) + "\n")
     print(f"JSON results written to {json_path}")
 

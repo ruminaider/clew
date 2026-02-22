@@ -1,0 +1,50 @@
+{
+  "A1": {
+    "alpha": "clew",
+    "beta": "grep"
+  },
+  "A2": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "A3": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "A4": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "B1": {
+    "alpha": "clew",
+    "beta": "grep"
+  },
+  "B2": {
+    "alpha": "clew",
+    "beta": "grep"
+  },
+  "C1": {
+    "alpha": "clew",
+    "beta": "grep"
+  },
+  "C2": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "E1": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "E2": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "E3": {
+    "alpha": "grep",
+    "beta": "clew"
+  },
+  "E4": {
+    "alpha": "clew",
+    "beta": "grep"
+  }
+}
