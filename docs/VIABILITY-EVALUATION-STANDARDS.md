@@ -277,6 +277,23 @@ Use a 1-5 integer scale. Prefer dimension-specific anchors to reduce inter-score
 | 2 | Weak — misses important criteria |
 | 1 | Failed — does not meaningfully address the dimension |
 
+### Scorer Calibration Anchoring
+
+To reduce inter-run scorer drift, include 2 "anchor" transcripts with every scoring batch:
+
+**Anchor selection:**
+- One high-quality transcript (expected ~4.5 weighted) from a prior Ship version
+- One medium-quality transcript (expected ~3.0 weighted) from a prior evaluation
+
+**Protocol:**
+1. Scorers receive anchor transcripts FIRST, before the actual test transcripts
+2. Scorers rate anchors using the same rubric
+3. Anchor scores must fall within ±0.5 of reference values to validate the scorer's calibration
+4. If an anchor score falls outside ±0.5, the scorer is re-prompted with calibration guidance
+5. Anchor scores are NOT included in evaluation results
+
+**Why:** V4.1→V4.2 showed scorer calibration drift: both tools' absolute scores changed significantly between runs (V4.1: clew 4.42 / grep 4.33 vs V4.2: clew 3.34 / grep 3.10). Anchors establish a shared baseline so scorers use the scale consistently across evaluations.
+
 ### Bonus Discovery
 
 When using ground-truth checklists (from Phase -1), scorers may award bonus credit for valid discoveries beyond the checklist — artifacts that are genuinely relevant but were not anticipated during scenario validation.
@@ -365,11 +382,34 @@ When an evaluation both validates existing quality AND tests new capabilities, u
 - Both tracks use the same pipeline (Phases 0-6) but with independent scenario sets
 - Parallel execution: regression track starts immediately while feature track validates scenarios
 
+**Recommended test count:** 16 tests minimum (8 Track A regression + 8 Track B feature).
+- At 16 tests, a 10-6 win margin has P(noise) ≈ 22% (vs 46% at 7-5 with 12 tests)
+- More Track B power means the tool's designed strengths get measured, not just regression parity
+- Suggested Track B categories: semantic discovery (vocabulary bridging), cross-module tracing, negative proofs, architectural pattern recognition
+
 ---
 
 ## Behavioral Metrics
 
 Behavioral metrics measure HOW a tool achieves its results, complementing the scoring rubric which measures WHAT results were achieved. All behavioral metrics are **advisory** — published alongside scores as diagnostic context, never verdict-affecting.
+
+### Behavioral Verdict Gates
+
+Behavioral metrics are advisory by default, but pre-registered gates can independently **Kill** a version regardless of win rate. This catches failure modes that noisy win rates cannot detect:
+
+| Gate | Threshold | Action | Rationale |
+|------|-----------|--------|-----------|
+| Escalation floor | < 5% | Auto-Kill | Feature is dead — never activates |
+| Escalation ceiling | > 50% | Auto-Kill | Feature is a crutch — fires indiscriminately |
+| Escalation target | 15-25% | Ship requirement | Surgical, not a crutch |
+
+**Rules:**
+- Gates must be pre-registered BEFORE any agents run (cannot add gates post-hoc)
+- A gate failure produces an automatic Kill verdict, overriding win rate
+- Gates are checked during Phase 5 computation (programmatic, not judgment-based)
+- The target range (15-25%) is a Ship requirement: escalation rate must be within this range for Ship verdict
+
+**Why:** V4.2 demonstrated the need for behavioral gates: 0% escalation rate (dead feature) was not caught by win rate (5/12, borderline). V4.1's 49% rate (always-on crutch) also slipped through on win rate (7/12). Mechanical gates catch these immediately.
 
 ### Escalation Rate
 
@@ -377,10 +417,10 @@ For tools with automatic fallback/augmentation mechanisms:
 
 - **Definition:** `auto_escalated_queries / total_eligible_queries` (from raw clew transcripts). "Eligible" excludes queries where augmentation is architecturally excluded (e.g., LOCATION/DEBUG intents).
 - **Target range:** 15-40% of eligible queries
-- **Advisory ceiling:** 50% ("effectively always-on" — the mechanism fires indiscriminately)
-- **Advisory floor:** 5% ("effectively never activates" — the mechanism's triggers are too narrow)
+- **Verdict gate ceiling:** 50% (Auto-Kill) ("effectively always-on" — the mechanism fires indiscriminately)
+- **Verdict gate floor:** 5% (Auto-Kill) ("effectively never activates" — the mechanism's triggers are too narrow)
 
-Escalation rate outside the target range is a diagnostic signal, not a failure. A tool with 80% escalation rate that produces excellent results is still excellent — the escalation rate tells you the mechanism could be more surgical, not that the results are bad.
+Escalation rate outside the gate boundaries (5% floor, 50% ceiling) produces an automatic Kill. Rate within boundaries but outside target range (15-25%) is a diagnostic signal.
 
 ### Feature Activation Rate
 
@@ -422,6 +462,35 @@ Every results document and computation output must include the rubric version us
 |---------|---------|------------|
 | R1 | Original anchors (Discovery: 5/5 ≤3 calls) | V2.3 |
 | R2 | Relaxed discovery anchors (5/5 ≤5 calls) | V4.1 |
+| R3 | Added behavioral verdict gates, Wilcoxon test, scorer anchoring, 16-test minimum | V4.3 |
+
+---
+
+## Statistical Testing
+
+Win rate alone is noisy at small sample sizes (12-16 tests). A paired statistical test captures **margin size**, not just binary winner — a 4.9 vs 4.8 win and a 4.9 vs 2.0 win are not equivalent.
+
+### Wilcoxon Signed-Rank Test
+
+For each test, compute `delta_i = clew_weighted_i - grep_weighted_i`. Run a one-tailed Wilcoxon signed-rank test:
+- H₀: median(delta) ≤ 0 (clew is no better than grep)
+- H₁: median(delta) > 0 (clew is better)
+
+**Interpretation:**
+- p < 0.10: Statistically significant clew advantage
+- p ≥ 0.10: Insufficient evidence for clew advantage at this sample size
+
+### Updated Verdict Logic
+
+Ship requires ALL of:
+1. Win rate ≥ 7/N (existing)
+2. Wilcoxon p < 0.10 **OR** average clew margin > +0.20 (new)
+3. Behavioral verdict gates pass (new)
+4. Track A regression threshold met (existing)
+
+The Wilcoxon OR margin alternative ensures that a version with consistently small but positive margins (which Wilcoxon may not detect at N=16) can still Ship if the average margin is meaningful.
+
+**Why:** At 12 tests with ~50% flip rate, a 7-5 win margin has P(noise) ≈ 46%. The Wilcoxon test on paired differences is more powerful because it uses the actual score gaps, not just binary win/loss. At 16 tests, both tests combined substantially reduce the noise floor.
 
 ---
 
@@ -532,6 +601,9 @@ Lessons from V1-V3.0:
 | Feature criteria as Kill gate | V3.0-V3.1 | Feature health should cap at Iterate, not override outcome quality |
 | Rubric anchor changes mid-eval | V4→V4.1 | Freeze anchors after Ship; use win rates for cross-rubric comparison |
 | Uncalibrated behavioral metrics | V4.1 | Pre-register advisory thresholds; track escalation rate as diagnostic |
+| Scorer calibration drift | V4.1-V4.2 | Use anchor transcripts to calibrate scorers before each evaluation |
+| Noisy win rates at small N | V4.1-V4.2 | Add Wilcoxon signed-rank test on paired differences alongside win rate |
+| Dead features undetected | V4.2 | Pre-register behavioral verdict gates (escalation rate floor/ceiling) |
 
 ---
 

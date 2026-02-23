@@ -55,6 +55,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# scipy is optional — Wilcoxon test degrades gracefully if not installed
+
 # Pre-registered weights (frozen — do not change after evaluation starts)
 WEIGHTS = {
     "discovery": 0.30,
@@ -75,11 +77,12 @@ TRACK_A_SHIP_AVG = max(3.50, V23_SCORE - REGRESSION_BUFFER)  # 3.66
 TRACK_A_TESTS = {"A1", "A2", "A3", "A4", "B1", "B2", "C1", "C2"}
 TRACK_B_TESTS = {"E1", "E2", "E3", "E4"}
 
-# Behavioral metrics advisory thresholds
-ESCALATION_TARGET_LOW = 0.15
-ESCALATION_TARGET_HIGH = 0.40
-ESCALATION_CEILING = 0.50
+# Behavioral verdict gates (auto-Kill if outside)
 ESCALATION_FLOOR = 0.05
+ESCALATION_CEILING = 0.50
+# Ship target range
+ESCALATION_TARGET_LOW = 0.15
+ESCALATION_TARGET_HIGH = 0.25
 
 # Stability analysis
 NOISE_PROBABILITY_THRESHOLD = 0.30
@@ -114,6 +117,16 @@ class StabilityAnalysis:
     win_margin: int = 0
     p_noise: float = 0.0
     confidence_flag: str = "CONFIDENT"
+
+
+@dataclass
+class WilcoxonResult:
+    statistic: float = 0.0
+    p_value: float = 1.0
+    avg_margin: float = 0.0
+    n_nonzero: int = 0
+    passes_threshold: bool = False
+    available: bool = False  # False if scipy not installed
 
 
 def compute_weighted(scores: dict[str, float]) -> float:
@@ -157,8 +170,9 @@ def average_scorer_ratings(
     return averaged, disagreements
 
 
-def determine_winner(clew_weighted: float, grep_weighted: float,
-                     clew_completeness: float, grep_completeness: float) -> str:
+def determine_winner(
+    clew_weighted: float, grep_weighted: float, clew_completeness: float, grep_completeness: float
+) -> str:
     """Determine winner per pre-registered formula."""
     if clew_weighted > grep_weighted:
         return "clew"
@@ -197,8 +211,10 @@ def compute_all(scores_data: dict, mapping_data: dict) -> list[TestResult]:
 
         # Determine winner
         winner = determine_winner(
-            clew_weighted, grep_weighted,
-            clew_scores["completeness"], grep_scores["completeness"],
+            clew_weighted,
+            grep_weighted,
+            clew_scores["completeness"],
+            grep_scores["completeness"],
         )
 
         # Track assignment
@@ -211,16 +227,18 @@ def compute_all(scores_data: dict, mapping_data: dict) -> list[TestResult]:
         for dim in grep_disagree:
             all_disagreements.append(f"grep/{dim}")
 
-        results.append(TestResult(
-            test_id=test_id,
-            track=track,
-            clew_scores=clew_scores,
-            grep_scores=grep_scores,
-            clew_weighted=clew_weighted,
-            grep_weighted=grep_weighted,
-            winner=winner,
-            disagreements=all_disagreements,
-        ))
+        results.append(
+            TestResult(
+                test_id=test_id,
+                track=track,
+                clew_scores=clew_scores,
+                grep_scores=grep_scores,
+                clew_weighted=clew_weighted,
+                grep_weighted=grep_weighted,
+                winner=winner,
+                disagreements=all_disagreements,
+            )
+        )
 
     return results
 
@@ -236,8 +254,9 @@ def parse_behavioral_metrics(data: dict) -> BehavioralMetrics:
     elif rate > ESCALATION_TARGET_HIGH:
         advisory = f"ABOVE TARGET ({rate:.0%} > {ESCALATION_TARGET_HIGH:.0%})"
     elif rate < ESCALATION_FLOOR:
-        advisory = (f"BELOW FLOOR ({rate:.0%} < {ESCALATION_FLOOR:.0%})"
-                    " — effectively never activates")
+        advisory = (
+            f"BELOW FLOOR ({rate:.0%} < {ESCALATION_FLOOR:.0%}) — effectively never activates"
+        )
     elif rate < ESCALATION_TARGET_LOW:
         advisory = f"BELOW TARGET ({rate:.0%} < {ESCALATION_TARGET_LOW:.0%})"
     else:
@@ -291,7 +310,7 @@ def compute_stability(
     for k in range(threshold, n + 1):
         # Binomial coefficient * p^k * (1-p)^(n-k), p=0.5
         binom_coeff = math.comb(n, k)
-        p_noise += binom_coeff * (0.5 ** n)
+        p_noise += binom_coeff * (0.5**n)
     # Two-tailed (margin in either direction)
     p_noise *= 2
     p_noise = min(p_noise, 1.0)
@@ -310,7 +329,88 @@ def compute_stability(
     )
 
 
-def apply_verdicts(results: list[TestResult]) -> dict:
+def compute_wilcoxon(results: list[TestResult]) -> WilcoxonResult:
+    """Compute one-tailed Wilcoxon signed-rank test on paired score differences.
+
+    H0: median(clew - grep) <= 0
+    H1: median(clew - grep) > 0
+
+    Returns WilcoxonResult with p-value and pass/fail.
+    """
+    deltas = [r.clew_weighted - r.grep_weighted for r in results]
+    nonzero_deltas = [d for d in deltas if d != 0]
+    avg_margin = sum(deltas) / len(deltas) if deltas else 0.0
+    n_nonzero = len(nonzero_deltas)
+
+    if n_nonzero < 6:
+        # Too few non-tied pairs for Wilcoxon to be meaningful
+        passes = avg_margin > 0.20
+        return WilcoxonResult(
+            avg_margin=round(avg_margin, 4),
+            n_nonzero=n_nonzero,
+            passes_threshold=passes,
+            available=False,
+        )
+
+    try:
+        from scipy.stats import wilcoxon as scipy_wilcoxon
+
+        stat, p_two = scipy_wilcoxon(nonzero_deltas, alternative="two-sided")
+        # Convert two-sided to one-tailed: if median > 0, p_one = p_two / 2
+        if avg_margin > 0:
+            p_value = p_two / 2
+        else:
+            p_value = 1.0 - p_two / 2
+
+        passes = p_value < 0.10 or avg_margin > 0.20
+        return WilcoxonResult(
+            statistic=round(float(stat), 4),
+            p_value=round(float(p_value), 4),
+            avg_margin=round(avg_margin, 4),
+            n_nonzero=n_nonzero,
+            passes_threshold=passes,
+            available=True,
+        )
+    except ImportError:
+        passes = avg_margin > 0.20
+        return WilcoxonResult(
+            avg_margin=round(avg_margin, 4),
+            n_nonzero=n_nonzero,
+            passes_threshold=passes,
+            available=False,
+        )
+
+
+def check_behavioral_gates(behavioral: BehavioralMetrics | None) -> tuple[bool, str]:
+    """Check pre-registered behavioral verdict gates.
+
+    Returns (passes, reason). If passes is False, reason explains the gate failure.
+    """
+    if behavioral is None:
+        return True, "no behavioral data provided"
+
+    rate = behavioral.escalation_rate
+
+    if rate < ESCALATION_FLOOR:
+        return False, (
+            f"GATE FAIL: escalation rate {rate:.0%} < {ESCALATION_FLOOR:.0%} floor "
+            f"(feature is dead)"
+        )
+
+    if rate > ESCALATION_CEILING:
+        return False, (
+            f"GATE FAIL: escalation rate {rate:.0%} > {ESCALATION_CEILING:.0%} ceiling "
+            f"(feature is a crutch)"
+        )
+
+    return True, f"escalation rate {rate:.0%} within gate boundaries"
+
+
+def apply_verdicts(
+    results: list[TestResult],
+    behavioral: BehavioralMetrics | None = None,
+    wilcoxon: WilcoxonResult | None = None,
+) -> dict:
     """Apply pre-registered verdict thresholds."""
     track_a = [r for r in results if r.track == "A"]
     track_b = [r for r in results if r.track == "B"]
@@ -324,15 +424,28 @@ def apply_verdicts(results: list[TestResult]) -> dict:
     overall_avg = sum(r.clew_weighted for r in results) / len(results) if results else 0
     grep_avg = sum(r.grep_weighted for r in results) / len(results) if results else 0
 
-    # Verdict logic (pre-registered, frozen)
+    # Verdict logic
     total_wins = track_a_wins + track_b_wins
-    if (overall_avg >= TRACK_A_SHIP_AVG and total_wins >= 7
-            and track_a_avg >= TRACK_A_SHIP_AVG):
+
+    # Phase 1: Win-rate based verdict (pre-registered thresholds)
+    if overall_avg >= TRACK_A_SHIP_AVG and total_wins >= 7 and track_a_avg >= TRACK_A_SHIP_AVG:
         verdict = "Ship"
     elif overall_avg >= 3.30 and total_wins >= 6:
         verdict = "Iterate"
     else:
         verdict = "Kill"
+
+    # Phase 2: Behavioral verdict gates (can only demote, never promote)
+    gate_pass, gate_reason = check_behavioral_gates(behavioral)
+    if not gate_pass and verdict != "Kill":
+        verdict = "Kill"
+
+    # Phase 3: Statistical test (required for Ship, alongside win rate)
+    wilcoxon_pass = True
+    if wilcoxon is not None and verdict == "Ship":
+        wilcoxon_pass = wilcoxon.passes_threshold
+        if not wilcoxon_pass:
+            verdict = "Iterate"
 
     # Disagreement summary
     tests_with_disagreements = [r.test_id for r in results if r.disagreements]
@@ -342,8 +455,7 @@ def apply_verdicts(results: list[TestResult]) -> dict:
         "track_a": {
             "clew_avg": round(track_a_avg, 2),
             "grep_avg": (
-                round(sum(r.grep_weighted for r in track_a) / len(track_a), 2)
-                if track_a else 0
+                round(sum(r.grep_weighted for r in track_a) / len(track_a), 2) if track_a else 0
             ),
             "clew_wins": track_a_wins,
             "grep_wins": sum(1 for r in track_a if r.winner == "grep"),
@@ -353,8 +465,7 @@ def apply_verdicts(results: list[TestResult]) -> dict:
         "track_b": {
             "clew_avg": round(track_b_avg, 2),
             "grep_avg": (
-                round(sum(r.grep_weighted for r in track_b) / len(track_b), 2)
-                if track_b else 0
+                round(sum(r.grep_weighted for r in track_b) / len(track_b), 2) if track_b else 0
             ),
             "clew_wins": track_b_wins,
             "grep_wins": sum(1 for r in track_b if r.winner == "grep"),
@@ -368,6 +479,14 @@ def apply_verdicts(results: list[TestResult]) -> dict:
         "disagreements": {
             "tests_with_disagreements": tests_with_disagreements,
             "needs_tiebreaker": len(tests_with_disagreements) > 0,
+        },
+        "behavioral_gate": {
+            "passes": gate_pass,
+            "reason": gate_reason,
+        },
+        "statistical_test": {
+            "passes": wilcoxon_pass if wilcoxon else None,
+            "method": "wilcoxon" if wilcoxon and wilcoxon.available else "margin",
         },
     }
 
@@ -427,8 +546,10 @@ def format_behavioral_metrics(metrics: BehavioralMetrics) -> str:
 
     # Escalation rate
     lines.append("### Escalation Rate")
-    lines.append(f"- Escalated queries: {metrics.escalated_queries}/{metrics.total_queries} "
-                 f"({metrics.escalation_rate:.0%})")
+    lines.append(
+        f"- Escalated queries: {metrics.escalated_queries}/{metrics.total_queries} "
+        f"({metrics.escalation_rate:.0%})"
+    )
     lines.append(f"- Target range: {ESCALATION_TARGET_LOW:.0%}-{ESCALATION_TARGET_HIGH:.0%}")
     lines.append(f"- **Advisory: {metrics.escalation_advisory}**")
     lines.append("")
@@ -474,8 +595,30 @@ def format_stability_analysis(stability: StabilityAnalysis) -> str:
     lines.append(f"- P(noise): {stability.p_noise:.1%}")
     lines.append(f"- **Confidence: {stability.confidence_flag}**")
     if stability.confidence_flag == "LOW CONFIDENCE":
-        lines.append(f"  - Win margin is within the noise floor (P(noise) > "
-                     f"{NOISE_PROBABILITY_THRESHOLD:.0%})")
+        lines.append(
+            f"  - Win margin is within the noise floor (P(noise) > "
+            f"{NOISE_PROBABILITY_THRESHOLD:.0%})"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def format_wilcoxon_result(wilcoxon: WilcoxonResult) -> str:
+    """Format Wilcoxon test result as markdown."""
+    lines: list[str] = []
+    lines.append("## Statistical Test (Wilcoxon Signed-Rank)")
+    lines.append("")
+    lines.append(f"- Average margin (clew - grep): {wilcoxon.avg_margin:+.4f}")
+    lines.append(f"- Non-zero pairs: {wilcoxon.n_nonzero}")
+    if wilcoxon.available:
+        lines.append(f"- Test statistic: {wilcoxon.statistic:.4f}")
+        lines.append(f"- One-tailed p-value: {wilcoxon.p_value:.4f}")
+        sig = "significant" if wilcoxon.p_value < 0.10 else "not significant"
+        lines.append(f"- Significance (p < 0.10): {sig}")
+    else:
+        lines.append("- scipy not available — using margin-only fallback")
+    passes = "PASS" if wilcoxon.passes_threshold else "FAIL"
+    lines.append(f"- **Verdict gate: {passes}** (requires p < 0.10 or avg margin > +0.20)")
     lines.append("")
     return "\n".join(lines)
 
@@ -486,12 +629,18 @@ def main() -> None:
     )
     parser.add_argument("scores", type=Path, help="Path to scores.json")
     parser.add_argument("mapping", type=Path, help="Path to mapping.json")
-    parser.add_argument("--behavioral", type=Path, default=None,
-                        help="Path to behavioral metrics JSON (optional)")
-    parser.add_argument("--rubric", type=str, default="R1",
-                        help="Rubric version identifier (default: R1)")
-    parser.add_argument("--flip-rate", type=float, default=0.0,
-                        help="Historical flip rate for stability analysis (0.0-1.0)")
+    parser.add_argument(
+        "--behavioral", type=Path, default=None, help="Path to behavioral metrics JSON (optional)"
+    )
+    parser.add_argument(
+        "--rubric", type=str, default="R1", help="Rubric version identifier (default: R1)"
+    )
+    parser.add_argument(
+        "--flip-rate",
+        type=float,
+        default=0.0,
+        help="Historical flip rate for stability analysis (0.0-1.0)",
+    )
     args = parser.parse_args()
 
     if not args.scores.exists():
@@ -506,12 +655,14 @@ def main() -> None:
 
     # Compute
     results = compute_all(scores_data, mapping_data)
-    verdict_info = apply_verdicts(results)
 
     # Parse behavioral metrics if provided
     behavioral: BehavioralMetrics | None = None
     if args.behavioral and args.behavioral.exists():
         behavioral = parse_behavioral_metrics(json.loads(args.behavioral.read_text()))
+
+    wilcoxon = compute_wilcoxon(results)
+    verdict_info = apply_verdicts(results, behavioral=behavioral, wilcoxon=wilcoxon)
 
     # Compute stability if flip rate provided
     stability: StabilityAnalysis | None = None
@@ -552,8 +703,10 @@ def main() -> None:
     total_wins = ta["clew_wins"] + tb["clew_wins"]
     total_grep = ta["grep_wins"] + tb["grep_wins"]
     total_ties = ta["ties"] + tb["ties"]
-    print(f"- Win/Loss: {total_wins} clew / {total_grep} grep / "
-          f"{total_ties} tie (Ship threshold: 7/12)")
+    print(
+        f"- Win/Loss: {total_wins} clew / {total_grep} grep / "
+        f"{total_ties} tie (Ship threshold: 7/12)"
+    )
     print()
 
     # Results table
@@ -577,6 +730,9 @@ def main() -> None:
     # Stability analysis
     if stability:
         print(format_stability_analysis(stability))
+
+    # Wilcoxon test
+    print(format_wilcoxon_result(wilcoxon))
 
     # Disagreements
     dis = verdict_info["disagreements"]
@@ -627,6 +783,17 @@ def main() -> None:
             "p_noise": stability.p_noise,
             "confidence_flag": stability.confidence_flag,
         }
+
+    json_output["wilcoxon_test"] = {
+        "avg_margin": wilcoxon.avg_margin,
+        "n_nonzero": wilcoxon.n_nonzero,
+        "p_value": wilcoxon.p_value if wilcoxon.available else None,
+        "passes_threshold": wilcoxon.passes_threshold,
+        "available": wilcoxon.available,
+    }
+
+    json_output["behavioral_gate"] = verdict_info.get("behavioral_gate", {})
+    json_output["statistical_test"] = verdict_info.get("statistical_test", {})
 
     json_path = args.scores.parent / "viability_results.json"
     json_path.write_text(json.dumps(json_output, indent=2) + "\n")
