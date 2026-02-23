@@ -37,10 +37,13 @@ def _make_engine(config: SearchConfig | None = None) -> SearchEngine:
 
 
 class TestComputeConfidence:
-    """Test _compute_confidence using gap ratio (scale-invariant).
+    """Test _compute_confidence using Z-score self-calibration.
 
-    gap_ratio = (top - 5th) / top
-    HIGH >= 0.30, MEDIUM >= 0.20, LOW < 0.20
+    Z-score measures how many standard deviations the top-to-anchor gap
+    exceeds the expected gap from the overall gap distribution.
+    HIGH >= 1.5, MEDIUM >= 0.5, LOW < 0.5.
+
+    The formula works best with 8-10 results (more gaps than anchor positions).
     """
 
     def test_empty_results_returns_low(self):
@@ -51,134 +54,160 @@ class TestComputeConfidence:
         assert suggestion == SuggestionType.TRY_EXHAUSTIVE
 
     def test_high_confidence_peaky_distribution(self):
-        """Clear winner: top=1.0, 5th=0.3 → gap_ratio=0.70 → HIGH."""
+        """Front-loaded decay: big gaps at top, tiny in tail → Z=1.56 → HIGH."""
         engine = _make_engine()
         results = [
             _make_result(1.0),
-            _make_result(0.6),
-            _make_result(0.5),
-            _make_result(0.4),
-            _make_result(0.3),
+            _make_result(0.7),
+            _make_result(0.50),
+            _make_result(0.45),
+            _make_result(0.40),
+            _make_result(0.38),
+            _make_result(0.37),
+            _make_result(0.36),
+            _make_result(0.35),
+            _make_result(0.34),
         ]
         confidence, label, suggestion = engine._compute_confidence(results)
-        assert confidence == pytest.approx(0.70, abs=0.01)
+        assert confidence == pytest.approx(1.556, abs=0.01)
         assert label == "high"
         assert suggestion == SuggestionType.NONE
 
-    def test_medium_confidence_moderate_spread(self):
-        """Moderate spread: top=1.0, 5th=0.75 → gap_ratio=0.25 → MEDIUM."""
+    def test_medium_confidence_gentle_decay(self):
+        """Gentle linear decay → Z=0.88 → MEDIUM."""
         engine = _make_engine()
         results = [
             _make_result(1.0),
-            _make_result(0.9),
-            _make_result(0.85),
-            _make_result(0.8),
-            _make_result(0.75),
+            _make_result(0.92),
+            _make_result(0.86),
+            _make_result(0.80),
+            _make_result(0.74),
+            _make_result(0.68),
+            _make_result(0.62),
+            _make_result(0.56),
+            _make_result(0.50),
+            _make_result(0.44),
         ]
         confidence, label, suggestion = engine._compute_confidence(results)
-        assert confidence == pytest.approx(0.25, abs=0.01)
+        assert confidence == pytest.approx(0.88, abs=0.02)
         assert label == "medium"
         assert suggestion == SuggestionType.TRY_KEYWORD
 
-    def test_low_confidence_flat_distribution(self):
-        """Flat distribution: top=0.5, 5th=0.45 → gap_ratio=0.10 → LOW."""
+    def test_low_confidence_flat_top_steep_tail(self):
+        """Flat top with steeper tail → Z=-2.17 → LOW."""
         engine = _make_engine()
         results = [
-            _make_result(0.50),
-            _make_result(0.49),
-            _make_result(0.48),
-            _make_result(0.47),
+            _make_result(1.0),
+            _make_result(0.98),
+            _make_result(0.96),
+            _make_result(0.94),
+            _make_result(0.92),
+            _make_result(0.85),
+            _make_result(0.75),
+            _make_result(0.65),
+            _make_result(0.55),
             _make_result(0.45),
         ]
         confidence, label, suggestion = engine._compute_confidence(results)
-        assert confidence == pytest.approx(0.10, abs=0.01)
+        assert confidence < 0.5
         assert label == "low"
         assert suggestion == SuggestionType.TRY_EXHAUSTIVE
 
-    def test_borderline_high(self):
-        """Exactly at high threshold: gap_ratio=0.30 → HIGH."""
+    def test_uniform_distribution_returns_low(self):
+        """Perfectly uniform gaps → std≈0 → Z=0 → LOW."""
         engine = _make_engine()
-        results = [
-            _make_result(1.0),
-            _make_result(0.9),
-            _make_result(0.8),
-            _make_result(0.75),
-            _make_result(0.70),
-        ]
+        # Use integer-friendly gaps to avoid floating point noise
+        results = [_make_result(1.0 - i * 0.1) for i in range(10)]
         confidence, label, suggestion = engine._compute_confidence(results)
-        assert confidence == pytest.approx(0.30, abs=0.01)
-        assert label == "high"
-
-    def test_borderline_medium(self):
-        """Just above medium threshold: gap_ratio≈0.21 → MEDIUM."""
-        engine = _make_engine()
-        results = [
-            _make_result(1.0),
-            _make_result(0.95),
-            _make_result(0.90),
-            _make_result(0.85),
-            _make_result(0.79),
-        ]
-        confidence, label, suggestion = engine._compute_confidence(results)
-        assert confidence == pytest.approx(0.21, abs=0.01)
-        assert label == "medium"
+        assert label == "low"
+        assert suggestion == SuggestionType.TRY_EXHAUSTIVE
 
     def test_scale_invariant_small_scores(self):
-        """Gap ratio works the same with small RRF-scale scores."""
+        """Same shape at RRF scale → same Z-score → same label."""
         engine = _make_engine()
+        # Same shape as the HIGH test but at 0.1x scale
         results = [
             _make_result(0.10),
-            _make_result(0.06),
-            _make_result(0.05),
-            _make_result(0.04),
-            _make_result(0.03),
+            _make_result(0.07),
+            _make_result(0.050),
+            _make_result(0.045),
+            _make_result(0.040),
+            _make_result(0.038),
+            _make_result(0.037),
+            _make_result(0.036),
+            _make_result(0.035),
+            _make_result(0.034),
         ]
         confidence, label, suggestion = engine._compute_confidence(results)
-        # gap_ratio = (0.10 - 0.03) / 0.10 = 0.70 → HIGH
-        assert confidence == pytest.approx(0.70, abs=0.01)
+        assert confidence == pytest.approx(1.556, abs=0.01)
         assert label == "high"
 
     def test_scale_invariant_large_scores(self):
-        """Gap ratio works the same with large reranker scores."""
+        """Same shape at reranker scale (scores > 1.0) → same label."""
         engine = _make_engine()
+        # Same shape as HIGH test but at 1.5x scale
         results = [
-            _make_result(1.5),
-            _make_result(0.9),
-            _make_result(0.7),
-            _make_result(0.6),
-            _make_result(0.45),
+            _make_result(1.50),
+            _make_result(1.05),
+            _make_result(0.75),
+            _make_result(0.675),
+            _make_result(0.60),
+            _make_result(0.57),
+            _make_result(0.555),
+            _make_result(0.54),
+            _make_result(0.525),
+            _make_result(0.51),
         ]
         confidence, label, suggestion = engine._compute_confidence(results)
-        # gap_ratio = (1.5 - 0.45) / 1.5 = 0.70 → HIGH
-        assert confidence == pytest.approx(0.70, abs=0.01)
+        assert confidence == pytest.approx(1.556, abs=0.02)
         assert label == "high"
 
-    def test_fewer_than_5_results_uses_last(self):
-        """With fewer than 5 results, anchor is the last available score."""
+    def test_fewer_than_3_results_returns_low(self):
+        """With fewer than 3 results, Z-score not meaningful → LOW."""
         engine = _make_engine()
         results = [_make_result(1.0), _make_result(0.5)]
-        confidence, label, suggestion = engine._compute_confidence(results)
-        # gap_ratio = (1.0 - 0.5) / 1.0 = 0.50 → HIGH
-        assert confidence == pytest.approx(0.50, abs=0.01)
-        assert label == "high"
-
-    def test_single_result_uses_zero_anchor(self):
-        """Single result: anchor=0 → gap_ratio=1.0 → HIGH."""
-        engine = _make_engine()
-        results = [_make_result(0.90)]
-        confidence, label, suggestion = engine._compute_confidence(results)
-        assert confidence == pytest.approx(1.0, abs=0.01)
-        assert label == "high"
-        assert suggestion == SuggestionType.NONE
-
-    def test_zero_top_score_returns_low(self):
-        """Top score of 0 returns low confidence."""
-        engine = _make_engine()
-        results = [_make_result(0.0)]
         confidence, label, suggestion = engine._compute_confidence(results)
         assert confidence == 0.0
         assert label == "low"
         assert suggestion == SuggestionType.TRY_EXHAUSTIVE
+
+    def test_single_result_returns_low(self):
+        """Single result: too few for Z-score → LOW."""
+        engine = _make_engine()
+        results = [_make_result(0.90)]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == 0.0
+        assert label == "low"
+        assert suggestion == SuggestionType.TRY_EXHAUSTIVE
+
+    def test_zero_top_score_returns_low(self):
+        """Top score of 0 returns low confidence."""
+        engine = _make_engine()
+        results = [_make_result(0.0), _make_result(0.0), _make_result(0.0)]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == 0.0
+        assert label == "low"
+        assert suggestion == SuggestionType.TRY_EXHAUSTIVE
+
+    def test_all_same_scores_returns_low(self):
+        """All identical scores → all gaps = 0 → LOW."""
+        engine = _make_engine()
+        results = [_make_result(0.5)] * 10
+        confidence, label, suggestion = engine._compute_confidence(results)
+        assert confidence == 0.0
+        assert label == "low"
+        assert suggestion == SuggestionType.TRY_EXHAUSTIVE
+
+    def test_three_results_minimal(self):
+        """Three results: minimal but valid Z-score computation."""
+        engine = _make_engine()
+        # anchor_idx = 2, 2 gaps. signal = sum of both gaps = expected.
+        # Z depends on whether gaps differ from mean.
+        results = [_make_result(1.0), _make_result(0.5), _make_result(0.3)]
+        confidence, label, suggestion = engine._compute_confidence(results)
+        # Should produce a valid Z-score (not crash)
+        assert isinstance(confidence, float)
+        assert label in ("low", "medium", "high")
 
 
 class TestMaybeRerank:
@@ -269,14 +298,18 @@ class TestAutoEscalation:
     @pytest.mark.asyncio
     async def test_high_confidence_no_post_escalation(self):
         """High confidence CODE query does not trigger post-hoc grep escalation."""
-        # Peaky distribution: gap_ratio = (1.0 - 0.3) / 1.0 = 0.70 → HIGH
+        # Front-loaded decay: Z=1.56 → HIGH
         results = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
             _make_result(0.7, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.5, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.4, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.3, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.1, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.50, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.45, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.40, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.38, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.37, file_path="g.py", line_start=1, line_end=10),
+            _make_result(0.36, file_path="h.py", line_start=1, line_end=10),
+            _make_result(0.35, file_path="i.py", line_start=1, line_end=10),
+            _make_result(0.34, file_path="j.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="handle payment", intent=QueryIntent.CODE)
@@ -296,14 +329,18 @@ class TestAutoEscalation:
 
         CODE + TRY_KEYWORD escalates because grep helps with pattern matching.
         """
-        # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
+        # Gentle linear decay: Z=0.88 → MEDIUM
         results = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.9, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.85, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.8, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.75, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.7, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.92, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.86, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.80, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.74, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.68, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.62, file_path="g.py", line_start=1, line_end=10),
+            _make_result(0.56, file_path="h.py", line_start=1, line_end=10),
+            _make_result(0.50, file_path="i.py", line_start=1, line_end=10),
+            _make_result(0.44, file_path="j.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="webhook handling code")
@@ -317,14 +354,18 @@ class TestAutoEscalation:
     @pytest.mark.asyncio
     async def test_medium_confidence_location_triggers_post_hoc_grep(self):
         """LOCATION + medium confidence triggers post-hoc grep."""
-        # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
+        # Gentle linear decay: Z=0.88 → MEDIUM
         results = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.9, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.85, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.8, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.75, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.7, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.92, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.86, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.80, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.74, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.68, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.62, file_path="g.py", line_start=1, line_end=10),
+            _make_result(0.56, file_path="h.py", line_start=1, line_end=10),
+            _make_result(0.50, file_path="i.py", line_start=1, line_end=10),
+            _make_result(0.44, file_path="j.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="find the checkout handler", intent=QueryIntent.LOCATION)
@@ -338,14 +379,18 @@ class TestAutoEscalation:
     @pytest.mark.asyncio
     async def test_medium_confidence_docs_no_post_hoc_grep(self):
         """DOCS + medium confidence does NOT trigger grep (semantic matters more)."""
-        # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
+        # Gentle linear decay: Z=0.88 → MEDIUM
         results = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.9, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.85, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.8, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.75, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.7, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.92, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.86, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.80, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.74, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.68, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.62, file_path="g.py", line_start=1, line_end=10),
+            _make_result(0.56, file_path="h.py", line_start=1, line_end=10),
+            _make_result(0.50, file_path="i.py", line_start=1, line_end=10),
+            _make_result(0.44, file_path="j.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="how does auth work", intent=QueryIntent.DOCS)
@@ -360,14 +405,18 @@ class TestAutoEscalation:
     @pytest.mark.asyncio
     async def test_grep_results_appended_with_source_grep(self):
         """Merged grep results retain source='grep' after post-hoc escalation."""
-        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
+        # Flat top, steep tail: Z < 0.5 → LOW → triggers grep
         semantic = [
-            _make_result(0.50, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.49, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.48, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.47, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.45, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.44, file_path="f.py", line_start=1, line_end=10),
+            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.98, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.96, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.94, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.92, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.85, file_path="f.py", line_start=1, line_end=10),
+            _make_result(0.75, file_path="g.py", line_start=1, line_end=10),
+            _make_result(0.65, file_path="h.py", line_start=1, line_end=10),
+            _make_result(0.55, file_path="i.py", line_start=1, line_end=10),
+            _make_result(0.45, file_path="j.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=semantic)
         request = SearchRequest(query="webhook handler code")

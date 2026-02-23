@@ -56,20 +56,24 @@ class TestAutoEscalationPipeline:
     """Integration tests for the full auto-escalation pipeline.
 
     Auto-escalation is purely post-hoc, triggered by low confidence
-    (flat score distribution, gap_ratio < 0.20) on CODE/DOCS queries.
+    (flat top / steep tail Z-score < 0.5) on CODE/DOCS queries.
     """
 
     @pytest.mark.asyncio
     async def test_full_pipeline_low_confidence_post_hoc_grep(self):
         """Low-confidence CODE query triggers post-hoc grep, auto_escalated=True."""
-        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
+        # Flat top, steep tail: Z < 0.5 → LOW
         semantic_results = [
-            _make_result(score=0.50, file_path="a.py", line_start=1, line_end=10),
-            _make_result(score=0.49, file_path="b.py", line_start=1, line_end=10),
-            _make_result(score=0.48, file_path="c.py", line_start=1, line_end=10),
-            _make_result(score=0.47, file_path="d.py", line_start=1, line_end=10),
-            _make_result(score=0.45, file_path="e.py", line_start=1, line_end=10),
-            _make_result(score=0.44, file_path="f.py", line_start=1, line_end=10),
+            _make_result(score=1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.98, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.96, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.94, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.92, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.85, file_path="f.py", line_start=1, line_end=10),
+            _make_result(score=0.75, file_path="g.py", line_start=1, line_end=10),
+            _make_result(score=0.65, file_path="h.py", line_start=1, line_end=10),
+            _make_result(score=0.55, file_path="i.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="j.py", line_start=1, line_end=10),
         ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
@@ -109,8 +113,19 @@ class TestAutoEscalationPipeline:
     @pytest.mark.asyncio
     async def test_full_pipeline_no_escalation(self):
         """High-confidence CODE query does not trigger subprocess."""
-        # Peaky distribution: gap_ratio = (1.0 - 0.3) / 1.0 = 0.70 → HIGH
-        semantic_results = [_make_result(score=1.0 - i * 0.08) for i in range(10)]
+        # Front-loaded decay: big gaps at top, tiny in tail → Z=1.56 → HIGH
+        semantic_results = [
+            _make_result(score=1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.7, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.50, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.40, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.38, file_path="f.py", line_start=1, line_end=10),
+            _make_result(score=0.37, file_path="g.py", line_start=1, line_end=10),
+            _make_result(score=0.36, file_path="h.py", line_start=1, line_end=10),
+            _make_result(score=0.35, file_path="i.py", line_start=1, line_end=10),
+            _make_result(score=0.34, file_path="j.py", line_start=1, line_end=10),
+        ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
 
@@ -137,20 +152,24 @@ class TestAutoEscalationPipeline:
     @pytest.mark.asyncio
     async def test_deduplication_in_merge(self):
         """Grep results overlapping semantic results are deduplicated in merge."""
-        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
+        # Flat top, steep tail: Z < 0.5 → LOW
         semantic_results = [
             _make_result(
-                score=0.50,
+                score=1.0,
                 file_path="src/main.py",
                 line_start=5,
                 line_end=15,
                 function_name="process_order",
             ),
-            _make_result(score=0.49, file_path="a.py", line_start=1, line_end=10),
-            _make_result(score=0.48, file_path="b.py", line_start=1, line_end=10),
-            _make_result(score=0.47, file_path="c.py", line_start=1, line_end=10),
-            _make_result(score=0.45, file_path="d.py", line_start=1, line_end=10),
-            _make_result(score=0.44, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.98, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.96, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.94, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.92, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.85, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.75, file_path="f.py", line_start=1, line_end=10),
+            _make_result(score=0.65, file_path="g.py", line_start=1, line_end=10),
+            _make_result(score=0.55, file_path="h.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="i.py", line_start=1, line_end=10),
         ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)
@@ -187,14 +206,18 @@ class TestAutoEscalationPipeline:
     @pytest.mark.asyncio
     async def test_graceful_fallback_rg_not_available(self):
         """When rg is not installed, only semantic results are returned."""
-        # Flat distribution: gap_ratio = (0.50 - 0.45) / 0.50 = 0.10 → LOW
+        # Flat top, steep tail: Z < 0.5 → LOW
         semantic_results = [
-            _make_result(score=0.50, file_path="a.py", line_start=1, line_end=10),
-            _make_result(score=0.49, file_path="b.py", line_start=1, line_end=10),
-            _make_result(score=0.48, file_path="c.py", line_start=1, line_end=10),
-            _make_result(score=0.47, file_path="d.py", line_start=1, line_end=10),
-            _make_result(score=0.45, file_path="e.py", line_start=1, line_end=10),
-            _make_result(score=0.44, file_path="f.py", line_start=1, line_end=10),
+            _make_result(score=1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(score=0.98, file_path="b.py", line_start=1, line_end=10),
+            _make_result(score=0.96, file_path="c.py", line_start=1, line_end=10),
+            _make_result(score=0.94, file_path="d.py", line_start=1, line_end=10),
+            _make_result(score=0.92, file_path="e.py", line_start=1, line_end=10),
+            _make_result(score=0.85, file_path="f.py", line_start=1, line_end=10),
+            _make_result(score=0.75, file_path="g.py", line_start=1, line_end=10),
+            _make_result(score=0.65, file_path="h.py", line_start=1, line_end=10),
+            _make_result(score=0.55, file_path="i.py", line_start=1, line_end=10),
+            _make_result(score=0.45, file_path="j.py", line_start=1, line_end=10),
         ]
         hybrid = Mock()
         hybrid.search = AsyncMock(return_value=semantic_results)

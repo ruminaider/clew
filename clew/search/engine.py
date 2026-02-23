@@ -310,38 +310,67 @@ class SearchEngine:
         return results
 
     def _compute_confidence(self, results: list[SearchResult]) -> tuple[float, str, SuggestionType]:
-        """Compute confidence using score gap ratio (scale-invariant).
+        """Compute confidence using statistical self-calibration (Z-score).
 
-        gap_ratio = (top_score - anchor_score) / top_score
+        Measures whether the top result stands out statistically from the pack,
+        using the result set's own score distribution as the reference.
+        No fixed thresholds tied to score ranges — each query self-calibrates.
 
-        High ratio → clear winner → high confidence.
-        Low ratio → flat distribution → uncertain results → grep may help.
+        Method:
+        1. Compute consecutive score gaps between adjacent results
+        2. Calculate mean and std of these gaps
+        3. Measure "signal gap" = top score - anchor (5th result)
+        4. Z-score = (signal_gap - expected_gap) / (std_gap * sqrt(anchor_idx))
 
-        Portable across scoring regimes (reranked 0-2, RRF 0.001-0.3)
-        because the metric is relative, not absolute.
+        High Z (>= 1.0) → top result stands out → high confidence
+        Medium Z (>= 0.0) → moderate separation → grep might help
+        Low Z (< 0.0) → flat distribution → grep likely helps
         """
-        if not results:
+        if not results or len(results) < 3:
             return 0.0, "low", SuggestionType.TRY_EXHAUSTIVE
 
         top = results[0].score
         if top <= 0:
             return 0.0, "low", SuggestionType.TRY_EXHAUSTIVE
 
-        # Anchor: 5th result score, or last available if fewer results
+        scores = [r.score for r in results[: min(10, len(results))]]
+
+        # Compute consecutive gaps between results
+        gaps = [scores[i] - scores[i + 1] for i in range(len(scores) - 1)]
+
+        if not gaps or all(g == 0 for g in gaps):
+            return 0.0, "low", SuggestionType.TRY_EXHAUSTIVE
+
+        mean_gap = sum(gaps) / len(gaps)
+        variance = sum((g - mean_gap) ** 2 for g in gaps) / len(gaps)
+        std_gap = variance**0.5
+
+        # The "signal" gap: top result vs anchor (5th result)
         anchor_idx = min(4, len(results) - 1)
-        anchor = results[anchor_idx].score if anchor_idx > 0 else 0.0
+        signal_gap = top - results[anchor_idx].score
 
-        gap_ratio = (top - anchor) / top
+        # Expected gap over anchor_idx positions
+        expected_gap = mean_gap * anchor_idx
 
-        high_t = self._config.gap_ratio_high_threshold
-        med_t = self._config.gap_ratio_medium_threshold
-
-        if gap_ratio >= high_t:
-            return gap_ratio, "high", SuggestionType.NONE
-        elif gap_ratio >= med_t:
-            return gap_ratio, "medium", SuggestionType.TRY_KEYWORD
+        if std_gap > 1e-9:
+            z_score = (signal_gap - expected_gap) / (std_gap * (anchor_idx**0.5))
         else:
-            return gap_ratio, "low", SuggestionType.TRY_EXHAUSTIVE
+            # All gaps identical — uniform distribution means no standout result.
+            # Return negative Z (low confidence) unless signal genuinely exceeds expected.
+            z_score = -1.0 if signal_gap <= expected_gap + 1e-9 else 2.0
+
+        # Z-score thresholds grounded in statistical meaning:
+        # 1.5 = "1.5 standard deviations above expected" — strong standout
+        # 0.5 = "0.5 standard deviations above expected" — mild standout
+        high_t = self._config.z_score_high_threshold
+        med_t = self._config.z_score_medium_threshold
+
+        if z_score >= high_t:
+            return z_score, "high", SuggestionType.NONE
+        elif z_score >= med_t:
+            return z_score, "medium", SuggestionType.TRY_KEYWORD
+        else:
+            return z_score, "low", SuggestionType.TRY_EXHAUSTIVE
 
     def _maybe_rerank(
         self,
