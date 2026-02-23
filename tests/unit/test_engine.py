@@ -291,11 +291,10 @@ class TestAutoEscalation:
         assert response.auto_escalated is False
 
     @pytest.mark.asyncio
-    async def test_medium_confidence_code_no_post_hoc_grep(self):
-        """Medium confidence CODE query does NOT trigger post-hoc grep.
+    async def test_medium_confidence_code_triggers_post_hoc_grep(self):
+        """Medium confidence CODE query triggers post-hoc grep.
 
-        Only TRY_EXHAUSTIVE (low confidence) triggers grep.
-        Medium confidence (TRY_KEYWORD) is good enough.
+        CODE + TRY_KEYWORD escalates because grep helps with pattern matching.
         """
         # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
         results = [
@@ -311,14 +310,13 @@ class TestAutoEscalation:
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
             mock_grep.return_value = []
-            response = await engine.search(request)
+            await engine.search(request)
 
-        mock_grep.assert_not_awaited()
-        assert response.auto_escalated is False
+        mock_grep.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_medium_confidence_location_no_post_hoc_grep(self):
-        """LOCATION intent never triggers post-hoc grep regardless of confidence."""
+    async def test_medium_confidence_location_triggers_post_hoc_grep(self):
+        """LOCATION + medium confidence triggers post-hoc grep."""
         # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
         results = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
@@ -330,6 +328,27 @@ class TestAutoEscalation:
         ]
         engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="find the checkout handler", intent=QueryIntent.LOCATION)
+
+        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
+            mock_grep.return_value = []
+            await engine.search(request)
+
+        mock_grep.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_medium_confidence_docs_no_post_hoc_grep(self):
+        """DOCS + medium confidence does NOT trigger grep (semantic matters more)."""
+        # Moderate spread: gap_ratio = (1.0 - 0.75) / 1.0 = 0.25 → MEDIUM
+        results = [
+            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.9, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.85, file_path="c.py", line_start=1, line_end=10),
+            _make_result(0.8, file_path="d.py", line_start=1, line_end=10),
+            _make_result(0.75, file_path="e.py", line_start=1, line_end=10),
+            _make_result(0.7, file_path="f.py", line_start=1, line_end=10),
+        ]
+        engine = _make_engine_with_grep(semantic_results=results)
+        request = SearchRequest(query="how does auth work", intent=QueryIntent.DOCS)
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
             mock_grep.return_value = []
@@ -399,7 +418,13 @@ class TestAutoEscalation:
 
 
 class TestShouldPostHocGrep:
-    """Test _should_post_hoc_grep decision logic (V4.1)."""
+    """Test _should_post_hoc_grep decision logic (V4.3).
+
+    Low confidence (TRY_EXHAUSTIVE): always escalate.
+    Medium confidence (TRY_KEYWORD): escalate for CODE and LOCATION only.
+    High confidence (NONE): never escalate.
+    DEBUG intent: never escalate regardless of confidence.
+    """
 
     def test_low_confidence_code_triggers(self):
         engine = _make_engine_with_grep()
@@ -408,12 +433,11 @@ class TestShouldPostHocGrep:
             is True
         )
 
-    def test_medium_confidence_code_no_trigger(self):
-        """V4.2: TRY_KEYWORD (medium) no longer triggers grep escalation."""
+    def test_medium_confidence_code_triggers(self):
+        """CODE + TRY_KEYWORD triggers grep (grep helps with pattern matching)."""
         engine = _make_engine_with_grep()
         assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.CODE, None)
-            is False
+            engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.CODE, None) is True
         )
 
     def test_high_confidence_no_trigger(self):
@@ -428,12 +452,12 @@ class TestShouldPostHocGrep:
             is True
         )
 
-    def test_location_medium_confidence_no_trigger(self):
-        """LOCATION with MEDIUM confidence does not escalate."""
+    def test_location_medium_confidence_triggers(self):
+        """LOCATION + TRY_KEYWORD triggers grep (grep helps find files exhaustively)."""
         engine = _make_engine_with_grep()
         assert (
             engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.LOCATION, None)
-            is False
+            is True
         )
 
     def test_debug_intent_excluded(self):
@@ -444,7 +468,7 @@ class TestShouldPostHocGrep:
         )
 
     def test_docs_intent_low_triggers(self):
-        """V4.2: DOCS with TRY_EXHAUSTIVE still triggers grep."""
+        """DOCS with TRY_EXHAUSTIVE still triggers grep."""
         engine = _make_engine_with_grep()
         assert (
             engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.DOCS, None)
@@ -452,7 +476,7 @@ class TestShouldPostHocGrep:
         )
 
     def test_docs_intent_medium_no_trigger(self):
-        """V4.2: DOCS with TRY_KEYWORD no longer triggers grep."""
+        """DOCS + TRY_KEYWORD does NOT trigger grep (semantic context matters more)."""
         engine = _make_engine_with_grep()
         assert (
             engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.DOCS, None)

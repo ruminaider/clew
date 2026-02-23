@@ -165,9 +165,11 @@ class SearchEngine:
     ) -> bool:
         """Determine if post-hoc grep should run after seeing search results.
 
-        Triggers on low confidence (TRY_EXHAUSTIVE) only — medium confidence
-        results are good enough. DEBUG intent is excluded because debug queries
-        need semantic context, not exhaustive pattern matches.
+        Low confidence (TRY_EXHAUSTIVE): always escalate — results are poor.
+        Medium confidence (TRY_KEYWORD): escalate only for LOCATION and CODE
+        intents where grep adds value via exhaustive file/pattern finding.
+        DOCS queries don't benefit from grep (semantic context matters more).
+        DEBUG intent is excluded entirely (needs semantic context, not patterns).
         """
         if self._project_root is None:
             return False
@@ -177,7 +179,15 @@ class SearchEngine:
             return False
         if intent == QueryIntent.DEBUG:
             return False
-        return suggestion_type == SuggestionType.TRY_EXHAUSTIVE
+
+        if suggestion_type == SuggestionType.TRY_EXHAUSTIVE:
+            return True
+
+        if suggestion_type == SuggestionType.TRY_KEYWORD:
+            # Medium confidence: only escalate for intents where grep adds value
+            return intent in (QueryIntent.LOCATION, QueryIntent.CODE)
+
+        return False
 
     async def _run_grep_async(self, query: str, intent: QueryIntent) -> list[SearchResult]:
         """Run grep search and return results as SearchResult objects.
