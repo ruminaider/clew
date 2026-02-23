@@ -380,44 +380,23 @@ class TestSearchTool:
 
     @patch("clew.mcp_server._get_components")
     async def test_search_response_no_verbose_metadata_in_output(self, mock_get):
-        """V4.1: MCP output includes confidence_label but not suggestion or related_files."""
+        """MCP output excludes response-level metadata (0% agent read rate)."""
         from clew.search.models import SuggestionType
 
         components = _mock_components()
         mock_get.return_value = components
         components.search_engine.search.return_value = _mock_search_response(
-            suggestion_type=SuggestionType.TRY_EXHAUSTIVE
-        )
-
-        output = await search("hello")
-        assert "suggestion" not in output
-        assert "confidence_label" in output
-        assert "related_files" not in output
-
-    @patch("clew.mcp_server._get_components")
-    async def test_search_response_includes_mode_when_escalated(self, mock_get):
-        """V4.1: mode_used and auto_escalated appear when non-default."""
-        components = _mock_components()
-        mock_get.return_value = components
-        components.search_engine.search.return_value = _mock_search_response(
+            suggestion_type=SuggestionType.TRY_EXHAUSTIVE,
             mode_used="exhaustive",
             auto_escalated=True,
         )
 
-        output = await search("find all url routes")
-        assert output["mode_used"] == "exhaustive"
-        assert output["auto_escalated"] is True
-
-    @patch("clew.mcp_server._get_components")
-    async def test_search_response_omits_mode_when_default(self, mock_get):
-        """V4.1: mode_used and auto_escalated omitted when semantic/false."""
-        components = _mock_components()
-        mock_get.return_value = components
-        components.search_engine.search.return_value = _mock_search_response()
-
         output = await search("hello")
+        assert "suggestion" not in output
+        assert "confidence_label" not in output
         assert "mode_used" not in output
         assert "auto_escalated" not in output
+        assert "related_files" not in output
 
 
 class TestGetContextTool:
