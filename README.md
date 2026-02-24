@@ -1,8 +1,8 @@
 # clew
 
-Semantic code search with hybrid retrieval and MCP integration for Claude Code.
+Semantic code discovery for AI agents -- find code by meaning, not just name.
 
-Ask natural language questions about your codebase — clewdex indexes your code with AST-aware chunking, embeds it with [Voyage AI](https://www.voyageai.com/), stores it in [Qdrant](https://qdrant.tech/), and serves results through both a CLI and an [MCP](https://modelcontextprotocol.io/) server that Claude Code can call directly.
+Ask natural language questions about your codebase -- clewdex indexes your code with AST-aware chunking, embeds it with [Voyage AI](https://www.voyageai.com/), stores it in [Qdrant](https://qdrant.tech/), and serves results through both a CLI and an [MCP](https://modelcontextprotocol.io/) server that Claude Code can call directly.
 
 ## Quick start
 
@@ -41,15 +41,59 @@ clew index /path/to/your/project --full
 clew search "how do we handle authentication"
 ```
 
+## When to use clew vs grep
+
+Clew and grep are complementary tools that handle different types of code discovery:
+
+**Use clew when you:**
+- Need to find code by concept, not by identifier name ("where is error handling for the pharmacy API")
+- Are exploring an unfamiliar codebase and don't know what to search for
+- Want to trace structural relationships (call chains, inheritance, imports)
+- Need vocabulary bridging -- business language to code identifiers
+- Want to understand how a feature is implemented across multiple files
+
+**Use grep when you:**
+- Know the exact pattern you're looking for (`raise ValidationError`, `@celery_app.task`)
+- Need exhaustive enumeration -- every instance of a pattern, guaranteed complete
+- Are matching literal text in comments, strings, or config files
+- Need structural completeness (grep finds things in places BM25 cannot reach)
+
+**Use both (via agent skills) when you:**
+- Need to discover a concept AND find all its instances
+- Are debugging and need both semantic context and exact pattern locations
+- Want to verify that clew found everything relevant
+
 ## Features
 
-- **Hybrid search** — Dense embeddings (Voyage voyage-code-3) + BM25 keyword matching fused with Reciprocal Rank Fusion, optionally re-ranked with Voyage rerank-2.5
-- **AST-aware chunking** — tree-sitter parses Python, TypeScript, and JavaScript into semantic units (functions, classes, components) with token-aware fallback splitting
-- **Code relationship tracing** — Extracts imports, calls, inheritance, decorators, JSX renders, test mappings, and API boundaries; traversable via BFS graph queries
-- **Incremental indexing** — Git-aware change detection (with file-hash fallback) so re-indexing only touches what changed
-- **NL descriptions** — LLM-generated descriptions for undocumented code, prepended before embedding to improve search quality
-- **Compact MCP responses** — ~20x token reduction by default; returns signatures + docstring previews instead of full source
-- **Multi-collection** — Separate `code` and `docs` collections with intent-driven routing
+- **Hybrid search** -- Dense embeddings (Voyage voyage-code-3) + BM25 keyword matching fused with Reciprocal Rank Fusion, optionally re-ranked with Voyage rerank-2.5
+- **Multi-vector architecture** -- Three named vectors (signature, semantic, body) with intent-adaptive routing for precise retrieval
+- **AST-aware chunking** -- tree-sitter parses Python, TypeScript, and JavaScript into semantic units (functions, classes, components) with token-aware fallback splitting
+- **Code relationship tracing** -- Extracts imports, calls, inheritance, decorators, JSX renders, test mappings, and API boundaries; traversable via BFS graph queries
+- **Incremental indexing** -- Git-aware change detection (with file-hash fallback) so re-indexing only touches what changed
+- **NL descriptions** -- LLM-generated descriptions for undocumented code, prepended before embedding to improve search quality
+- **Compact MCP responses** -- ~20x token reduction by default; returns signatures + docstring previews instead of full source
+- **Multi-collection** -- Separate `code` and `docs` collections with intent-driven routing
+- **Confidence self-assessment** -- Z-score based confidence scoring included in results as informational metadata
+- **Explicit exhaustive mode** -- `--mode exhaustive` runs grep alongside semantic search for completeness when needed
+
+## Competitive comparison
+
+| Capability | clew | grepai | CodeSight | CodeGrok | Cursor |
+|---|---|---|---|---|---|
+| Multi-vector search (3 vectors) | Yes | No | No | No | No |
+| BM25 hybrid + RRF fusion | Yes | No | Yes | No | No |
+| Reranking (calibrated scores) | Yes | No | No | No | ? |
+| Intent-adaptive routing | Yes | No | No | No | No |
+| Relationship graph + trace | 7 types | 2 types | No | No | No |
+| NL descriptions for code | Yes | No | No | No | No |
+| Confidence self-assessment | Yes | No | No | No | No |
+| MCP server | 5 tools | 3 tools | Yes | 4 tools | N/A |
+| Agent skills / cookbooks | Yes | No | No | No | N/A |
+| Compact responses (token-aware) | 20x | Yes | ? | Yes | N/A |
+| Fully offline | Yes* | Yes | Yes | Yes | N/A |
+| Open source | Yes | Yes | Yes | Yes | No |
+
+\* Requires Voyage AI API for embeddings and reranking. Qdrant runs locally.
 
 ## CLI usage
 
@@ -58,7 +102,7 @@ clew search "how do we handle authentication"
 Index a codebase for search.
 
 ```bash
-# Incremental — only re-index changed files
+# Incremental -- only re-index changed files
 clew index /path/to/project
 
 # Full reindex
@@ -78,6 +122,9 @@ Search the indexed codebase.
 ```bash
 # Natural language query
 clew search "where is the rate limiter configured"
+
+# Explicit exhaustive mode -- runs grep alongside semantic search
+clew search "all error handlers" --mode exhaustive
 
 # Filter by language
 clew search "database models" --language python
@@ -155,12 +202,13 @@ Semantic search over the indexed codebase.
 
 ```
 search(query, limit=5, collection="code", active_file=None,
-       intent=None, filters=None, detail="compact")
+       intent=None, filters=None, detail="compact", mode=None)
 ```
 
-- `detail="compact"` (default) — returns signature + docstring snippet
-- `detail="full"` — returns complete source content
-- `filters` — metadata filters: `language`, `chunk_type`, `app_name`, `layer`, `is_test`
+- `detail="compact"` (default) -- returns signature + docstring snippet
+- `detail="full"` -- returns complete source content
+- `mode="exhaustive"` -- runs grep alongside semantic search for completeness
+- `filters` -- metadata filters: `language`, `chunk_type`, `app_name`, `layer`, `is_test`
 
 #### `get_context`
 
@@ -200,12 +248,12 @@ index_status(action="status", project_root=None)
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `VOYAGE_API_KEY` | Yes | — | Voyage AI API key for embeddings and re-ranking |
+| `VOYAGE_API_KEY` | Yes | -- | Voyage AI API key for embeddings and re-ranking |
 | `QDRANT_URL` | No | `http://localhost:6333` | Qdrant server endpoint |
-| `QDRANT_API_KEY` | No | — | Qdrant API key (if auth is enabled) |
+| `QDRANT_API_KEY` | No | -- | Qdrant API key (if auth is enabled) |
 | `CLEW_CACHE_DIR` | No | Auto-detected from git root | SQLite cache directory (`.clew/`) |
 | `CLEW_LOG_LEVEL` | No | `INFO` | Logging verbosity |
-| `ANTHROPIC_API_KEY` | No | — | Required for NL description generation |
+| `ANTHROPIC_API_KEY` | No | -- | Required for NL description generation |
 
 The cache directory resolves in order: `CLEW_CACHE_DIR` env var, then `{git_root}/.clew/`, then `.clew/` relative to the working directory. This ensures the MCP server and CLI share the same cache.
 
@@ -240,46 +288,49 @@ terminology_file: indexer/terminology.yaml
 ## Architecture
 
 ```
-                    ┌──────────────┐
-                    │ Claude Code  │
-                    │ (MCP client) │
-                    └──────┬───────┘
-                           │ stdio
-                    ┌──────▼───────┐
-                    │  MCP Server  │  search, get_context, explain, trace, index_status
-                    └──────┬───────┘
-                           │
-              ┌────────────▼────────────┐
-              │     Search Pipeline     │
-              │  enhance → classify →   │
-              │  hybrid search → rerank │
-              └────────────┬────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │    Qdrant Collections   │
-              │  code: py/ts/tsx/js/jsx │
-              │  docs: markdown         │
-              └────────────┬────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │   Indexing Pipeline     │
-              │  discover → chunk →     │
-              │  enrich → embed →       │
-              │  upsert + relationships │
-              └────────────┬────────────┘
-                           │
-        ┌──────────┬───────┼───────┬──────────┐
-        ▼          ▼       ▼       ▼          ▼
+                    +==============+
+                    | Claude Code  |
+                    | (MCP client) |
+                    +------+-------+
+                           | stdio
+                    +------v-------+
+                    |  MCP Server  |  search, get_context, explain, trace, index_status
+                    +------+-------+
+                           |
+              +------------v------------+
+              |     Search Pipeline     |
+              |  enhance -> classify -> |
+              |  hybrid search -> rerank|
+              +------------+------------+
+                           |
+              +------------v------------+
+              |    Qdrant Collections   |
+              |  code: py/ts/tsx/js/jsx |
+              |  docs: markdown         |
+              +------------+------------+
+                           |
+              +------------v------------+
+              |   Indexing Pipeline     |
+              |  discover -> chunk ->   |
+              |  enrich -> embed ->     |
+              |  upsert + relationships |
+              +------------+------------+
+                           |
+        +----------+-------+-------+----------+
+        v          v       v       v          v
    tree-sitter  Voyage   SQLite   git     Anthropic
    (AST parse)  (embed)  (cache)  (diff)  (NL desc)
 ```
 
 ### Search pipeline
 
-1. **Query enhancement** — Terminology expansion via YAML (abbreviations, synonyms)
-2. **Intent classification** — Heuristic routing: `CODE`, `DOCS`, `DEBUG`, `LOCATION`
-3. **Hybrid search** — Dense + BM25 multi-prefetch with structural boosting (same-module, test files for debug intent)
-4. **Re-ranking** — Voyage rerank-2.5 for final ordering
+1. **Query enhancement** -- Terminology expansion via YAML (abbreviations, synonyms)
+2. **Intent classification** -- Heuristic routing: `CODE`, `DOCS`, `DEBUG`, `LOCATION`
+3. **Hybrid search** -- Dense + BM25 multi-prefetch with structural boosting (same-module, test files for debug intent)
+4. **Re-ranking** -- Voyage rerank-2.5 for final ordering
+5. **Confidence assessment** -- Z-score based, informational only (included in result metadata)
+
+When `--mode exhaustive` is specified, grep runs in parallel with the semantic pipeline and results are merged and deduplicated before returning.
 
 ### Chunking strategy
 
@@ -290,9 +341,9 @@ terminology_file: indexer/terminology.yaml
 | `tasks.py` | Function with decorators | 1,000 - 2,000 |
 | `*.tsx`, `*.jsx` | Component boundaries | 1,500 - 3,000 |
 | `*.md` | Section-level by headers | 1,000 - 2,000 |
-| Migrations | Skipped | — |
+| Migrations | Skipped | -- |
 
-Fallback chain: tree-sitter AST → token-recursive splitting → line-based splitting.
+Fallback chain: tree-sitter AST -> token-recursive splitting -> line-based splitting.
 
 ## Development
 
@@ -329,19 +380,19 @@ mypy clew/              # Type check (strict mode)
 
 ```
 clew/
-├── chunker/             # AST parsing, language strategies, token counting
-├── clients/             # External service wrappers (Voyage, Qdrant, Anthropic)
-├── indexer/             # Pipeline, caching, change detection, relationship extraction
-│   └── extractors/      # Pluggable per-language relationship extractors
-├── search/              # Engine, hybrid retrieval, intent classification, re-ranking
-├── cli.py               # Typer CLI
-├── mcp_server.py        # FastMCP server (5 tools)
-├── config.py            # Environment variable loading
-├── factory.py           # Component wiring (no global state)
-├── models.py            # Pydantic v2 config models
-├── exceptions.py        # Error hierarchy with fix hints
-├── discovery.py         # File discovery with ignore patterns and safety checks
-└── safety.py            # File size, chunk count, collection limits
++-- chunker/             # AST parsing, language strategies, token counting
++-- clients/             # External service wrappers (Voyage, Qdrant, Anthropic)
++-- indexer/             # Pipeline, caching, change detection, relationship extraction
+|   +-- extractors/      # Pluggable per-language relationship extractors
++-- search/              # Engine, hybrid retrieval, intent classification, re-ranking
++-- cli.py               # Typer CLI
++-- mcp_server.py        # FastMCP server (5 tools)
++-- config.py            # Environment variable loading
++-- factory.py           # Component wiring (no global state)
++-- models.py            # Pydantic v2 config models
++-- exceptions.py        # Error hierarchy with fix hints
++-- discovery.py         # File discovery with ignore patterns and safety checks
++-- safety.py            # File size, chunk count, collection limits
 ```
 
 ## Troubleshooting
