@@ -78,8 +78,8 @@ class SearchConfig(BaseModel):
     enumeration_limit: int = Field(default=200, ge=10, le=1000)
     grep_max_count: int = Field(default=500, ge=10, le=5000)
     grep_response_cap: int = Field(default=100, ge=10, le=500)
-    auto_escalation_enabled: bool = Field(default=True)
-    auto_escalation_timeout: float = Field(default=5.0, ge=1.0, le=30.0)
+    grep_timeout: float = Field(default=5.0, ge=1.0, le=30.0)
+    telemetry_enabled: bool = Field(default=True)
 
 
 class ProjectConfig(BaseModel):
