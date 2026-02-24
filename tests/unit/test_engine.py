@@ -279,14 +279,14 @@ def _make_engine_with_grep(
     )
 
 
-class TestAutoEscalation:
-    """Test autonomous grep escalation behavior."""
+class TestExplicitExhaustiveMode:
+    """Test explicit exhaustive mode (V5: no autonomous escalation)."""
 
     @pytest.mark.asyncio
-    async def test_no_project_root_no_escalation(self):
-        """project_root=None never runs grep."""
+    async def test_no_project_root_no_grep(self):
+        """project_root=None never runs grep even in explicit mode."""
         engine = _make_engine_with_grep(project_root=None)
-        request = SearchRequest(query="webhook handler code")
+        request = SearchRequest(query="webhook handler code", mode="exhaustive")
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
             mock_grep.return_value = []
@@ -296,9 +296,8 @@ class TestAutoEscalation:
         assert response.auto_escalated is False
 
     @pytest.mark.asyncio
-    async def test_high_confidence_no_post_escalation(self):
-        """High confidence CODE query does not trigger post-hoc grep escalation."""
-        # Front-loaded decay: Z=1.56 → HIGH
+    async def test_explicit_exhaustive_runs_grep(self):
+        """mode='exhaustive' triggers grep regardless of confidence."""
         results = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
             _make_result(0.7, file_path="b.py", line_start=1, line_end=10),
@@ -312,101 +311,20 @@ class TestAutoEscalation:
             _make_result(0.34, file_path="j.py", line_start=1, line_end=10),
         ]
         engine = _make_engine_with_grep(semantic_results=results)
-        request = SearchRequest(query="handle payment", intent=QueryIntent.CODE)
+        request = SearchRequest(query="handle payment", mode="exhaustive")
 
         with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
             mock_grep.return_value = []
             response = await engine.search(request)
 
-        # CODE intent should not trigger proactive grep, and high confidence
-        # should not trigger post-hoc escalation
-        mock_grep.assert_not_awaited()
-        assert response.auto_escalated is False
-
-    @pytest.mark.asyncio
-    async def test_medium_confidence_code_triggers_post_hoc_grep(self):
-        """Medium confidence CODE query triggers post-hoc grep.
-
-        CODE + TRY_KEYWORD escalates because grep helps with pattern matching.
-        """
-        # Gentle linear decay: Z=0.88 → MEDIUM
-        results = [
-            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.92, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.86, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.80, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.74, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.68, file_path="f.py", line_start=1, line_end=10),
-            _make_result(0.62, file_path="g.py", line_start=1, line_end=10),
-            _make_result(0.56, file_path="h.py", line_start=1, line_end=10),
-            _make_result(0.50, file_path="i.py", line_start=1, line_end=10),
-            _make_result(0.44, file_path="j.py", line_start=1, line_end=10),
-        ]
-        engine = _make_engine_with_grep(semantic_results=results)
-        request = SearchRequest(query="webhook handling code")
-
-        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = []
-            await engine.search(request)
-
         mock_grep.assert_awaited_once()
+        assert response.mode_used == "exhaustive"
 
     @pytest.mark.asyncio
-    async def test_medium_confidence_location_triggers_post_hoc_grep(self):
-        """LOCATION + medium confidence triggers post-hoc grep."""
-        # Gentle linear decay: Z=0.88 → MEDIUM
+    async def test_default_mode_no_grep(self):
+        """Default mode (None) never triggers grep regardless of confidence."""
+        # Low confidence results — in V4 this would have triggered autonomous grep
         results = [
-            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.92, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.86, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.80, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.74, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.68, file_path="f.py", line_start=1, line_end=10),
-            _make_result(0.62, file_path="g.py", line_start=1, line_end=10),
-            _make_result(0.56, file_path="h.py", line_start=1, line_end=10),
-            _make_result(0.50, file_path="i.py", line_start=1, line_end=10),
-            _make_result(0.44, file_path="j.py", line_start=1, line_end=10),
-        ]
-        engine = _make_engine_with_grep(semantic_results=results)
-        request = SearchRequest(query="find the checkout handler", intent=QueryIntent.LOCATION)
-
-        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = []
-            await engine.search(request)
-
-        mock_grep.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_medium_confidence_docs_no_post_hoc_grep(self):
-        """DOCS + medium confidence does NOT trigger grep (semantic matters more)."""
-        # Gentle linear decay: Z=0.88 → MEDIUM
-        results = [
-            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
-            _make_result(0.92, file_path="b.py", line_start=1, line_end=10),
-            _make_result(0.86, file_path="c.py", line_start=1, line_end=10),
-            _make_result(0.80, file_path="d.py", line_start=1, line_end=10),
-            _make_result(0.74, file_path="e.py", line_start=1, line_end=10),
-            _make_result(0.68, file_path="f.py", line_start=1, line_end=10),
-            _make_result(0.62, file_path="g.py", line_start=1, line_end=10),
-            _make_result(0.56, file_path="h.py", line_start=1, line_end=10),
-            _make_result(0.50, file_path="i.py", line_start=1, line_end=10),
-            _make_result(0.44, file_path="j.py", line_start=1, line_end=10),
-        ]
-        engine = _make_engine_with_grep(semantic_results=results)
-        request = SearchRequest(query="how does auth work", intent=QueryIntent.DOCS)
-
-        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
-            mock_grep.return_value = []
-            response = await engine.search(request)
-
-        mock_grep.assert_not_awaited()
-        assert response.auto_escalated is False
-
-    @pytest.mark.asyncio
-    async def test_grep_results_appended_with_source_grep(self):
-        """Merged grep results retain source='grep' after post-hoc escalation."""
-        # Flat top, steep tail: Z < 0.5 → LOW → triggers grep
-        semantic = [
             _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
             _make_result(0.98, file_path="b.py", line_start=1, line_end=10),
             _make_result(0.96, file_path="c.py", line_start=1, line_end=10),
@@ -418,8 +336,27 @@ class TestAutoEscalation:
             _make_result(0.55, file_path="i.py", line_start=1, line_end=10),
             _make_result(0.45, file_path="j.py", line_start=1, line_end=10),
         ]
-        engine = _make_engine_with_grep(semantic_results=semantic)
+        engine = _make_engine_with_grep(semantic_results=results)
         request = SearchRequest(query="webhook handler code")
+
+        with patch("clew.search.engine.SearchEngine._run_grep_async") as mock_grep:
+            mock_grep.return_value = []
+            response = await engine.search(request)
+
+        mock_grep.assert_not_awaited()
+        assert response.auto_escalated is False
+        assert response.mode_used == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_grep_results_merged_in_explicit_mode(self):
+        """Explicit exhaustive merges grep results with semantic."""
+        semantic = [
+            _make_result(1.0, file_path="a.py", line_start=1, line_end=10),
+            _make_result(0.7, file_path="b.py", line_start=1, line_end=10),
+            _make_result(0.50, file_path="c.py", line_start=1, line_end=10),
+        ]
+        engine = _make_engine_with_grep(semantic_results=semantic)
+        request = SearchRequest(query="webhook handler", mode="exhaustive")
 
         grep_hit = SearchResult(
             content="path('/api/', views.api)",
@@ -434,7 +371,6 @@ class TestAutoEscalation:
             mock_grep.return_value = [grep_hit]
             response = await engine.search(request)
 
-        # Should have semantic + grep results
         sources = {r.source for r in response.results}
         assert "grep" in sources
         assert "semantic" in sources
@@ -464,97 +400,6 @@ class TestAutoEscalation:
 
         assert len(response.results) >= 1
         assert response.results[0].context == ""
-
-
-class TestShouldPostHocGrep:
-    """Test _should_post_hoc_grep decision logic (V4.3).
-
-    Low confidence (TRY_EXHAUSTIVE): always escalate.
-    Medium confidence (TRY_KEYWORD): escalate for CODE and LOCATION only.
-    High confidence (NONE): never escalate.
-    DEBUG intent: never escalate regardless of confidence.
-    """
-
-    def test_low_confidence_code_triggers(self):
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.CODE, None)
-            is True
-        )
-
-    def test_medium_confidence_code_triggers(self):
-        """CODE + TRY_KEYWORD triggers grep (grep helps with pattern matching)."""
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.CODE, None) is True
-        )
-
-    def test_high_confidence_no_trigger(self):
-        engine = _make_engine_with_grep()
-        assert engine._should_post_hoc_grep(SuggestionType.NONE, QueryIntent.CODE, None) is False
-
-    def test_location_low_confidence_triggers(self):
-        """LOCATION with LOW confidence escalates (enumeration queries route here)."""
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.LOCATION, None)
-            is True
-        )
-
-    def test_location_medium_confidence_triggers(self):
-        """LOCATION + TRY_KEYWORD triggers grep (grep helps find files exhaustively)."""
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.LOCATION, None)
-            is True
-        )
-
-    def test_debug_intent_excluded(self):
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.DEBUG, None)
-            is False
-        )
-
-    def test_docs_intent_low_triggers(self):
-        """DOCS with TRY_EXHAUSTIVE still triggers grep."""
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.DOCS, None)
-            is True
-        )
-
-    def test_docs_intent_medium_no_trigger(self):
-        """DOCS + TRY_KEYWORD does NOT trigger grep (semantic context matters more)."""
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_KEYWORD, QueryIntent.DOCS, None)
-            is False
-        )
-
-    def test_explicit_mode_blocks(self):
-        engine = _make_engine_with_grep()
-        assert (
-            engine._should_post_hoc_grep(
-                SuggestionType.TRY_EXHAUSTIVE, QueryIntent.CODE, "semantic"
-            )
-            is False
-        )
-
-    def test_no_project_root_blocks(self):
-        engine = _make_engine_with_grep(project_root=None)
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.CODE, None)
-            is False
-        )
-
-    def test_auto_escalation_disabled_blocks(self):
-        config = SearchConfig(auto_escalation_enabled=False)
-        engine = _make_engine_with_grep(config=config)
-        assert (
-            engine._should_post_hoc_grep(SuggestionType.TRY_EXHAUSTIVE, QueryIntent.CODE, None)
-            is False
-        )
 
 
 class TestMergeGrepResults:
