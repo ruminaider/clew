@@ -18,6 +18,7 @@ from clew.search.enhance import QueryEnhancer
 from clew.search.enrichment import CacheResultEnricher
 from clew.search.hybrid import HybridSearchEngine
 from clew.search.rerank import RerankProvider
+from clew.search.telemetry import QueryTelemetry
 
 if TYPE_CHECKING:
     from clew.clients.base import EmbeddingProvider
@@ -112,6 +113,11 @@ def create_components(
     # Result enricher (needs project_root to relativize paths)
     enricher = CacheResultEnricher(cache, project_root=resolved_root)
 
+    # Telemetry (optional, respects config)
+    telemetry: QueryTelemetry | None = None
+    if config.search.telemetry_enabled:
+        telemetry = QueryTelemetry(cache_dir=env.CACHE_DIR, enabled=True)
+
     search_engine = SearchEngine(
         hybrid_engine=hybrid,
         reranker=reranker,
@@ -119,6 +125,7 @@ def create_components(
         search_config=config.search,
         project_root=resolved_root,
         enricher=enricher,
+        telemetry=telemetry,
     )
 
     # NL Description provider (optional)
