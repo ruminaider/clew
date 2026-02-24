@@ -469,6 +469,38 @@ def reembed(
 
 
 @app.command()
+def doctor(
+    project_root: Path | None = typer.Option(
+        None, "--project-root", "-p", help="Project root directory (for cache dir resolution)"
+    ),
+) -> None:
+    """Check the health of all clew dependencies."""
+    from clew.doctor import run_doctor
+
+    report = run_doctor(project_root=project_root)
+
+    for check in report.checks:
+        if check.passed:
+            label = f"[green]\u2713[/green] {check.name}"
+        else:
+            label = f"[red]\u2717[/red] {check.name}"
+
+        # Pad name to align details
+        padded = f"{label} {'.' * max(1, 14 - len(check.name))} {check.detail}"
+        console.print(padded)
+
+        if not check.passed and check.fix_hint:
+            for line in check.fix_hint.split("\n"):
+                console.print(f"  [dim]{line}[/dim]")
+
+    if report.all_passed:
+        console.print("\n[green]All checks passed.[/green]")
+    else:
+        console.print("\n[red]Some checks failed. See fix hints above.[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def serve() -> None:
     """Start the MCP server for Claude Code integration."""
     from clew.mcp_server import mcp as mcp_server
