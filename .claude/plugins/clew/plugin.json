@@ -1,0 +1,7 @@
+{
+  "name": "clew",
+  "description": "Semantic code discovery for AI agents",
+  "version": "5.0.0",
+  "commands": ["commands/*.md"],
+  "skills": ["skills/*/SKILL.md"]
+}
