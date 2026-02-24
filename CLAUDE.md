@@ -16,6 +16,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **V1.3 (Compact Responses & Cache Fix) is complete.** 39 source modules, 36 test files, 491 tests passing. Compact MCP responses by default (~20x token reduction), opt-in full content via `detail="full"`. CACHE_DIR now resolves from git root so MCP server and indexer share the same state.db.
 
+**V5 (Ship the Core Engine) is complete.** Remove autonomous escalation (ADR-008), grep available only via explicit `--mode exhaustive`, confidence scoring is informational only (Z-score in result metadata), agent skills for composed workflows, telemetry hooks for future calibration.
+
 ## Module Inventory
 
 ```
@@ -46,8 +48,8 @@ clew/
 │   ├── metadata.py     # detect_app_name, classify_layer, extract_signature, build_chunk_id
 │   ├── pipeline.py     # IndexingPipeline — file -> chunk -> metadata -> embed -> upsert + relationship extraction
 │   └── relationships.py # Relationship dataclass — entity-relationship-entity with confidence
-├── search/             # Search pipeline: enhance -> classify -> hybrid search -> rerank
-│   ├── engine.py       # SearchEngine — top-level orchestrator, full pipeline coordination
+├── search/             # Search pipeline: enhance -> classify -> hybrid search -> rerank -> confidence (informational)
+│   ├── engine.py       # SearchEngine — top-level orchestrator, explicit exhaustive mode only (no auto-escalation)
 │   ├── enhance.py      # QueryEnhancer — terminology expansion from YAML (abbreviations + synonyms)
 │   ├── hybrid.py       # HybridSearchEngine — dense + BM25 multi-prefetch with structural boosting
 │   ├── intent.py       # classify_intent — keyword heuristic intent routing (DEBUG > LOCATION > DOCS > CODE)
@@ -108,7 +110,8 @@ clew serve                           # Start MCP server (stdio transport)
 - `docs/plans/2026-02-10-compact-responses-and-cache-fix.md` — V1.3 Compact Responses & Cache Fix plan (complete)
 - `docs/plans/2026-02-06-three-layer-knowledge-design.md` — Future roadmap (V1.4+)
 - `docs/VIABILITY-EVALUATION-STANDARDS.md` — Blind A/B evaluation methodology for viability testing (reusable across versions)
-- `docs/PRODUCT-VISION.md` — V1→V4 trajectory analysis, product identity, and path to beta
+- `docs/PRODUCT-VISION.md` — V1→V5 trajectory analysis, product identity, and path to beta
+- `docs/adr/008-remove-autonomous-escalation.md` — ADR-008: Why autonomous escalation was removed (V4.0-V4.3 evidence)
 
 ## Tech Stack
 
@@ -140,7 +143,7 @@ Add to Claude Code's `.mcp.json`:
 
 MCP tools default to **compact** responses to minimize context window usage:
 
-- **`search`** — Returns `snippet` (signature + docstring preview) instead of full source. Default `limit=5`. Pass `detail="full"` for complete content.
+- **`search`** — Returns `snippet` (signature + docstring preview) instead of full source. Default `limit=5`. Pass `detail="full"` for complete content. Pass `mode="exhaustive"` to run grep alongside semantic search.
 - **`explain`** — Same compact/full behavior. Default `limit=5`.
 - **`get_context`** — Returns file content only. Pass `include_related=True` to also get related code chunks (compact format).
 - **`trace`** and **`index_status`** — Already compact, no changes needed.

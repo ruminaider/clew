@@ -589,6 +589,39 @@ async def search_with_rerank(query: str, limit: int = 10) -> list[Chunk]:
 4. File path query
 5. Low score variance (<0.1)
 
+### Confidence Assessment
+
+After reranking, the engine computes a Z-score confidence metric based on the gap between top-1 and top-2 reranked scores relative to the distribution of all inter-score gaps. This confidence is **informational only** — it is included in result metadata for debugging and telemetry but does not trigger any autonomous action (see [ADR-008](./adr/008-remove-autonomous-escalation.md)).
+
+Confidence levels: HIGH (Z-score >= 1.0), MEDIUM (Z-score >= 0.0), LOW (Z-score < 0.0).
+
+---
+
+## 10a. Explicit Exhaustive Mode
+
+When the caller passes `--mode exhaustive` (CLI) or `mode="exhaustive"` (MCP), the engine runs grep alongside the semantic pipeline and merges the results. This is the only path to grep augmentation — the engine does not autonomously decide to run grep based on confidence scores.
+
+**Why explicit only:** V4.0 through V4.3 attempted autonomous confidence-based grep escalation. Three different approaches (gap ratio, revised gap ratio, Z-score) all failed because reranked score distributions are codebase-dependent, not query-dependent. No threshold works across codebases. See [ADR-008](./adr/008-remove-autonomous-escalation.md) for full analysis.
+
+### When to use exhaustive mode
+
+- Queries requiring completeness guarantees ("find all error handlers", "every Django URL pattern")
+- Pattern matching ("all uses of `@celery_app.task`")
+- Verification that semantic search found everything relevant
+
+### Implementation
+
+```python
+# In SearchEngine.search():
+if request.mode == "exhaustive" and self.project_root:
+    # Run grep concurrently with semantic search
+    grep_results = search_with_grep(query, project_root)
+    # Merge, deduplicate by file_path + line range
+    results = merge_results(semantic_results, grep_results)
+```
+
+Grep runs concurrently with semantic search when possible. On a typical project with a warm file system cache, ripgrep completes in 200-500ms, overlapping with Voyage reranking (300-800ms).
+
 ---
 
 ## 11. Structural Boosting (Prefetch Weighting)
