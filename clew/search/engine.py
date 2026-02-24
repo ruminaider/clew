@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from clew.search.enrichment import ResultEnricher
     from clew.search.hybrid import HybridSearchEngine
     from clew.search.rerank import RerankProvider
+    from clew.search.telemetry import QueryTelemetry
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class SearchEngine:
         search_config: SearchConfig | None = None,
         project_root: Path | None = None,
         enricher: ResultEnricher | None = None,
+        telemetry: QueryTelemetry | None = None,
     ) -> None:
         self._hybrid = hybrid_engine
         self._reranker = reranker
@@ -50,6 +52,7 @@ class SearchEngine:
         self._config = search_config or SearchConfig()
         self._project_root = project_root
         self._enricher = enricher
+        self._telemetry = telemetry
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         """Execute full search pipeline and return SearchResponse."""
@@ -123,23 +126,28 @@ class SearchEngine:
         # Step 7: Compute confidence
         confidence, confidence_label, suggestion_type = self._compute_confidence(results)
 
-        # Step 8: Grep augmentation
+        # Step 8: Grep augmentation (explicit mode only)
         mode_used = "semantic"
         auto_escalated = False
 
         if effective_request.mode == "exhaustive" and self._project_root is not None:
-            # Explicit exhaustive mode: always run grep (hard override)
             grep_search_results = await self._run_grep_async(query_enhanced, intent)
             if grep_search_results:
                 results = self._merge_grep_results(results, grep_search_results)
             mode_used = "exhaustive"
-        elif self._should_post_hoc_grep(suggestion_type, intent, effective_request.mode):
-            # Autonomous: medium or low confidence, post-hoc escalation
-            grep_search_results = await self._run_grep_async(query_enhanced, intent)
-            if grep_search_results:
-                results = self._merge_grep_results(results, grep_search_results)
-                auto_escalated = True
-                mode_used = "exhaustive"
+
+        # Step 8.5: Record telemetry
+        if self._telemetry is not None:
+            self._telemetry.record(
+                query=query,
+                intent=intent.value,
+                mode_used=mode_used,
+                result_count=len(results),
+                top_score=results[0].score if results else 0.0,
+                z_score=confidence,
+                confidence_label=confidence_label,
+                reranked=was_reranked,
+            )
 
         # Step 9: Enrich results with relationship context
         if self._enricher:
@@ -156,38 +164,6 @@ class SearchEngine:
             mode_used=mode_used,
             auto_escalated=auto_escalated,
         )
-
-    def _should_post_hoc_grep(
-        self,
-        suggestion_type: SuggestionType,
-        intent: QueryIntent,
-        mode: str | None,
-    ) -> bool:
-        """Determine if post-hoc grep should run after seeing search results.
-
-        Low confidence (TRY_EXHAUSTIVE): always escalate — results are poor.
-        Medium confidence (TRY_KEYWORD): escalate only for LOCATION and CODE
-        intents where grep adds value via exhaustive file/pattern finding.
-        DOCS queries don't benefit from grep (semantic context matters more).
-        DEBUG intent is excluded entirely (needs semantic context, not patterns).
-        """
-        if self._project_root is None:
-            return False
-        if not self._config.auto_escalation_enabled:
-            return False
-        if mode is not None:
-            return False
-        if intent == QueryIntent.DEBUG:
-            return False
-
-        if suggestion_type == SuggestionType.TRY_EXHAUSTIVE:
-            return True
-
-        if suggestion_type == SuggestionType.TRY_KEYWORD:
-            # Medium confidence: only escalate for intents where grep adds value
-            return intent in (QueryIntent.LOCATION, QueryIntent.CODE)
-
-        return False
 
     async def _run_grep_async(self, query: str, intent: QueryIntent) -> list[SearchResult]:
         """Run grep search and return results as SearchResult objects.
@@ -208,7 +184,7 @@ class SearchEngine:
             grep_results = await run_grep(
                 patterns,
                 self._project_root,
-                timeout=self._config.auto_escalation_timeout,
+                timeout=self._config.grep_timeout,
                 max_count=self._config.grep_max_count,
             )
 
