@@ -62,6 +62,9 @@ dependencies = [
 nl = [
     "anthropic>=0.40.0",
 ]
+offline = [
+    "flashrank>=0.2.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
