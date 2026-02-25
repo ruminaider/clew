@@ -43,6 +43,48 @@ class QdrantConnectionError(QdrantError):
         )
 
 
+class OllamaError(InfrastructureError):
+    """Ollama-related errors."""
+
+
+class OllamaConnectionError(OllamaError):
+    """Cannot connect to Ollama."""
+
+    def __init__(self, url: str, original: Exception | None = None):
+        self.url = url
+        self.original = original
+        super().__init__(
+            f"Cannot connect to Ollama at {url}. "
+            "Ensure Ollama is running: ollama serve"
+        )
+
+
+class OllamaModelError(OllamaError):
+    """Ollama model not available."""
+
+    def __init__(self, model: str, url: str):
+        self.model = model
+        self.url = url
+        super().__init__(
+            f"Ollama model '{model}' not available. "
+            f"Pull it with: ollama pull {model}"
+        )
+
+
+class DimensionMismatchError(QdrantError):
+    """Collection exists with different vector dimensions."""
+
+    def __init__(self, collection: str, expected: int, actual: int):
+        self.collection = collection
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Collection '{collection}' has {actual}-dim vectors "
+            f"but embedder produces {expected}-dim. "
+            f"Reindex with: clew index --full"
+        )
+
+
 class VoyageError(InfrastructureError):
     """Voyage API errors."""
 

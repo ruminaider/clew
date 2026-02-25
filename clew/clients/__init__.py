@@ -19,4 +19,8 @@ def create_embedding_provider(config: IndexingConfig, env: Environment) -> Embed
         from .voyage import VoyageEmbeddingProvider
 
         return VoyageEmbeddingProvider(api_key=env.VOYAGE_API_KEY, model=config.embedding_model)
+    if config.embedding_provider == "ollama":
+        from .ollama import OllamaEmbeddingProvider
+
+        return OllamaEmbeddingProvider(url=env.OLLAMA_URL, model=config.embedding_model)
     raise ConfigError(f"Unknown embedding provider: {config.embedding_provider}")

@@ -65,6 +65,7 @@ class Environment:
         "CLEW_DESCRIPTION_MODEL", "claude-sonnet-4-5-20250929"
     )
     CLEW_FULL_INDEX_MODEL: str = os.environ.get("CLEW_FULL_INDEX_MODEL", "claude-opus-4-6")
+    OLLAMA_URL: str = os.environ.get("OLLAMA_URL", "http://localhost:11434")
     CLEW_CONFIDENCE_THRESHOLD: float = float(os.environ.get("CLEW_CONFIDENCE_THRESHOLD", "0.65"))
 
     def __init__(self, project_root: Path | None = None) -> None:
@@ -73,9 +74,14 @@ class Environment:
             self.CACHE_DIR = _resolve_cache_dir(project_root)
 
     @classmethod
-    def validate(cls) -> list[str]:
-        """Return list of missing required env vars."""
+    def validate(cls, embedding_provider: str = "voyage") -> list[str]:
+        """Return list of missing required env vars.
+
+        Args:
+            embedding_provider: Which embedding provider is configured.
+                VOYAGE_API_KEY only required when provider is "voyage".
+        """
         errors: list[str] = []
-        if not cls.VOYAGE_API_KEY:
+        if embedding_provider == "voyage" and not cls.VOYAGE_API_KEY:
             errors.append("VOYAGE_API_KEY is required")
         return errors
