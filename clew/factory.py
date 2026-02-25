@@ -17,7 +17,7 @@ from clew.search.engine import SearchEngine
 from clew.search.enhance import QueryEnhancer
 from clew.search.enrichment import CacheResultEnricher
 from clew.search.hybrid import HybridSearchEngine
-from clew.search.rerank import RerankProvider
+from clew.search.rerank_base import RerankProvider
 from clew.search.telemetry import QueryTelemetry
 
 if TYPE_CHECKING:
@@ -55,6 +55,45 @@ def _get_project_root() -> Path | None:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return Path.cwd()
+
+
+def _create_reranker(provider: str, env: Environment) -> RerankProvider | None:
+    """Create reranker based on provider setting.
+
+    "auto" dispatch: Voyage if key set → FlashRank if installed → Noop.
+    Explicit values: "voyage", "flashrank", "noop", "none".
+    """
+    if provider == "none":
+        return None
+
+    if provider == "voyage" or (provider == "auto" and env.VOYAGE_API_KEY):
+        if env.VOYAGE_API_KEY:
+            from clew.search.rerank import VoyageRerankProvider
+
+            return VoyageRerankProvider(api_key=env.VOYAGE_API_KEY)
+        if provider == "voyage":
+            return None  # Explicit voyage but no key — skip
+
+    if provider == "flashrank" or (provider == "auto" and not env.VOYAGE_API_KEY):
+        try:
+            from clew.search.rerank_local import FlashRankRerankProvider
+
+            return FlashRankRerankProvider()
+        except ImportError:
+            if provider == "flashrank":
+                raise
+            # auto fallback: FlashRank not installed → Noop
+            from clew.search.rerank_local import NoopRerankProvider
+
+            return NoopRerankProvider()
+
+    if provider == "noop":
+        from clew.search.rerank_local import NoopRerankProvider
+
+        return NoopRerankProvider()
+
+    # auto with Voyage key already handled above
+    return None
 
 
 def create_components(
@@ -102,10 +141,8 @@ def create_components(
         enumeration_limit=config.search.enumeration_limit,
     )
 
-    # Reranker (optional -- only if API key available)
-    reranker: RerankProvider | None = None
-    if env.VOYAGE_API_KEY:
-        reranker = RerankProvider(api_key=env.VOYAGE_API_KEY)
+    # Reranker dispatch based on config
+    reranker = _create_reranker(config.search.rerank_provider, env)
 
     # Detect project root for grep integration
     resolved_root = project_root or _get_project_root()

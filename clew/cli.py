@@ -476,8 +476,13 @@ def doctor(
 ) -> None:
     """Check the health of all clew dependencies."""
     from clew.doctor import run_doctor
+    from clew.models import ProjectConfig
 
-    report = run_doctor(project_root=project_root)
+    config = ProjectConfig()
+    report = run_doctor(
+        project_root=project_root,
+        embedding_provider=config.indexing.embedding_provider,
+    )
 
     for check in report.checks:
         if check.passed:

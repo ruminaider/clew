@@ -24,13 +24,14 @@ def mock_env() -> MagicMock:
 @pytest.fixture
 def _patch_all(mock_env: MagicMock) -> dict[str, MagicMock]:
     """Patch all external dependencies and return dict of mocks."""
+    mock_reranker = MagicMock()
     with (
         patch("clew.factory.Environment", return_value=mock_env) as m_env,
         patch("clew.factory.QdrantManager") as m_qdrant,
         patch("clew.factory.create_embedding_provider") as m_embedder,
         patch("clew.factory.CacheDB") as m_cache,
         patch("clew.factory.HybridSearchEngine") as m_hybrid,
-        patch("clew.factory.RerankProvider") as m_rerank,
+        patch("clew.factory._create_reranker", return_value=mock_reranker) as m_rerank,
         patch("clew.factory.IndexingPipeline") as m_pipeline,
         patch("clew.factory.SearchEngine") as m_search_engine,
     ):
@@ -40,7 +41,8 @@ def _patch_all(mock_env: MagicMock) -> dict[str, MagicMock]:
             "create_embedding_provider": m_embedder,
             "CacheDB": m_cache,
             "HybridSearchEngine": m_hybrid,
-            "RerankProvider": m_rerank,
+            "_create_reranker": m_rerank,
+            "mock_reranker": mock_reranker,
             "IndexingPipeline": m_pipeline,
             "SearchEngine": m_search_engine,
             "env": mock_env,
@@ -108,13 +110,13 @@ class TestCreateComponentsFromYaml:
 
 
 class TestNoVoyageKeyNoReranker:
-    """When VOYAGE_API_KEY is empty, reranker should be None."""
+    """When VOYAGE_API_KEY is empty, reranker dispatch returns noop/None."""
 
-    def test_reranker_is_none(self, _patch_all: dict[str, MagicMock]) -> None:
+    def test_reranker_dispatch_called(self, _patch_all: dict[str, MagicMock]) -> None:
         _patch_all["env"].VOYAGE_API_KEY = ""
+        _patch_all["_create_reranker"].return_value = None
         result = create_components()
         assert result.reranker is None
-        _patch_all["RerankProvider"].assert_not_called()
 
 
 class TestNoTerminologyFileNoEnhancer:
@@ -159,12 +161,12 @@ class TestQdrantConnectionErrorPropagates:
 
 
 class TestRerankerCreatedWithApiKey:
-    """When VOYAGE_API_KEY is set, reranker should be created."""
+    """When VOYAGE_API_KEY is set, reranker should be created via dispatch."""
 
     def test_reranker_created(self, _patch_all: dict[str, MagicMock]) -> None:
         result = create_components()
-        _patch_all["RerankProvider"].assert_called_once_with(api_key="test-voyage-key")
-        assert result.reranker is _patch_all["RerankProvider"].return_value
+        _patch_all["_create_reranker"].assert_called_once()
+        assert result.reranker is _patch_all["mock_reranker"]
 
 
 class TestDescriptionProviderNoneByDefault:

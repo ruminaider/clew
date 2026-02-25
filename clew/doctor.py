@@ -100,6 +100,36 @@ def check_voyage(api_key: str) -> CheckResult:
         )
 
 
+def check_ollama(ollama_url: str) -> CheckResult:
+    """Check Ollama connectivity."""
+    try:
+        import httpx
+
+        response = httpx.get(f"{ollama_url}/api/tags", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            models = [m["name"] for m in data.get("models", [])]
+            model_str = ", ".join(models[:3]) if models else "no models"
+            return CheckResult(
+                name="Ollama",
+                passed=True,
+                detail=f"connected ({model_str})",
+            )
+        return CheckResult(
+            name="Ollama",
+            passed=False,
+            detail=f"unexpected status {response.status_code}",
+            fix_hint="Ensure Ollama is running: ollama serve",
+        )
+    except Exception:
+        return CheckResult(
+            name="Ollama",
+            passed=False,
+            detail=f"unreachable ({ollama_url})",
+            fix_hint="Start Ollama: ollama serve",
+        )
+
+
 def check_cache_dir(cache_dir: Path) -> CheckResult:
     """Check that the cache directory exists and is writable."""
     try:
@@ -205,6 +235,7 @@ def check_mcp_server() -> CheckResult:
 
 def run_doctor(
     project_root: Path | None = None,
+    embedding_provider: str = "voyage",
 ) -> DoctorReport:
     """Run all health checks and return the aggregated report."""
     from clew.config import Environment
@@ -218,7 +249,13 @@ def run_doctor(
             qdrant_api_key=env.QDRANT_API_KEY,
         )
     )
-    report.checks.append(check_voyage(env.VOYAGE_API_KEY))
+
+    # Provider-specific checks
+    if embedding_provider == "ollama":
+        report.checks.append(check_ollama(env.OLLAMA_URL))
+    else:
+        report.checks.append(check_voyage(env.VOYAGE_API_KEY))
+
     report.checks.append(check_cache_dir(env.CACHE_DIR))
     report.checks.append(check_index(env.CACHE_DIR, project_root))
     report.checks.append(check_mcp_server())

@@ -12,7 +12,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from clew.exceptions import QdrantConnectionError
+from clew.exceptions import DimensionMismatchError, QdrantConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class QdrantManager:
         """
         existing = [c.name for c in self._client.get_collections().collections]
         if name in existing:
+            self._check_dimensions(name, dense_dim)
             logger.debug("Collection '%s' already exists", name)
             return
 
@@ -83,6 +84,23 @@ class QdrantManager:
             name,
             dense_dim,
         )
+
+    def _check_dimensions(self, name: str, expected_dim: int) -> None:
+        """Verify collection vector dimensions match expected."""
+        try:
+            info = self._client.get_collection(collection_name=name)
+            vectors_config = info.config.params.vectors
+            if isinstance(vectors_config, dict):
+                # Named vectors — check the first one
+                for vec_name, vec_params in vectors_config.items():
+                    actual_dim = vec_params.size
+                    if actual_dim != expected_dim:
+                        raise DimensionMismatchError(name, expected_dim, actual_dim)
+                    break  # Only need to check one — all share same dim
+        except DimensionMismatchError:
+            raise
+        except Exception:
+            logger.debug("Could not verify dimensions for '%s'", name, exc_info=True)
 
     @retry(
         stop=stop_after_attempt(3),
