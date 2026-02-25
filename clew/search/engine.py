@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from clew.search.enhance import QueryEnhancer
     from clew.search.enrichment import ResultEnricher
     from clew.search.hybrid import HybridSearchEngine
-    from clew.search.rerank import RerankProvider
+    from clew.search.rerank_base import RerankProvider
     from clew.search.telemetry import QueryTelemetry
 
 logger = logging.getLogger(__name__)

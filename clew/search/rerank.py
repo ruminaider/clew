@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import voyageai
 from tenacity import (
@@ -16,17 +15,11 @@ from tenacity import (
 from clew.clients.circuit_breaker import CircuitBreaker
 from clew.exceptions import SearchUnavailableError
 
+from .rerank_base import RerankProvider, RerankResult
+
 logger = logging.getLogger(__name__)
 
 _circuit_breaker = CircuitBreaker("rerank", failure_threshold=3, cooldown_seconds=60.0)
-
-
-@dataclass
-class RerankResult:
-    """A reranked document with its new score."""
-
-    index: int
-    relevance_score: float
 
 
 def should_skip_rerank(
@@ -47,12 +40,16 @@ def should_skip_rerank(
     return False
 
 
-class RerankProvider:
+class VoyageRerankProvider(RerankProvider):
     """Voyage AI reranking provider with retry and circuit breaker."""
 
     def __init__(self, api_key: str, model: str = "rerank-2.5") -> None:
         self._client = voyageai.Client(api_key=api_key)  # type: ignore[attr-defined]
         self._model = model
+
+    @property
+    def model_name(self) -> str:
+        return self._model
 
     @retry(
         stop=stop_after_attempt(3),

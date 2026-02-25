@@ -4,7 +4,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from clew.search.rerank import RerankProvider, RerankResult, should_skip_rerank
+from clew.search.rerank import VoyageRerankProvider, should_skip_rerank
+from clew.search.rerank_base import RerankResult
 
 
 class TestShouldSkipRerank:
@@ -83,7 +84,7 @@ class TestShouldSkipRerank:
         )
 
 
-class TestRerankProvider:
+class TestVoyageRerankProvider:
     @pytest.fixture
     def mock_voyage(self) -> Mock:
         client = Mock()
@@ -96,22 +97,24 @@ class TestRerankProvider:
         return client
 
     @pytest.fixture
-    def provider(self, mock_voyage: Mock) -> RerankProvider:
+    def provider(self, mock_voyage: Mock) -> VoyageRerankProvider:
         with patch("clew.search.rerank.voyageai") as mock_module:
             mock_module.Client.return_value = mock_voyage
-            return RerankProvider(api_key="test-key")
+            return VoyageRerankProvider(api_key="test-key")
 
-    def test_rerank_returns_results(self, provider: RerankProvider, mock_voyage: Mock) -> None:
+    def test_rerank_returns_results(
+        self, provider: VoyageRerankProvider, mock_voyage: Mock
+    ) -> None:
         results = provider.rerank("query", ["doc1", "doc2", "doc3"])
         assert len(results) == 2
         assert results[0].index == 2
         assert results[0].relevance_score == 0.95
 
-    def test_rerank_empty_documents(self, provider: RerankProvider) -> None:
+    def test_rerank_empty_documents(self, provider: VoyageRerankProvider) -> None:
         results = provider.rerank("query", [])
         assert results == []
 
-    def test_rerank_calls_client(self, provider: RerankProvider, mock_voyage: Mock) -> None:
+    def test_rerank_calls_client(self, provider: VoyageRerankProvider, mock_voyage: Mock) -> None:
         provider.rerank("my query", ["doc1"], top_k=5)
         mock_voyage.rerank.assert_called_once_with(
             query="my query",
