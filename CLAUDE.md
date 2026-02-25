@@ -18,6 +18,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **V5 (Ship the Core Engine) is complete.** Remove autonomous escalation (ADR-008), grep available only via explicit `--mode exhaustive`, confidence scoring is informational only (Z-score in result metadata), agent skills for composed workflows, telemetry hooks for future calibration.
 
+**Phase 6 (Offline Provider Support) is complete.** 56 source modules, 52 test files, 853 tests passing at 87% coverage. Ollama embedding provider (qwen3-embedding default), reranker ABC extraction, local rerankers (FlashRank + Noop), conditional API key validation, dimension mismatch detection, `clew doctor` Ollama check. Zero API keys required for fully offline operation.
+
 ## Module Inventory
 
 ```
@@ -30,7 +32,8 @@ clew/
 ├── clients/            # External service abstractions
 │   ├── base.py         # EmbeddingProvider ABC (embed, embed_query, dimensions, model_name)
 │   ├── description.py  # DescriptionProvider ABC + AnthropicDescriptionProvider — NL descriptions for code
-│   ├── qdrant.py       # QdrantManager — collection CRUD, hybrid query with RRF fusion, delete by file_path
+│   ├── ollama.py       # OllamaEmbeddingProvider — httpx async client for local Ollama embeddings (qwen3-embedding default)
+│   ├── qdrant.py       # QdrantManager — collection CRUD, hybrid query with RRF fusion, delete by file_path, dimension mismatch detection
 │   └── voyage.py       # VoyageEmbeddingProvider — httpx async client for Voyage AI
 ├── indexer/            # File discovery, caching, change detection, indexing pipeline, relationship extraction
 │   ├── cache.py        # CacheDB — SQLite via contextmanager, embedding + chunk caches, state tracking, relationship store
@@ -55,13 +58,15 @@ clew/
 │   ├── intent.py       # classify_intent — keyword heuristic intent routing (DEBUG > LOCATION > DOCS > CODE)
 │   ├── models.py       # QueryIntent, SearchResult, SearchRequest, SearchResponse dataclasses
 │   ├── filters.py      # build_qdrant_filter() — converts SearchRequest.filters to Qdrant Filter objects
-│   ├── rerank.py       # RerankProvider — Voyage rerank-2.5 integration with configurable skip conditions
+│   ├── rerank.py       # VoyageRerankProvider — Voyage rerank-2.5 integration with configurable skip conditions
+│   ├── rerank_base.py  # RerankProvider ABC + RerankResult dataclass — shared interface for all rerankers
+│   ├── rerank_local.py # NoopRerankProvider (zero-dep fallback) + FlashRankRerankProvider (ONNX cross-encoder)
 │   └── tokenize.py     # BM25 tokenization — camelCase/snake_case splitting, raw term count sparse vectors
 ├── cli.py              # Typer app — index, search, status, trace, serve commands (fully wired)
-├── config.py           # Environment class — env var loading with defaults
+├── config.py           # Environment class — env var loading with defaults (OLLAMA_URL, conditional VOYAGE_API_KEY validation)
 ├── discovery.py        # discover_files() — centralized file discovery using IgnorePatternLoader + SafetyChecker
-├── exceptions.py       # Exception hierarchy with user-facing fix suggestions
-├── factory.py          # Component factory — centralized wiring, create_components() returns Components dataclass
+├── exceptions.py       # Exception hierarchy with user-facing fix suggestions (incl. Ollama*, DimensionMismatchError)
+├── factory.py          # Component factory — centralized wiring, _create_reranker() dispatch, create_components()
 ├── mcp_server.py       # FastMCP server — 5 tools: search, get_context, explain, index_status, trace
 ├── models.py           # Pydantic v2 models — ProjectConfig, SearchConfig, CollectionConfig, SafetyConfig, etc.
 └── safety.py           # SafetyChecker — file size, chunk count, collection limits
@@ -70,7 +75,7 @@ clew/
 ## Established Patterns
 
 - **Data models:** Pydantic v2 `BaseModel` for config/validation, `@dataclass` for internal data (CodeEntity, FileChange, SearchResult)
-- **Provider abstraction:** ABC base classes (e.g., `EmbeddingProvider`) with concrete implementations
+- **Provider abstraction:** ABC base classes (`EmbeddingProvider`, `RerankProvider`) with concrete implementations; factory dispatch selects provider by config
 - **SQLite access:** `contextmanager` pattern in `CacheDB._connect()` — no ORM
 - **Config:** `Environment` class reads env vars with sensible defaults; `ProjectConfig` loaded from YAML
 - **Exceptions:** Hierarchy rooted in `ClewError`, each with `fix_hint` for user-facing messages
@@ -95,6 +100,7 @@ clew search "query" --raw           # Search with JSON output
 clew trace "entity::name"           # Trace code relationships (BFS graph traversal)
 clew trace "entity" --direction outbound --depth 3  # Directed trace with depth limit
 clew status                          # Show Qdrant health + index stats
+clew doctor                          # Health check: Qdrant, embeddings, cache, index, MCP
 clew serve                           # Start MCP server (stdio transport)
 ```
 
@@ -116,6 +122,7 @@ clew serve                           # Start MCP server (stdio transport)
 ## Tech Stack
 
 - Python >=3.10, Qdrant (Docker), Voyage AI voyage-code-3, tree-sitter, typer + rich CLI, Pydantic v2, SQLite for caching
+- Offline: Ollama (qwen3-embedding, 1024-dim), FlashRank (optional, `pip install clewdex[offline]`)
 - Testing: pytest + pytest-asyncio, respx for HTTP mocking
 - Linting: ruff, mypy (strict)
 
@@ -139,6 +146,25 @@ Add to Claude Code's `.mcp.json`:
 }
 ```
 
+### Offline Configuration (no API keys)
+
+```json
+{
+  "mcpServers": {
+    "clew": {
+      "command": "clew",
+      "args": ["serve"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333",
+        "OLLAMA_URL": "http://localhost:11434"
+      }
+    }
+  }
+}
+```
+
+Set `embedding_provider: ollama` in your project's `.clew.yaml`. Requires Ollama running with `qwen3-embedding` model (`ollama pull qwen3-embedding`). Reranking auto-falls to FlashRank (if installed) or Noop.
+
 ## MCP Tool Response Modes
 
 MCP tools default to **compact** responses to minimize context window usage:
@@ -154,7 +180,7 @@ The agent can always use the `Read` tool to fetch specific lines from results th
 
 - Use `ruff` for formatting and linting
 - Use `mypy --strict` for type checking
-- Async where interacting with Voyage API or Qdrant
+- Async where interacting with Voyage API, Ollama, or Qdrant
 - All config through Pydantic models validated from YAML
 - Error messages should tell the user how to fix the problem (e.g., "Qdrant not running. Start with: docker compose up -d qdrant")
 - Component wiring through `factory.py` — no global state, one factory call per invocation
