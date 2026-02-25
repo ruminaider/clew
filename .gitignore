@@ -29,3 +29,6 @@ venv/
 
 # Coverage
 .coverage
+
+# Project instructions (local only)
+CLAUDE.md

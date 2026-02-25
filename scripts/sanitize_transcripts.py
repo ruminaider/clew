@@ -1,235 +1,254 @@
-#!/usr/bin/env python3
-"""Sanitize raw exploration transcripts for blind A/B scoring.
+"""Sanitize and blind agent transcripts for evaluation.
 
-Applies mechanical text transformations to remove tool-identifying information:
-1. Replace tool invocations with generic labels
-2. Remove metadata fields from JSON-like content
-3. Normalize "context" → "related"
-4. Add "related": "" to grep results (ensure both tools have the field)
-5. Randomly assign Alpha/Beta labels
-6. Write sanitized files + mapping.json
+Phase 2 of the viability evaluation pipeline:
+1. Strips task prompts (which reveal tool identity)
+2. Normalizes tool call headers and commands to generic form
+3. Removes metadata fields from JSON results (score, confidence, intent, etc.)
+4. Randomly assigns Alpha/Beta labels
+5. Saves blinding key for later de-anonymization
 
 Usage:
     python3 scripts/sanitize_transcripts.py <raw_dir> <output_dir> [--tests A1,A2,...]
 """
 
 import json
-import os
 import random
 import re
 import sys
 from pathlib import Path
 
 
-def strip_common_leaks(text: str) -> str:
-    """Remove tool-identifying patterns common to both transcript types."""
-    # Strip inline relevance scores: (score 0.917), (score: 0.5), (relevance 0.8)
-    text = re.sub(r'\s*\(score:?\s*[\d.]+\)', '', text)
-    text = re.sub(r'\s*\(relevance:?\s*[\d.]+\)', '', text)
+def strip_task_prompt(text: str) -> str:
+    """Remove the task prompt section (reveals tool identity)."""
+    # Extract just the TASK line for context
+    task_match = re.search(r'TASK:\n(.+?)(?:\n\n|\nINSTRUCTIONS:)', text, re.DOTALL)
+    task_text = task_match.group(1).strip() if task_match else ""
 
-    # Strip intent/mode annotations: (intent detected as DEBUG → exhaustive mode)
-    text = re.sub(r'\s*\(intent detected as[^)]+\)', '', text)
+    # Remove everything from "## Task Prompt" to the first "### Assistant"
+    text = re.sub(
+        r'## Task Prompt\n.*?(?=### Assistant)',
+        f'## Task\n\n{task_text}\n\n---\n\n',
+        text,
+        flags=re.DOTALL,
+    )
+    return text
 
-    # Strip (semantic search), (exhaustive), (semantic) from search headings
-    text = re.sub(r'\s*\(semantic search\)', '', text)
-    text = re.sub(r'\s*\(exhaustive\)', '', text)
-    text = re.sub(r'\s*\(semantic\)', '', text)
 
-    # Strip "semantic search" from prose (but keep "search")
-    text = re.sub(r'\bsemantic search\b', 'search', text, flags=re.IGNORECASE)
-
-    # Strip confidence values from prose: "low confidence (0.05)"
-    text = re.sub(r'low confidence \([\d.]+\)', 'low confidence', text)
-    text = re.sub(r'high confidence \([\d.]+\)', 'high confidence', text)
-    text = re.sub(r'confidence \([\d.]+\)', 'confidence', text)
-
-    # Strip "exhaustive search" when it refers to search mode (not natural usage)
-    # Keep natural usage like "After an exhaustive search across..."
-    text = re.sub(r'\bexhaustive mode\b', 'search mode', text)
-
-    # Remove metadata fields from JSON blocks
-    metadata_fields = [
+def strip_metadata_fields(text: str) -> str:
+    """Remove identifying metadata fields from JSON blocks."""
+    fields_to_remove = [
         "score", "importance_score", "confidence", "confidence_label",
         "suggestion_type", "mode_used", "auto_escalated", "intent",
         "query_enhanced", "total_candidates", "chunk_type", "enriched",
-        "collection", "source",
+        "collection", "source", "mode", "is_test",
     ]
-    for field in metadata_fields:
-        text = re.sub(rf'\s*"{field}":\s*[^\n,]+,?\n', '\n', text)
-        text = re.sub(rf"\s*'{field}':\s*[^\n,]+,?\n", '\n', text)
+    for field in fields_to_remove:
+        # "field": value, (with trailing comma)
+        pattern = r'\s*"' + field + r'":\s*[^\n,\]})]+,?\s*\n'
+        text = re.sub(pattern, '\n', text)
+
+    # Clean up trailing commas before closing braces/brackets
+    text = re.sub(r',(\s*[}\]])', r'\1', text)
+
+    # Remove empty lines in JSON blocks
+    text = re.sub(r'\n\n+(\s*["}{\[\]])', r'\n\1', text)
+
+    return text
+
+
+def normalize_paths(text: str) -> str:
+    """Strip absolute paths to relative."""
+    text = text.replace('/Users/albertgwo/Work/evvy/', '')
+    text = text.replace('/Users/albertgwo/Repositories/clew/', '')
+    text = text.replace('/Users/albertgwo/Work/evvy', '.')
+    text = text.replace('/Users/albertgwo/Repositories/clew', '.')
+    return text
+
+
+def final_cleanup(text: str) -> str:
+    """Final pass to catch any remaining tool identity leaks."""
+    # Catch any remaining **[Tool Call N] Grep:** or **[Tool Call N] Glob:** headers
+    text = re.sub(
+        r'\*\*\[Tool Call (\d+)\] Grep:\*\*([^\n]*)',
+        r'**[Tool Call \1] Search:**\2',
+        text,
+    )
+    text = re.sub(
+        r'\*\*\[Tool Call (\d+)\] Glob:\*\*([^\n]*)',
+        r'**[Tool Call \1] Find:**\2',
+        text,
+    )
+
+    # Catch "clew" in remaining contexts (error messages, paths, etc.)
+    # But not inside words like "clew-eval"
+    text = re.sub(r'\bclew\b(?!-eval)', 'the tool', text, flags=re.IGNORECASE)
+
+    return text
+
+
+def sanitize_code_blocks(text: str) -> str:
+    """Sanitize grep/rg/find commands inside code blocks."""
+    def replace_code_block(m):
+        content = m.group(1)
+        # Replace grep/rg commands with search()
+        content = re.sub(r'grep\s+-[a-zA-Z]+\s+"([^"]+)"[^\n]*', r'search("\1")', content)
+        content = re.sub(r"grep\s+-[a-zA-Z]+\s+'([^']+)'[^\n]*", r'search("\1")', content)
+        content = re.sub(r'grep\s+-[a-zA-Z]+\s+(\S+)[^\n]*', r'search("\1")', content)
+        content = re.sub(r'grep\s+"([^"]+)"[^\n]*', r'search("\1")', content)
+        content = re.sub(r"grep\s+'([^']+)'[^\n]*", r'search("\1")', content)
+        content = re.sub(r'\brg\s+"([^"]+)"[^\n]*', r'search("\1")', content)
+        content = re.sub(r"\brg\s+'([^']+)'[^\n]*", r'search("\1")', content)
+        content = re.sub(r'\brg\s+(\S+)\s+--[^\n]*', r'search("\1")', content)
+        # Replace find commands
+        content = re.sub(r'find\s+\.\s+-name\s+"([^"]+)"[^\n]*', r'find_files("\1")', content)
+        content = re.sub(r'find\s+\.\s+-name\s+(\S+)[^\n]*', r'find_files("\1")', content)
+        return f'```\n{content}\n```'
+
+    text = re.sub(r'```(?:bash)?\n(.*?)\n```', replace_code_block, text, flags=re.DOTALL)
+    return text
+
+
+def strip_prose_leaks(text: str) -> str:
+    """Remove tool-identifying language from assistant prose."""
+    # Score/confidence mentions
+    text = re.sub(r'\s*\(score:?\s*[\d.]+\)', '', text)
+    text = re.sub(r'\s*\(relevance:?\s*[\d.]+\)', '', text)
+    text = re.sub(r'\s*\(confidence:?\s*[\d.]+\)', '', text)
+    text = re.sub(r'low confidence \([\d.]+\)', 'low confidence', text)
+    text = re.sub(r'high confidence \([\d.]+\)', 'high confidence', text)
+
+    # Mode mentions
+    text = re.sub(r'\bexhaustive mode\b', 'search mode', text)
+    text = re.sub(r'\bsemantic search\b', 'search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bsemantic results?\b', 'search results', text, flags=re.IGNORECASE)
+
+    # Tool name mentions in prose (not inside code blocks or tool headers)
+    text = re.sub(r'\bripgrep\b', 'search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bgrep tool\b', 'search tool', text, flags=re.IGNORECASE)
+    text = re.sub(r"\bI'll grep\b", "I'll search", text, flags=re.IGNORECASE)
+    text = re.sub(r"\blet me grep\b", "let me search", text, flags=re.IGNORECASE)
+    text = re.sub(r"\blet's grep\b", "let's search", text, flags=re.IGNORECASE)
+    text = re.sub(r'\busing grep\b', 'using search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bwith grep\b', 'with search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bvia grep\b', 'via search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\ba grep\b', 'a search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bthe Grep\b', 'the search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bthe Glob\b', 'the file finder', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bGrep\b(?!:)', 'search', text)
+    text = re.sub(r'\bGlob\b(?!:)', 'file search', text)
 
     return text
 
 
 def sanitize_clew_transcript(text: str) -> str:
     """Sanitize a clew-tool transcript."""
-    # Replace clew search commands
+    text = strip_task_prompt(text)
+
+    # Remove "Tool calls: N" header
+    text = re.sub(r'^Tool calls: \d+\n\n', '', text, flags=re.MULTILINE)
+
+    # Normalize **[Tool Call N] Bash:** to **[Tool Call N] Command:**
+    # and sanitize the command inside
+    def replace_bash_block(m):
+        num = m.group(1)
+        cmd = m.group(2)
+        # Sanitize clew commands
+        cmd = re.sub(
+            r'clew search\s+"([^"]+)"[^\n]*',
+            r'search("\1")',
+            cmd,
+        )
+        cmd = re.sub(
+            r'clew trace\s+"([^"]+)"[^\n]*',
+            r'search("code related to \1")',
+            cmd,
+        )
+        cmd = re.sub(
+            r'clew trace\s+(\S+)[^\n]*',
+            r'search("code related to \1")',
+            cmd,
+        )
+        # Remove 2>/dev/null | head patterns
+        cmd = re.sub(r'\s*2>/dev/null\s*', ' ', cmd)
+        cmd = re.sub(r'\s*\|\s*head\s+-\d+', '', cmd)
+        cmd = re.sub(r'\s*\|\s*python3\s+-c\s+.*', '', cmd)
+        cmd = cmd.strip()
+        return f'**[Tool Call {num}] Command:**\n```\n{cmd}\n```'
+
     text = re.sub(
-        r'\*\*Query:\*\*\s*`clew search "([^"]+)"[^`]*`',
-        r'search("\1")',
+        r'\*\*\[Tool Call (\d+)\] Bash:\*\*\n```bash\n(.*?)\n```',
+        replace_bash_block,
         text,
+        flags=re.DOTALL,
     )
+
+    # Normalize Read tool calls (already in good format)
     text = re.sub(
-        r'`clew search "([^"]+)"[^`]*`',
-        r'`search("\1")`',
-        text,
-    )
-    text = re.sub(
-        r'clew search "([^"]+)"[^"]*',
-        r'search("\1")',
+        r'\*\*\[Tool Call (\d+)\] Read:\*\*',
+        r'**[Tool Call \1] Read:**',
         text,
     )
 
-    # Replace clew trace commands (quoted and unquoted arguments)
-    text = re.sub(
-        r'\*\*Query:\*\*\s*`clew trace "([^"]+)"[^`]*`',
-        r'search("code related to \1")',
-        text,
-    )
-    text = re.sub(
-        r'`clew trace "([^"]+)"[^`]*`',
-        r'`search("code related to \1")`',
-        text,
-    )
-    text = re.sub(
-        r'`clew trace (\w+)`',
-        r'`search("code related to \1")`',
-        text,
-    )
-    text = re.sub(
-        r'clew trace "([^"]+)"[^"]*',
-        r'search("code related to \1")',
-        text,
-    )
-    text = re.sub(
-        r'clew trace (\w+)',
-        r'search("code related to \1")',
-        text,
-    )
+    # Normalize context -> related
+    text = re.sub(r'"context":', '"related":', text)
 
-    # Replace clew status
-    text = re.sub(r'clew status[^\n]*', 'check_status()', text)
+    # Remove clew mentions in prose
+    text = re.sub(r'\bclew search\b', 'search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bclew trace\b', 'search', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bclew\b', 'the search tool', text, flags=re.IGNORECASE)
 
-    # Replace grep commands used by clew agent
-    text = re.sub(
-        r'`?grep -[a-zA-Z]+ "([^"]+)"[^`\n]*`?',
-        r'search("\1")',
-        text,
-    )
-    text = re.sub(
-        r'`?rg "([^"]+)"[^`\n]*`?',
-        r'search("\1")',
-        text,
-    )
-
-    # Normalize context → related
-    text = text.replace("`context`", "`related`")
-    text = text.replace("context field", "related field")
-    text = text.replace('"context":', '"related":')
-    text = text.replace("'context':", "'related':")
-
-    # Remove references to specific tool names in prose
-    # First handle "clew search for" (a prose usage, not a command)
-    text = re.sub(r'\bclew search for\b', 'search for', text, flags=re.IGNORECASE)
-    # Then handle remaining "clew" references
-    text = re.sub(r'\bclew\b(?!\s*search|\s*trace)', 'the search tool', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bthe search tool index\b', 'the index', text)
-    text = re.sub(r'\bthe search tool\s+search\b', 'search', text)
-
-    # Normalize Read tool references
-    text = re.sub(
-        r'\*\*File:\*\*\s*`?(/[^`\n]+)`?\s*lines?\s*(\d+)-(\d+)',
-        r'read("\1") lines \2-\3',
-        text,
-    )
-
-    # Apply common leak stripping
-    text = strip_common_leaks(text)
+    text = strip_metadata_fields(text)
+    text = normalize_paths(text)
+    text = sanitize_code_blocks(text)
+    text = strip_prose_leaks(text)
+    text = final_cleanup(text)
 
     return text
 
 
 def sanitize_grep_transcript(text: str) -> str:
     """Sanitize a grep-tool transcript."""
-    # Replace Grep tool invocations
+    text = strip_task_prompt(text)
+
+    # Remove "Tool calls: N" header
+    text = re.sub(r'^Tool calls: \d+\n\n', '', text, flags=re.MULTILINE)
+
+    # Normalize **[Tool Call N] Grep:** -> **[Tool Call N] Search:**
+    # Handle various formats
     text = re.sub(
-        r'Grep\(pattern="([^"]+)"[^)]*\)',
-        r'search("\1")',
+        r'\*\*\[Tool Call (\d+)\] Grep:\*\* pattern=`([^`]+)` path=`([^`]*)` mode=\S+',
+        r'**[Tool Call \1] Search:** `\2`',
         text,
     )
     text = re.sub(
-        r'Searched for `([^`]+)` across[^\n]*',
-        r'search("\1")',
-        text,
-    )
-    text = re.sub(
-        r'Searched for\s+"([^"]+)"[^\n]*',
-        r'search("\1")',
-        text,
-    )
-    text = re.sub(
-        r'`?grep -[a-zA-Z]+ "([^"]+)"[^`\n]*`?',
-        r'search("\1")',
-        text,
-    )
-    text = re.sub(
-        r'`?rg "([^"]+)"[^`\n]*`?',
-        r'search("\1")',
-        text,
-    )
-    text = re.sub(
-        r'Searched (?:all|the)[^.]+for[^.]+\.',
-        lambda m: 'search("pattern")' if 'pattern' not in m.group() else m.group(),
+        r'\*\*\[Tool Call (\d+)\] Grep:\*\*([^\n]*)',
+        r'**[Tool Call \1] Search:**\2',
         text,
     )
 
-    # Replace Glob tool invocations
+    # Normalize **[Tool Call N] Glob:** -> **[Tool Call N] Find:**
     text = re.sub(
-        r'Glob\(pattern="([^"]+)"[^)]*\)',
-        r'find_files("\1")',
+        r'\*\*\[Tool Call (\d+)\] Glob:\*\* pattern=`([^`]+)` path=`([^`]*)`',
+        r'**[Tool Call \1] Find:** `\2`',
         text,
     )
     text = re.sub(
-        r'Used file glob[^.]+\.',
-        'find_files("pattern")',
+        r'\*\*\[Tool Call (\d+)\] Glob:\*\*([^\n]*)',
+        r'**[Tool Call \1] Find:**\2',
         text,
     )
 
-    # Replace Read tool invocations
+    # Normalize Read (already fine)
     text = re.sub(
-        r'Read\(file_path="([^"]+)"[^)]*\)',
-        r'read("\1")',
+        r'\*\*\[Tool Call (\d+)\] Read:\*\*',
+        r'**[Tool Call \1] Read:**',
         text,
     )
 
-    # Add "related": "" to results that don't have it
-    # This is harder to do mechanically — we'll add a note and handle in review
-
-    # Remove metadata fields from JSON blocks (same as clew)
-    metadata_fields = [
-        "score", "importance_score", "confidence", "confidence_label",
-        "suggestion_type", "mode_used", "auto_escalated", "intent",
-        "query_enhanced", "total_candidates", "chunk_type", "enriched",
-        "collection", "source",
-    ]
-    for field in metadata_fields:
-        text = re.sub(rf'\s*"{field}":\s*[^\n,]+,?\n', '\n', text)
-        text = re.sub(rf"\s*'{field}':\s*[^\n,]+,?\n", '\n', text)
-
-    # Remove references to tool identity in prose
-    text = re.sub(r'\b[Rr]ipgrep\b', 'search', text)
-    text = re.sub(r'\bgrep tool\b', 'search tool', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bpattern[- ]matching tools?\b', 'search tool', text, flags=re.IGNORECASE)
-
-    # Normalize Read references
-    text = re.sub(
-        r'\*\*File:\*\*\s*`?(/[^`\n]+)`?\s*lines?\s*(\d+)-(\d+)',
-        r'read("\1") lines \2-\3',
-        text,
-    )
-
-    # Apply common leak stripping
-    text = strip_common_leaks(text)
+    text = strip_metadata_fields(text)
+    text = normalize_paths(text)
+    text = sanitize_code_blocks(text)
+    text = strip_prose_leaks(text)
 
     return text
 
@@ -238,7 +257,7 @@ def process_test(
     test_id: str,
     raw_dir: Path,
     output_dir: Path,
-    seed: int | None = None,
+    seed: int,
 ) -> dict:
     """Process a single test: sanitize both transcripts and assign labels."""
     clew_path = raw_dir / f"{test_id}-clew.md"
@@ -264,28 +283,27 @@ def process_test(
         alpha_text, alpha_tool = sanitized_grep, "grep"
         beta_text, beta_tool = sanitized_clew, "clew"
 
+    # Add agent label headers
+    alpha_text = alpha_text.replace("# Transcript", f"# Agent Alpha — Test {test_id}")
+    beta_text = beta_text.replace("# Transcript", f"# Agent Beta — Test {test_id}")
+
     # Write files
     (output_dir / f"{test_id}-Alpha.md").write_text(alpha_text)
     (output_dir / f"{test_id}-Beta.md").write_text(beta_text)
 
-    mapping = {"Alpha": alpha_tool, "Beta": beta_tool}
-    (output_dir / f"{test_id}-mapping.json").write_text(
-        json.dumps(mapping, indent=2) + "\n"
-    )
-
+    mapping = {"alpha": alpha_tool, "beta": beta_tool}
     print(f"  OK {test_id}: Alpha={alpha_tool}, Beta={beta_tool}")
-    return {test_id: {"alpha": alpha_tool, "beta": beta_tool}}
+    return {test_id: mapping}
 
 
 def main():
-    raw_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".clew-eval/v4/raw-transcripts")
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".clew-eval/v4/sanitized-transcripts")
+    raw_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".clew-eval/v4.3-beta/raw-transcripts")
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".clew-eval/v4.3-beta/sanitized-transcripts")
 
     # Optional: specify which tests to process
     if len(sys.argv) > 3 and sys.argv[3] == "--tests":
         tests = sys.argv[4].split(",")
     else:
-        # Discover all tests from raw transcripts
         tests = sorted(set(
             p.stem.rsplit("-", 1)[0]
             for p in raw_dir.glob("*-clew.md")
@@ -298,8 +316,8 @@ def main():
     print(f"Output dir: {output_dir}")
     print()
 
-    # Use fixed seed for reproducibility
-    master_seed = 20260221
+    # Fixed seed for reproducibility
+    master_seed = 20260223
     all_mappings = {}
 
     for i, test_id in enumerate(tests):

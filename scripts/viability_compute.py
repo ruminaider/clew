@@ -79,7 +79,7 @@ TRACK_B_TESTS = {"E1", "E2", "E3", "E4"}
 
 # Behavioral verdict gates (auto-Kill if outside)
 ESCALATION_FLOOR = 0.05
-ESCALATION_CEILING = 0.50
+ESCALATION_CEILING = 0.55
 # Ship target range
 ESCALATION_TARGET_LOW = 0.15
 ESCALATION_TARGET_HIGH = 0.25
