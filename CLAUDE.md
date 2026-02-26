@@ -22,6 +22,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **Inline Enrichment Pipeline is complete.** 58 source modules, 54 test files, 896 tests passing. LLM enrichment runs inline during `clew index` with configurable providers: Anthropic API, any OpenAI-compatible API (OpenAI, OpenRouter, DeepSeek, Together, Groq), local Ollama, or none. Single-pass indexing replaces the old index→enrich→reembed workflow.
 
+**Central Project Registry is complete.** 59 source modules, 55 test files, 916 tests passing. `~/.clew/projects.json` tracks all indexed projects. Auto-populated on `clew index`, queryable via `clew projects`. Enables cross-repo discovery by name or path.
+
 ## Module Inventory
 
 ```
@@ -72,6 +74,7 @@ clew/
 ├── exceptions.py       # Exception hierarchy with user-facing fix suggestions (incl. Ollama*, DimensionMismatchError)
 ├── factory.py          # Component factory — centralized wiring, _create_reranker()/_create_enrichment_provider() dispatch, create_components()
 ├── mcp_server.py       # FastMCP server — 5 tools: search, get_context, explain, index_status, trace
+├── registry.py         # Central project registry — ~/.clew/projects.json for cross-repo discovery
 ├── models.py           # Pydantic v2 models — ProjectConfig, SearchConfig, CollectionConfig, SafetyConfig, etc.
 └── safety.py           # SafetyChecker — file size, chunk count, collection limits
 ```
@@ -105,6 +108,7 @@ clew trace "entity::name"           # Trace code relationships (BFS graph traver
 clew trace "entity" --direction outbound --depth 3  # Directed trace with depth limit
 clew status                          # Show Qdrant health + index stats
 clew doctor                          # Health check: Qdrant, embeddings, cache, index, MCP
+clew projects                        # List all indexed projects (central registry)
 clew serve                           # Start MCP server (stdio transport)
 ```
 

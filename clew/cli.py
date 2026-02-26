@@ -122,6 +122,19 @@ def index(
         for err in result.errors[:5]:
             console.print(f"[red]  {err}[/red]")
 
+    # Register project in central registry (best-effort, never blocks indexing)
+    try:
+        from clew.registry import register_project
+
+        register_project(
+            name=root.name,
+            project_root=root,
+            cache_dir=components.cache.cache_dir,
+            collection_name=collection,
+        )
+    except Exception:
+        pass
+
 
 @app.command()
 def search(
@@ -524,6 +537,40 @@ def doctor(
     else:
         console.print("\n[red]Some checks failed. See fix hints above.[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def projects(
+    json_output: bool = typer.Option(False, "--json", help="JSON output to stdout"),
+) -> None:
+    """List all indexed projects in the central registry."""
+    from clew.registry import list_projects
+
+    entries = list_projects()
+
+    if json_output:
+        print(json.dumps(entries, indent=2))
+        return
+
+    if not entries:
+        console.print("[yellow]No projects registered. Run 'clew index' to register.[/yellow]")
+        return
+
+    table = Table(title="Indexed Projects")
+    table.add_column("Name", style="bold")
+    table.add_column("Root")
+    table.add_column("Collection", style="cyan")
+    table.add_column("Last Indexed", style="dim")
+
+    for entry in entries:
+        table.add_row(
+            entry["name"],
+            entry["project_root"],
+            entry["collection_name"],
+            entry["last_indexed"][:19].replace("T", " "),
+        )
+
+    console.print(table)
 
 
 @app.command()
