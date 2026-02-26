@@ -41,21 +41,41 @@ class ChangeDetector:
         return self._from_hash(file_paths)
 
     def _from_git(self, last_commit: str, file_paths: list[str]) -> ChangeResult:
-        """Use git diff for change detection."""
+        """Use git diff for change detection.
+
+        Note: git diff returns paths relative to the git root, but file_paths
+        may be absolute. We normalize by building a relative→absolute mapping.
+        """
         changes = self._git.get_changes_since(last_commit)
+        root = self._git.project_root
 
-        # Filter to only requested files
-        file_set = set(file_paths)
+        # Build mapping: relative path → original path (handles both abs and rel)
+        rel_to_orig: dict[str, str] = {}
+        for fp in file_paths:
+            try:
+                rel = str(Path(fp).resolve().relative_to(root.resolve()))
+            except ValueError:
+                rel = fp  # Already relative or outside root
+            rel_to_orig[rel] = fp
 
-        added = [f for f in changes["added"] if f in file_set]
-        modified = [f for f in changes["modified"] if f in file_set]
+        # Filter git changes to only discovered files, returning original paths
+        added: list[str] = []
+        for f in changes["added"]:
+            if f in rel_to_orig:
+                added.append(rel_to_orig[f])
+
+        modified: list[str] = []
+        for f in changes["modified"]:
+            if f in rel_to_orig:
+                modified.append(rel_to_orig[f])
+
         deleted = list(changes["deleted"])  # deleted files won't be in file_paths
 
         # Renamed = delete old + add new
         for rename in changes["renamed"]:
             deleted.append(rename["from"])
-            if rename["to"] in file_set:
-                added.append(rename["to"])
+            if rename["to"] in rel_to_orig:
+                added.append(rel_to_orig[rename["to"]])
 
         # Files in file_paths not in any change category are unchanged
         changed_set = set(added) | set(modified)

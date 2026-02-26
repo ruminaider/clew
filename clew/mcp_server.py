@@ -129,7 +129,7 @@ def _get_project_root() -> Path | None:
 async def search(
     query: str,
     limit: int = 5,
-    collection: str = "code",
+    collection: str | None = None,
     active_file: str | None = None,
     intent: str | None = None,
     filters: dict[str, str] | None = None,
@@ -141,7 +141,7 @@ async def search(
     Args:
         query: Natural language search query
         limit: Maximum number of results (default 5)
-        collection: Collection to search (default "code")
+        collection: Collection to search (defaults to project config)
         active_file: Currently open file path for context boosting
         intent: Search intent hint (code, docs, debug, location, enumeration)
         filters: Metadata filters (language, chunk_type, app_name, layer, is_test)
@@ -169,10 +169,11 @@ async def search(
                 }
 
         components = _get_components()
+        effective_collection = collection or components.config.collection_name
         request = SearchRequest(
             query=query,
             limit=limit,
-            collection=collection,
+            collection=effective_collection,
             active_file=active_file,
             intent=parsed_intent,
             filters=filters or {},
@@ -560,14 +561,16 @@ async def index_status(
     try:
         components = _get_components()
 
+        coll = components.config.collection_name
+
         if action == "status":
             healthy = components.qdrant.health_check()
             collections: dict[str, int] = {}
-            for name in ["code", "docs"]:
+            for name in [coll, "docs"]:
                 if components.qdrant.collection_exists(name):
                     collections[name] = components.qdrant.collection_count(name)
 
-            last_commit = components.cache.get_last_indexed_commit("code")
+            last_commit = components.cache.get_last_indexed_commit(coll)
 
             # Staleness detection
             staleness_info: dict[str, object] = {}
@@ -610,8 +613,8 @@ async def index_status(
 
             files = discover_files(root, components.config)
 
-            components.qdrant.ensure_collection("code", dense_dim=1024)
-            result = await components.indexing_pipeline.index_files(files, collection="code")
+            components.qdrant.ensure_collection(coll, dense_dim=1024)
+            result = await components.indexing_pipeline.index_files(files, collection=coll)
 
             # Save commit hash after successful indexing
             from clew.indexer.git_tracker import GitChangeTracker
@@ -619,7 +622,7 @@ async def index_status(
             tracker = GitChangeTracker(root)
             commit = tracker.get_current_commit()
             if commit:
-                components.cache.set_last_indexed_commit("code", commit)
+                components.cache.set_last_indexed_commit(coll, commit)
 
             return {
                 "triggered": True,

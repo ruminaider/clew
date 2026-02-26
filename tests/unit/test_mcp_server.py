@@ -43,6 +43,7 @@ def _mock_search_result(**overrides):
 def _mock_components():
     """Create mock Components with common defaults."""
     components = Mock()
+    components.config.collection_name = "code"
     components.search_engine.search = AsyncMock()
     components.indexing_pipeline.index_files = AsyncMock()
     components.qdrant.health_check.return_value = True
