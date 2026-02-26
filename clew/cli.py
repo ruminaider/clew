@@ -23,10 +23,16 @@ def index(
     config: Path = typer.Option("config.yaml", "--config", "-c", help="Config file path"),
     full: bool = typer.Option(False, "--full", help="Full reindex (ignore change detection)"),
     files: list[str] | None = typer.Option(None, "--files", "-f", help="Specific files to index"),
+    skip_enrichment: bool = typer.Option(
+        False,
+        "--skip-enrichment",
+        help="Skip LLM enrichment even if a provider is configured",
+    ),
     nl_descriptions: bool = typer.Option(
         False,
         "--nl-descriptions",
-        help="Generate NL descriptions for undocumented code (requires ANTHROPIC_API_KEY)",
+        hidden=True,
+        help="(Deprecated) Use enrichment_provider in .clew.yaml instead",
     ),
 ) -> None:
     """Index the codebase for semantic search."""
@@ -40,20 +46,23 @@ def index(
         components = create_components(
             config_path=config if config.exists() else None,
             nl_descriptions=nl_descriptions,
+            skip_enrichment=skip_enrichment,
             project_root=project_root,
         )
     except ClewError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
+    collection = components.config.collection_name
+
     # Full reindex: drop collection and clear cached state
     if full:
         console.print("[yellow]Full reindex: dropping collection and clearing cache...[/yellow]")
-        components.qdrant.delete_collection("code")
-        components.cache.clear_all_state("code")
+        components.qdrant.delete_collection(collection)
+        components.cache.clear_all_state(collection)
 
     # Ensure collection exists
-    components.qdrant.ensure_collection("code", dense_dim=1024)
+    components.qdrant.ensure_collection(collection, dense_dim=1024)
 
     # Discover files
     root = project_root.resolve()
@@ -74,7 +83,7 @@ def index(
         console.print(f"[bold]Indexing {len(to_index)} files (full)...[/bold]")
     else:
         detector = ChangeDetector(root, components.cache)
-        changes = detector.detect_changes([str(p) for p in file_paths])
+        changes = detector.detect_changes([str(p) for p in file_paths], collection=collection)
         to_index = [Path(f) for f in changes.added + changes.modified]
 
         if not to_index:
@@ -91,7 +100,7 @@ def index(
     result = asyncio.run(
         components.indexing_pipeline.index_files(
             to_index,
-            collection="code",
+            collection=collection,
             delete_before_upsert=not full,
         )
     )
@@ -101,7 +110,7 @@ def index(
         detector_for_commit = ChangeDetector(root, components.cache)
         commit = detector_for_commit.get_current_commit()
         if commit:
-            components.cache.set_last_indexed_commit("code", commit)
+            components.cache.set_last_indexed_commit(collection, commit)
 
     # Print summary
     console.print(
@@ -118,7 +127,7 @@ def index(
 def search(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
-    collection: str = typer.Option("code", "--collection", "-c", help="Collection to search"),
+    collection: str | None = typer.Option(None, "--collection", "-c", help="Collection to search"),
     active_file: str | None = typer.Option(
         None, "--active-file", "-a", help="Current file for context"
     ),
@@ -157,6 +166,8 @@ def search(
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
+    effective_collection = collection or components.config.collection_name
+
     parsed_intent = None
     if intent:
         try:
@@ -183,7 +194,7 @@ def search(
     request = SearchRequest(
         query=query,
         limit=limit,
-        collection=collection,
+        collection=effective_collection,
         active_file=active_file,
         intent=parsed_intent,
         filters=filters,
@@ -288,19 +299,21 @@ def status(
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
+    collection = components.config.collection_name
+
     # Qdrant health
     healthy = components.qdrant.health_check()
 
     # Collections
     collections: dict[str, int | None] = {}
-    for name in ["code", "docs"]:
+    for name in [collection, "docs"]:
         if components.qdrant.collection_exists(name):
             collections[name] = components.qdrant.collection_count(name)
         else:
             collections[name] = None
 
     # Last indexed commit
-    last_commit = components.cache.get_last_indexed_commit("code")
+    last_commit = components.cache.get_last_indexed_commit(collection)
 
     # Staleness detection
     from clew.indexer.git_tracker import GitChangeTracker
@@ -453,11 +466,13 @@ def reembed(
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
 
+    collection = components.config.collection_name
+
     # Ensure collection exists
-    components.qdrant.ensure_collection("code", dense_dim=1024)
+    components.qdrant.ensure_collection(collection, dense_dim=1024)
 
     console.print("[bold]Re-embedding enriched chunks...[/bold]")
-    result = asyncio.run(components.indexing_pipeline.reembed(collection="code"))
+    result = asyncio.run(components.indexing_pipeline.reembed(collection=collection))
 
     console.print(
         f"[green]Done![/green] {result.chunks_created} chunks re-embedded "
@@ -475,13 +490,19 @@ def doctor(
     ),
 ) -> None:
     """Check the health of all clew dependencies."""
+    from clew.config import Environment
     from clew.doctor import run_doctor
     from clew.models import ProjectConfig
 
-    config = ProjectConfig()
+    env = Environment(project_root=project_root)
+    auto_config = env.CACHE_DIR.parent / ".clew.yaml"
+    config = ProjectConfig.from_yaml(auto_config) if auto_config.exists() else ProjectConfig()
     report = run_doctor(
         project_root=project_root,
         embedding_provider=config.indexing.embedding_provider,
+        collection_name=config.collection_name,
+        enrichment_provider=config.indexing.enrichment_provider,
+        enrichment_model=config.indexing.enrichment_model,
     )
 
     for check in report.checks:

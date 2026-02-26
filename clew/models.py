@@ -57,6 +57,11 @@ class IndexingConfig(BaseModel):
     fallback_max_tokens: int = Field(default=3000, ge=500, le=8000)
     embedding_provider: str = Field(default="voyage")
     embedding_model: str = Field(default="voyage-code-3")
+    # Inline enrichment config
+    enrichment_provider: str = Field(default="none")  # "anthropic", "openai", "ollama", "none"
+    enrichment_model: str = Field(default="")  # empty = provider default
+    enrichment_max_concurrent: int = Field(default=5, ge=1, le=20)
+    # Deprecated (kept for YAML back-compat, ignored internally)
     nl_description_enabled: bool = Field(default=False)
     nl_description_model: str = Field(default="claude-sonnet-4-5-20250929")
     nl_description_max_concurrent: int = Field(default=5, ge=1, le=20)
@@ -87,6 +92,7 @@ class ProjectConfig(BaseModel):
     """Root configuration model."""
 
     project: dict[str, str] = Field(default_factory=lambda: {"name": "default", "root": "."})
+    collection_name: str = Field(default="code")
     collections: dict[str, CollectionConfig] = Field(default_factory=dict)
     chunking: dict[str, int] = Field(default_factory=lambda: {"default_max_tokens": 3000})
     django: DjangoConfig = Field(default_factory=DjangoConfig)

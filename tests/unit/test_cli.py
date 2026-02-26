@@ -196,6 +196,7 @@ class TestIndexCommand:
             return_value=Mock(files_processed=1, chunks_created=3, files_skipped=0, errors=[])
         )
 
+        mock_components.config.collection_name = "code"
         result = runner.invoke(app, ["index", str(tmp_path), "--full"])
         assert result.exit_code == 0
         mock_components.qdrant.delete_collection.assert_called_once_with("code")
@@ -263,6 +264,7 @@ class TestIndexNLDescriptions:
         mock_factory.assert_called_once_with(
             config_path=None,
             nl_descriptions=True,
+            skip_enrichment=False,
             project_root=tmp_path,
         )
 
@@ -285,14 +287,40 @@ class TestIndexNLDescriptions:
         mock_factory.assert_called_once_with(
             config_path=None,
             nl_descriptions=False,
+            skip_enrichment=False,
             project_root=tmp_path,
         )
 
-    def test_nl_descriptions_in_help(self) -> None:
-        """--nl-descriptions appears in help text."""
+
+class TestIndexSkipEnrichment:
+    @patch("clew.discovery.discover_files")
+    @patch("clew.factory.create_components")
+    def test_skip_enrichment_flag(
+        self, mock_factory: Mock, mock_discover: Mock, tmp_path: Path
+    ) -> None:
+        """--skip-enrichment flag passes skip_enrichment=True to factory."""
+        test_py = tmp_path / "test.py"
+        test_py.write_text("x = 1")
+        mock_discover.return_value = [test_py]
+        mock_components = mock_factory.return_value
+        mock_components.indexing_pipeline.index_files = AsyncMock(
+            return_value=Mock(files_processed=1, chunks_created=3, files_skipped=0, errors=[])
+        )
+
+        result = runner.invoke(app, ["index", str(tmp_path), "--full", "--skip-enrichment"])
+        assert result.exit_code == 0
+        mock_factory.assert_called_once_with(
+            config_path=None,
+            nl_descriptions=False,
+            skip_enrichment=True,
+            project_root=tmp_path,
+        )
+
+    def test_skip_enrichment_in_help(self) -> None:
+        """--skip-enrichment appears in help text."""
         result = runner.invoke(app, ["index", "--help"])
         assert result.exit_code == 0
-        assert "--nl-descriptions" in result.stdout
+        assert "--skip-enrichment" in result.stdout
 
 
 class TestTraceCommand:
@@ -651,6 +679,7 @@ class TestStatusJsonOutput:
     def test_status_json_output(self, mock_factory: Mock, mock_tracker_cls: Mock) -> None:
         """--json produces valid JSON with health/collections."""
         mock_components = mock_factory.return_value
+        mock_components.config.collection_name = "code"
         mock_components.qdrant.health_check.return_value = True
         mock_components.qdrant.collection_exists.side_effect = lambda n: n == "code"
         mock_components.qdrant.collection_count.return_value = 42

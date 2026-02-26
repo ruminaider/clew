@@ -695,6 +695,83 @@ class IndexingPipeline:
 
         return all_embeddings
 
+    async def _generate_inline_enrichment(
+        self,
+        chunks: list[Chunk],
+        chunk_ids: list[str],
+        chunk_relationships: list[tuple[list[str], list[str], list[str]]],
+    ) -> list[tuple[str, str] | None]:
+        """Generate enrichment inline for chunks that need it.
+
+        Returns a list parallel to chunks with (description, keywords) or None.
+        Checks enrichment cache first, generates only for uncached chunks without docstrings.
+        """
+        results: list[tuple[str, str] | None] = [None] * len(chunks)
+
+        if not self._description_provider:
+            # Check cache for pre-computed enrichment even without a provider
+            if self._cache:
+                for i, chunk_id in enumerate(chunk_ids):
+                    enrichment = self._cache.get_enrichment(chunk_id)
+                    if enrichment:
+                        results[i] = enrichment
+            return results
+
+        to_generate: list[tuple[int, str]] = []  # (index, chunk_id)
+
+        for i, (chunk, chunk_id) in enumerate(zip(chunks, chunk_ids)):
+            # Check cache first
+            if self._cache:
+                enrichment = self._cache.get_enrichment(chunk_id)
+                if enrichment:
+                    results[i] = enrichment
+                    continue
+
+            # Skip chunks that already have docstrings
+            if chunk.metadata.get("docstring"):
+                continue
+
+            # Skip file_summary chunks — they're synthetic
+            if chunk.metadata.get("entity_type") == "file_summary":
+                continue
+
+            to_generate.append((i, chunk_id))
+
+        if not to_generate:
+            return results
+
+        # Generate enrichment concurrently for uncached chunks
+        async def _enrich_one(idx: int, cid: str) -> tuple[int, tuple[str, str] | None]:
+            chunk = chunks[idx]
+            callers, callees, imports = chunk_relationships[idx]
+            file_path_str = chunk.file_path
+            result = await self._description_provider.generate_enrichment(  # type: ignore[union-attr]
+                code=chunk.content,
+                language=detect_language(file_path_str),
+                entity_type=chunk.metadata.get("entity_type", "section"),
+                name=chunk.metadata.get("qualified_name", chunk.metadata.get("name", "")),
+                file_path=file_path_str,
+                layer=classify_layer(file_path_str),
+                app_name=detect_app_name(file_path_str),
+                callers=", ".join(callers) if callers else "",
+                callees=", ".join(callees) if callees else "",
+                imports=", ".join(imports) if imports else "",
+            )
+            return idx, result
+
+        tasks = [_enrich_one(idx, cid) for idx, cid in to_generate]
+        enrichment_results = await asyncio.gather(*tasks)
+
+        for idx, enrichment in enrichment_results:
+            if enrichment:
+                results[idx] = enrichment
+                # Cache the result for future runs
+                if self._cache:
+                    desc, kw = enrichment
+                    self._cache.set_enrichment(chunk_ids[idx], desc, kw)
+
+        return results
+
     async def _embed_and_upsert(
         self,
         chunks: list[Chunk],
@@ -702,14 +779,48 @@ class IndexingPipeline:
         *,
         importance_scores: dict[str, float] | None = None,
     ) -> None:
-        """Embed a batch of chunks and upsert to Qdrant (Pass 1).
+        """Embed a batch of chunks and upsert to Qdrant.
 
-        Uses 3 named vectors: signature, semantic (stub), body.
+        Uses 3 named vectors: signature, semantic, body.
+        If a description provider is configured, generates enrichment inline
+        and caches it. Otherwise falls back to semantic stubs.
         """
-        # Generate NL descriptions (if provider configured — backward compat with --nl-descriptions)
-        descriptions = await self._generate_descriptions(chunks)
+        # Pre-compute chunk IDs and relationships for the batch
+        chunk_ids: list[str] = []
+        chunk_relationships: list[tuple[list[str], list[str], list[str]]] = []
+        chunk_metadata: list[dict[str, str]] = []
 
-        # Build per-chunk metadata and texts for each vector
+        for chunk in chunks:
+            file_path_str = chunk.file_path
+            entity_type = chunk.metadata.get("entity_type", "section")
+            qualified_name = chunk.metadata.get("qualified_name", "")
+            chunk_id = build_chunk_id(
+                file_path_str,
+                entity_type,
+                qualified_name,
+                content=chunk.content,
+            )
+            chunk_ids.append(chunk_id)
+            callers, callees, imports = self._get_chunk_relationships(chunk_id)
+            chunk_relationships.append((callers, callees, imports))
+            chunk_metadata.append(
+                {
+                    "entity_type": entity_type,
+                    "qualified_name": qualified_name,
+                    "app_name": detect_app_name(file_path_str),
+                    "layer": classify_layer(file_path_str),
+                    "signature": extract_signature(entity_type, chunk.content),
+                }
+            )
+
+        # Generate inline enrichment (checks cache, generates for uncached)
+        enrichments = await self._generate_inline_enrichment(
+            chunks,
+            chunk_ids,
+            chunk_relationships,
+        )
+
+        # Build per-chunk texts for each vector
         sig_texts: list[str] = []
         sem_texts: list[str] = []
         body_texts: list[str] = []
@@ -717,69 +828,37 @@ class IndexingPipeline:
 
         for i, chunk in enumerate(chunks):
             file_path_str = chunk.file_path
-            entity_type = chunk.metadata.get("entity_type", "section")
-            qualified_name = chunk.metadata.get("qualified_name", "")
-            app_name = detect_app_name(file_path_str)
-            layer = classify_layer(file_path_str)
-            signature = extract_signature(entity_type, chunk.content)
-            chunk_id = build_chunk_id(
-                file_path_str,
-                entity_type,
-                qualified_name,
-                content=chunk.content,
-            )
+            meta = chunk_metadata[i]
+            callers, callees, imports = chunk_relationships[i]
 
-            # Build signature text
             sig_text = _build_signature_text(
-                chunk_id,
-                signature,
+                chunk_ids[i],
+                meta["signature"],
                 chunk.metadata.get("parent_class", ""),
-                app_name,
-                layer,
+                meta["app_name"],
+                meta["layer"],
             )
 
-            # Get relationship context for semantic stub
-            callers, callees, imports = self._get_chunk_relationships(chunk_id)
-
-            # Check if we have enrichment data in cache
             enriched = False
             enrichment_desc = ""
             enrichment_kw = ""
-            if self._cache:
-                enrichment = self._cache.get_enrichment(chunk_id)
-                if enrichment:
-                    enrichment_desc, enrichment_kw = enrichment
-                    enriched = True
+            enrichment = enrichments[i]
+            if enrichment:
+                enrichment_desc, enrichment_kw = enrichment
+                enriched = True
 
-            # Build semantic text
-            desc = descriptions[i] if descriptions else None
             if enriched:
-                # Use cached enrichment for semantic vector
                 sem_text = _build_enriched_semantic_text(
                     file_path_str,
-                    layer,
-                    app_name,
+                    meta["layer"],
+                    meta["app_name"],
                     enrichment_desc,
                     enrichment_kw,
                     callers=callers,
                     callees=callees,
                     imports=imports,
                 )
-            elif desc:
-                # Backward compat: use NL description from --nl-descriptions
-                sem_text = _build_enriched_semantic_text(
-                    file_path_str,
-                    layer,
-                    app_name,
-                    desc,
-                    "",
-                    callers=callers,
-                    callees=callees,
-                    imports=imports,
-                )
-                enriched = True
             else:
-                # Pass 1 stub: signature + relationships
                 sem_text = _build_semantic_stub(
                     sig_text,
                     callers=callers,
@@ -791,7 +870,6 @@ class IndexingPipeline:
             sem_texts.append(sem_text)
             body_texts.append(chunk.content)
 
-            # Compute importance score for this chunk's file
             importance_score = 0.0
             if importance_scores:
                 importance_score = importance_scores.get(file_path_str, 0.0)
@@ -799,15 +877,15 @@ class IndexingPipeline:
             chunk_metas.append(
                 {
                     "chunk": chunk,
-                    "chunk_id": chunk_id,
-                    "entity_type": entity_type,
-                    "qualified_name": qualified_name,
-                    "app_name": app_name,
-                    "layer": layer,
-                    "signature": signature,
+                    "chunk_id": chunk_ids[i],
+                    "entity_type": meta["entity_type"],
+                    "qualified_name": meta["qualified_name"],
+                    "app_name": meta["app_name"],
+                    "layer": meta["layer"],
+                    "signature": meta["signature"],
                     "enriched": enriched,
                     "importance_score": importance_score,
-                    "description": enrichment_desc or (desc or ""),
+                    "description": enrichment_desc,
                     "keywords": enrichment_kw,
                 }
             )
@@ -818,11 +896,11 @@ class IndexingPipeline:
         body_embeddings = await self._embed_with_token_limit(body_texts)
 
         points: list[models.PointStruct] = []
-        for i, meta in enumerate(chunk_metas):
-            pt_chunk = meta["chunk"]
+        for i, cm in enumerate(chunk_metas):
+            pt_chunk = cm["chunk"]
             assert isinstance(pt_chunk, Chunk)
-            pt_chunk_id = str(meta["chunk_id"])
-            pt_enriched = bool(meta["enriched"])
+            pt_chunk_id = str(cm["chunk_id"])
+            pt_enriched = bool(cm["enriched"])
 
             # BM25 sparse vector
             if pt_enriched:
@@ -840,12 +918,12 @@ class IndexingPipeline:
                 "chunk_id": pt_chunk_id,
                 "file_path": file_path_str,
                 "language": detect_language(file_path_str),
-                "chunk_type": meta["entity_type"],
+                "chunk_type": cm["entity_type"],
                 "class_name": pt_chunk.metadata.get("parent_class", ""),
                 "function_name": pt_chunk.metadata.get("name", ""),
-                "signature": meta["signature"],
-                "app_name": meta["app_name"],
-                "layer": meta["layer"],
+                "signature": cm["signature"],
+                "app_name": cm["app_name"],
+                "layer": cm["layer"],
                 "line_start": pt_chunk.metadata.get("line_start", 0),
                 "line_end": pt_chunk.metadata.get("line_end", 0),
                 "is_test": is_test_file(file_path_str),
@@ -853,15 +931,15 @@ class IndexingPipeline:
                 "embedding_model": self._embedder.model_name,
                 "indexed_at": datetime.now(tz=timezone.utc).isoformat(),
                 "enriched": pt_enriched,
-                "importance_score": meta["importance_score"],
+                "importance_score": cm["importance_score"],
             }
 
             # Add description/keywords if available
-            if meta["description"]:
-                payload["description"] = meta["description"]
-                payload["nl_description"] = meta["description"]  # backward compat
-            if meta["keywords"]:
-                payload["keywords"] = meta["keywords"]
+            if cm["description"]:
+                payload["description"] = cm["description"]
+                payload["nl_description"] = cm["description"]  # backward compat
+            if cm["keywords"]:
+                payload["keywords"] = cm["keywords"]
 
             # Add docstring from chunk metadata if present
             docstring = pt_chunk.metadata.get("docstring")

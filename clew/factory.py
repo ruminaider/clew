@@ -23,6 +23,7 @@ from clew.search.telemetry import QueryTelemetry
 if TYPE_CHECKING:
     from clew.clients.base import EmbeddingProvider
     from clew.clients.description import DescriptionProvider
+    from clew.models import IndexingConfig
 
 
 @dataclass
@@ -96,17 +97,72 @@ def _create_reranker(provider: str, env: Environment) -> RerankProvider | None:
     return None
 
 
+def _create_enrichment_provider(
+    config: IndexingConfig, env: Environment
+) -> DescriptionProvider | None:
+    """Create enrichment provider based on config setting.
+
+    "none" → None (no enrichment, semantic stubs used).
+    "anthropic" → AnthropicDescriptionProvider (requires ANTHROPIC_API_KEY).
+    "openai" → OpenAIDescriptionProvider (requires ENRICHMENT_API_KEY).
+    "ollama" → OllamaDescriptionProvider (local, no key required).
+    """
+    provider = config.enrichment_provider
+
+    if provider == "none":
+        return None
+
+    if provider == "anthropic":
+        if not env.ANTHROPIC_API_KEY:
+            return None
+        from clew.clients.description import AnthropicDescriptionProvider
+
+        model = config.enrichment_model or "claude-haiku-4-5-20251001"
+        return AnthropicDescriptionProvider(
+            api_key=env.ANTHROPIC_API_KEY,
+            model=model,
+            max_concurrent=config.enrichment_max_concurrent,
+        )
+
+    if provider == "openai":
+        if not env.ENRICHMENT_API_KEY:
+            return None
+        from clew.clients.description_openai import OpenAIDescriptionProvider
+
+        model = config.enrichment_model or "gpt-4o-mini"
+        return OpenAIDescriptionProvider(
+            api_key=env.ENRICHMENT_API_KEY,
+            base_url=env.ENRICHMENT_BASE_URL,
+            model=model,
+            max_concurrent=config.enrichment_max_concurrent,
+        )
+
+    if provider == "ollama":
+        from clew.clients.description_ollama import OllamaDescriptionProvider
+
+        model = config.enrichment_model or "qwen3:8b"
+        return OllamaDescriptionProvider(
+            base_url=env.OLLAMA_URL,
+            model=model,
+            max_concurrent=config.enrichment_max_concurrent,
+        )
+
+    return None
+
+
 def create_components(
     config_path: Path | None = None,
     *,
     nl_descriptions: bool = False,
+    skip_enrichment: bool = False,
     project_root: Path | None = None,
 ) -> Components:
     """Create all components with proper configuration.
 
     Args:
         config_path: Path to YAML config file. Uses defaults if None or missing.
-        nl_descriptions: If True, override config to enable NL description generation.
+        nl_descriptions: If True, override config to enable NL description generation (legacy).
+        skip_enrichment: If True, skip enrichment even if provider is configured.
         project_root: Project root directory for cache dir resolution.
 
     Returns:
@@ -117,7 +173,12 @@ def create_components(
     if config_path:
         config = ProjectConfig.from_yaml(config_path)
     else:
-        config = ProjectConfig()
+        # Auto-discover .clew.yaml from project root or git root
+        auto_config = env.CACHE_DIR.parent / ".clew.yaml"
+        if auto_config.exists():
+            config = ProjectConfig.from_yaml(auto_config)
+        else:
+            config = ProjectConfig()
 
     if nl_descriptions:
         config.indexing.nl_description_enabled = True
@@ -165,9 +226,14 @@ def create_components(
         telemetry=telemetry,
     )
 
-    # NL Description provider (optional)
+    # Enrichment provider (optional)
     description_provider: DescriptionProvider | None = None
-    if config.indexing.nl_description_enabled and env.ANTHROPIC_API_KEY:
+    if skip_enrichment:
+        pass  # Explicitly skip enrichment
+    elif config.indexing.enrichment_provider != "none":
+        description_provider = _create_enrichment_provider(config.indexing, env)
+    elif config.indexing.nl_description_enabled and env.ANTHROPIC_API_KEY:
+        # Legacy fallback: --nl-descriptions flag
         from clew.clients.description import AnthropicDescriptionProvider
 
         description_provider = AnthropicDescriptionProvider(

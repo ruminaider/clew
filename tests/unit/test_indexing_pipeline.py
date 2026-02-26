@@ -206,6 +206,9 @@ class TestPipelineDescriptions:
         provider = Mock()
         provider.model_name = "claude-sonnet-4-5-20250929"
         provider.generate_batch = AsyncMock(return_value=["A test description."])
+        provider.generate_enrichment = AsyncMock(
+            return_value=("A test description.", "test keywords")
+        )
         return provider
 
     @pytest.fixture
@@ -222,6 +225,7 @@ class TestPipelineDescriptions:
         cache.record_failed_file = Mock()
         cache.get_all_relationship_pairs = Mock(return_value=[])
         cache.get_enrichment = Mock(return_value=None)
+        cache.set_enrichment = Mock()
         cache.get_relationships = Mock(return_value=[])
 
         # Mock the _get_state_conn context manager for _normalize_relationship_targets
@@ -280,8 +284,8 @@ class TestPipelineDescriptions:
         f.write_text("x = 1\ny = 2\n")
         await pipeline.index_files([f], collection="code")
 
-        # Verify generate_batch was called
-        mock_description_provider.generate_batch.assert_called()
+        # Verify generate_enrichment was called (inline enrichment, not generate_batch)
+        mock_description_provider.generate_enrichment.assert_called()
 
         # With 3 named vectors, embedder is called 3 times per batch
         # (signature, semantic, body). The semantic text should contain the description.
@@ -291,7 +295,7 @@ class TestPipelineDescriptions:
             all_texts.extend(call[0][0])
         assert any("A test description." in t for t in all_texts)
 
-        # Verify payload has nl_description field
+        # Verify payload has nl_description field (backward compat)
         points = mock_qdrant.upsert_points.call_args[0][1]
         payload = points[0].payload
         assert payload.get("nl_description") == "A test description."
@@ -321,13 +325,12 @@ class TestPipelineDescriptions:
         f.write_text('def hello():\n    """Say hello."""\n    return "world"\n')
         await pipeline.index_files([f], collection="code")
 
-        # If generate_batch was called, it should only be for file_summary (not the docstring chunk)
-        if mock_description_provider.generate_batch.called:
-            call_args = mock_description_provider.generate_batch.call_args
-            items = call_args[0][0]
-            # None of the items should be the actual function chunk
-            for item in items:
-                assert item["entity_type"] == "file_summary"
+        # generate_enrichment should not be called for the docstring chunk
+        # (the inline enrichment skips chunks with docstrings and file_summary chunks)
+        # If called, verify it was NOT for the function with a docstring
+        if mock_description_provider.generate_enrichment.called:
+            for call in mock_description_provider.generate_enrichment.call_args_list:
+                assert call.kwargs.get("name") != "hello"
 
     async def test_pipeline_caches_descriptions(
         self,
@@ -349,11 +352,11 @@ class TestPipelineDescriptions:
         f.write_text("x = 1\n")
         await pipeline.index_files([f], collection="code")
 
-        # Verify set_description was called to cache the result
-        mock_cache.set_description.assert_called()
-        call_args = mock_cache.set_description.call_args
-        assert call_args[0][1] == "claude-sonnet-4-5-20250929"  # model name
-        assert call_args[0][2] == "A test description."  # description
+        # Verify set_enrichment was called to cache the result
+        mock_cache.set_enrichment.assert_called()
+        call_args = mock_cache.set_enrichment.call_args
+        assert call_args[0][1] == "A test description."  # description
+        assert call_args[0][2] == "test keywords"  # keywords
 
     async def test_pipeline_uses_cached_description(
         self,
@@ -363,8 +366,8 @@ class TestPipelineDescriptions:
         mock_cache: Mock,
         tmp_path: Path,
     ) -> None:
-        """Pipeline uses cached description instead of generating a new one."""
-        mock_cache.get_description = Mock(return_value="Cached description.")
+        """Pipeline uses cached enrichment instead of generating new one."""
+        mock_cache.get_enrichment = Mock(return_value=("Cached description.", "cached keywords"))
 
         pipeline = IndexingPipeline(
             qdrant=mock_qdrant,
@@ -377,8 +380,8 @@ class TestPipelineDescriptions:
         f.write_text("x = 1\n")
         await pipeline.index_files([f], collection="code")
 
-        # generate_batch should NOT be called because cache hit
-        mock_description_provider.generate_batch.assert_not_called()
+        # generate_enrichment should NOT be called because cache hit
+        mock_description_provider.generate_enrichment.assert_not_called()
 
         # Verify the cached description was used in semantic vector embedding
         all_embed_calls = mock_embedder.embed.call_args_list

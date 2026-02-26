@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from clew.config import Environment
 from clew.exceptions import QdrantConnectionError
-from clew.factory import Components, create_components
+from clew.factory import Components, _create_enrichment_provider, create_components
+from clew.models import IndexingConfig
 
 
 @pytest.fixture
@@ -18,6 +20,9 @@ def mock_env() -> MagicMock:
     env.QDRANT_API_KEY = None
     env.CACHE_DIR = Path("/tmp/test-cache")
     env.ANTHROPIC_API_KEY = ""
+    env.ENRICHMENT_API_KEY = ""
+    env.ENRICHMENT_BASE_URL = "https://api.openai.com/v1"
+    env.OLLAMA_URL = "http://localhost:11434"
     return env
 
 
@@ -32,6 +37,7 @@ def _patch_all(mock_env: MagicMock) -> dict[str, MagicMock]:
         patch("clew.factory.CacheDB") as m_cache,
         patch("clew.factory.HybridSearchEngine") as m_hybrid,
         patch("clew.factory._create_reranker", return_value=mock_reranker) as m_rerank,
+        patch("clew.factory._create_enrichment_provider", return_value=None) as m_enrich,
         patch("clew.factory.IndexingPipeline") as m_pipeline,
         patch("clew.factory.SearchEngine") as m_search_engine,
     ):
@@ -42,6 +48,7 @@ def _patch_all(mock_env: MagicMock) -> dict[str, MagicMock]:
             "CacheDB": m_cache,
             "HybridSearchEngine": m_hybrid,
             "_create_reranker": m_rerank,
+            "_create_enrichment_provider": m_enrich,
             "mock_reranker": mock_reranker,
             "IndexingPipeline": m_pipeline,
             "SearchEngine": m_search_engine,
@@ -195,7 +202,7 @@ class TestNLDescriptionsOverride:
 
 
 class TestDescriptionProviderCreatedWhenEnabled:
-    """When nl_description_enabled is True and ANTHROPIC_API_KEY is set."""
+    """When nl_description_enabled is True and ANTHROPIC_API_KEY is set (legacy path)."""
 
     def test_description_provider_created(self, _patch_all: dict[str, MagicMock]) -> None:
         _patch_all["env"].ANTHROPIC_API_KEY = "test-anthropic-key"
@@ -208,6 +215,7 @@ class TestDescriptionProviderCreatedWhenEnabled:
             mock_config.terminology_file = None
             mock_config.search = MagicMock()
             mock_indexing = MagicMock()
+            mock_indexing.enrichment_provider = "none"  # no new enrichment
             mock_indexing.nl_description_enabled = True
             mock_indexing.nl_description_model = "claude-sonnet-4-5-20250929"
             mock_indexing.nl_description_max_concurrent = 5
@@ -234,6 +242,7 @@ class TestDescriptionProviderCreatedWhenEnabled:
             mock_config.terminology_file = None
             mock_config.search = MagicMock()
             mock_indexing = MagicMock()
+            mock_indexing.enrichment_provider = "none"
             mock_indexing.nl_description_enabled = True
             mock_config.indexing = mock_indexing
             mock_config_cls.return_value = mock_config
@@ -256,6 +265,7 @@ class TestIndexingPipelineReceivesDescriptionProvider:
             mock_config.terminology_file = None
             mock_config.search = MagicMock()
             mock_indexing = MagicMock()
+            mock_indexing.enrichment_provider = "none"
             mock_indexing.nl_description_enabled = True
             mock_indexing.nl_description_model = "claude-sonnet-4-5-20250929"
             mock_indexing.nl_description_max_concurrent = 5
@@ -270,3 +280,124 @@ class TestIndexingPipelineReceivesDescriptionProvider:
                 description_provider=mock_provider_cls.return_value,
                 cache=_patch_all["CacheDB"].return_value,
             )
+
+
+class TestCreateEnrichmentProvider:
+    """Test _create_enrichment_provider dispatch function."""
+
+    def test_none_returns_none(self) -> None:
+        config = IndexingConfig(enrichment_provider="none")
+        env = MagicMock()
+        assert _create_enrichment_provider(config, env) is None
+
+    def test_anthropic_with_key(self) -> None:
+        config = IndexingConfig(enrichment_provider="anthropic", enrichment_model="")
+        env = MagicMock()
+        env.ANTHROPIC_API_KEY = "test-key"
+        with patch("clew.clients.description.AnthropicDescriptionProvider") as mock_cls:
+            result = _create_enrichment_provider(config, env)
+            mock_cls.assert_called_once_with(
+                api_key="test-key",
+                model="claude-haiku-4-5-20251001",
+                max_concurrent=5,
+            )
+            assert result is mock_cls.return_value
+
+    def test_anthropic_custom_model(self) -> None:
+        config = IndexingConfig(
+            enrichment_provider="anthropic",
+            enrichment_model="claude-sonnet-4-5-20250929",
+        )
+        env = MagicMock()
+        env.ANTHROPIC_API_KEY = "test-key"
+        with patch("clew.clients.description.AnthropicDescriptionProvider") as mock_cls:
+            _create_enrichment_provider(config, env)
+            mock_cls.assert_called_once_with(
+                api_key="test-key",
+                model="claude-sonnet-4-5-20250929",
+                max_concurrent=5,
+            )
+
+    def test_anthropic_no_key_returns_none(self) -> None:
+        config = IndexingConfig(enrichment_provider="anthropic")
+        env = MagicMock()
+        env.ANTHROPIC_API_KEY = ""
+        assert _create_enrichment_provider(config, env) is None
+
+    def test_openai_with_key(self) -> None:
+        config = IndexingConfig(enrichment_provider="openai", enrichment_model="")
+        env = MagicMock()
+        env.ENRICHMENT_API_KEY = "test-openai-key"
+        env.ENRICHMENT_BASE_URL = "https://api.openai.com/v1"
+        with patch("clew.clients.description_openai.OpenAIDescriptionProvider") as mock_cls:
+            result = _create_enrichment_provider(config, env)
+            mock_cls.assert_called_once_with(
+                api_key="test-openai-key",
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o-mini",
+                max_concurrent=5,
+            )
+            assert result is mock_cls.return_value
+
+    def test_openai_custom_base_url(self) -> None:
+        config = IndexingConfig(
+            enrichment_provider="openai",
+            enrichment_model="anthropic/claude-haiku-4-5",
+        )
+        env = MagicMock()
+        env.ENRICHMENT_API_KEY = "or-key"
+        env.ENRICHMENT_BASE_URL = "https://openrouter.ai/api/v1"
+        with patch("clew.clients.description_openai.OpenAIDescriptionProvider") as mock_cls:
+            _create_enrichment_provider(config, env)
+            mock_cls.assert_called_once_with(
+                api_key="or-key",
+                base_url="https://openrouter.ai/api/v1",
+                model="anthropic/claude-haiku-4-5",
+                max_concurrent=5,
+            )
+
+    def test_openai_no_key_returns_none(self) -> None:
+        config = IndexingConfig(enrichment_provider="openai")
+        env = MagicMock()
+        env.ENRICHMENT_API_KEY = ""
+        assert _create_enrichment_provider(config, env) is None
+
+    def test_ollama(self) -> None:
+        config = IndexingConfig(enrichment_provider="ollama", enrichment_model="")
+        env = MagicMock()
+        env.OLLAMA_URL = "http://localhost:11434"
+        with patch("clew.clients.description_ollama.OllamaDescriptionProvider") as mock_cls:
+            result = _create_enrichment_provider(config, env)
+            mock_cls.assert_called_once_with(
+                base_url="http://localhost:11434",
+                model="qwen3:8b",
+                max_concurrent=5,
+            )
+            assert result is mock_cls.return_value
+
+    def test_ollama_custom_model(self) -> None:
+        config = IndexingConfig(enrichment_provider="ollama", enrichment_model="llama3.1:8b")
+        env = MagicMock()
+        env.OLLAMA_URL = "http://localhost:11434"
+        with patch("clew.clients.description_ollama.OllamaDescriptionProvider") as mock_cls:
+            _create_enrichment_provider(config, env)
+            mock_cls.assert_called_once_with(
+                base_url="http://localhost:11434",
+                model="llama3.1:8b",
+                max_concurrent=5,
+            )
+
+    def test_unknown_provider_returns_none(self) -> None:
+        config = IndexingConfig(enrichment_provider="unknown")
+        env = MagicMock()
+        assert _create_enrichment_provider(config, env) is None
+
+
+class TestSkipEnrichmentFlag:
+    """skip_enrichment=True bypasses all enrichment providers."""
+
+    def test_skip_enrichment_no_provider(self, _patch_all: dict[str, MagicMock]) -> None:
+        result = create_components(skip_enrichment=True)
+        assert result.description_provider is None
+        # _create_enrichment_provider should not be called
+        _patch_all["_create_enrichment_provider"].assert_not_called()

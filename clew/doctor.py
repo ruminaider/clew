@@ -152,7 +152,9 @@ def check_cache_dir(cache_dir: Path) -> CheckResult:
         )
 
 
-def check_index(cache_dir: Path, project_root: Path | None) -> CheckResult:
+def check_index(
+    cache_dir: Path, project_root: Path | None, collection_name: str = "code"
+) -> CheckResult:
     """Check if index exists and how far behind HEAD it is."""
     try:
         cache = CacheDB(cache_dir)
@@ -164,7 +166,7 @@ def check_index(cache_dir: Path, project_root: Path | None) -> CheckResult:
             fix_hint="Run: clew index . --full",
         )
 
-    last_commit = cache.get_last_indexed_commit("code")
+    last_commit = cache.get_last_indexed_commit(collection_name)
     if not last_commit:
         return CheckResult(
             name="Index",
@@ -179,7 +181,7 @@ def check_index(cache_dir: Path, project_root: Path | None) -> CheckResult:
 
     if staleness.commits_behind == 0 and not staleness.has_uncommitted_changes:
         # Try to get chunk count from Qdrant (best effort)
-        chunk_count = _get_chunk_count()
+        chunk_count = _get_chunk_count(collection_name)
         count_str = f", {chunk_count:,} chunks" if chunk_count is not None else ""
         return CheckResult(
             name="Index",
@@ -203,15 +205,92 @@ def check_index(cache_dir: Path, project_root: Path | None) -> CheckResult:
     )
 
 
-def _get_chunk_count() -> int | None:
+def _get_chunk_count(collection_name: str = "code") -> int | None:
     """Best-effort chunk count from Qdrant. Returns None on any error."""
     try:
         qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
         qdrant_api_key = os.environ.get("QDRANT_API_KEY") or None
         client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=5)
-        return client.count(collection_name="code").count
+        return client.count(collection_name=collection_name).count
     except Exception:
         return None
+
+
+def check_enrichment(
+    enrichment_provider: str,
+    enrichment_model: str,
+    env_anthropic_key: str,
+    env_enrichment_key: str,
+    ollama_url: str,
+) -> CheckResult:
+    """Check enrichment provider configuration and connectivity."""
+    if enrichment_provider == "none":
+        return CheckResult(
+            name="Enrichment",
+            passed=True,
+            detail="not configured",
+            fix_hint=(
+                "Enrichment improves search quality. Configure in .clew.yaml:\n"
+                "  enrichment_provider: anthropic  # Anthropic API (set ANTHROPIC_API_KEY)\n"
+                "  enrichment_provider: openai     # any OpenAI-compatible API "
+                "(set ENRICHMENT_API_KEY)\n"
+                "  enrichment_provider: ollama     # local LLM via Ollama\n"
+                "Or use /clew:enrich skill in Claude Code (uses your subscription)."
+            ),
+        )
+
+    model_display = enrichment_model or "(default)"
+
+    if enrichment_provider == "anthropic":
+        if not env_anthropic_key:
+            return CheckResult(
+                name="Enrichment",
+                passed=False,
+                detail="provider 'anthropic' but ANTHROPIC_API_KEY not set",
+                fix_hint="Set ANTHROPIC_API_KEY environment variable.",
+            )
+        return CheckResult(
+            name="Enrichment",
+            passed=True,
+            detail=f"anthropic ({model_display})",
+        )
+
+    if enrichment_provider == "openai":
+        if not env_enrichment_key:
+            return CheckResult(
+                name="Enrichment",
+                passed=False,
+                detail="provider 'openai' but ENRICHMENT_API_KEY not set",
+                fix_hint="Set ENRICHMENT_API_KEY environment variable.",
+            )
+        return CheckResult(
+            name="Enrichment",
+            passed=True,
+            detail=f"openai ({model_display})",
+        )
+
+    if enrichment_provider == "ollama":
+        # Reuse Ollama connectivity check
+        ollama_result = check_ollama(ollama_url)
+        if not ollama_result.passed:
+            return CheckResult(
+                name="Enrichment",
+                passed=False,
+                detail="provider 'ollama' but Ollama unreachable",
+                fix_hint=ollama_result.fix_hint,
+            )
+        return CheckResult(
+            name="Enrichment",
+            passed=True,
+            detail=f"ollama ({model_display})",
+        )
+
+    return CheckResult(
+        name="Enrichment",
+        passed=False,
+        detail=f"unknown provider '{enrichment_provider}'",
+        fix_hint="Valid providers: anthropic, openai, ollama, none",
+    )
 
 
 def check_mcp_server() -> CheckResult:
@@ -236,6 +315,9 @@ def check_mcp_server() -> CheckResult:
 def run_doctor(
     project_root: Path | None = None,
     embedding_provider: str = "voyage",
+    collection_name: str = "code",
+    enrichment_provider: str = "none",
+    enrichment_model: str = "",
 ) -> DoctorReport:
     """Run all health checks and return the aggregated report."""
     from clew.config import Environment
@@ -257,7 +339,16 @@ def run_doctor(
         report.checks.append(check_voyage(env.VOYAGE_API_KEY))
 
     report.checks.append(check_cache_dir(env.CACHE_DIR))
-    report.checks.append(check_index(env.CACHE_DIR, project_root))
+    report.checks.append(check_index(env.CACHE_DIR, project_root, collection_name))
+    report.checks.append(
+        check_enrichment(
+            enrichment_provider=enrichment_provider,
+            enrichment_model=enrichment_model,
+            env_anthropic_key=env.ANTHROPIC_API_KEY,
+            env_enrichment_key=env.ENRICHMENT_API_KEY,
+            ollama_url=env.OLLAMA_URL,
+        )
+    )
     report.checks.append(check_mcp_server())
 
     return report

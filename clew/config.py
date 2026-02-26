@@ -67,6 +67,8 @@ class Environment:
     CLEW_FULL_INDEX_MODEL: str = os.environ.get("CLEW_FULL_INDEX_MODEL", "claude-opus-4-6")
     OLLAMA_URL: str = os.environ.get("OLLAMA_URL", "http://localhost:11434")
     CLEW_CONFIDENCE_THRESHOLD: float = float(os.environ.get("CLEW_CONFIDENCE_THRESHOLD", "0.65"))
+    ENRICHMENT_API_KEY: str = os.environ.get("ENRICHMENT_API_KEY", "")
+    ENRICHMENT_BASE_URL: str = os.environ.get("ENRICHMENT_BASE_URL", "https://api.openai.com/v1")
 
     def __init__(self, project_root: Path | None = None) -> None:
         """Initialize with optional project_root for cache dir resolution."""

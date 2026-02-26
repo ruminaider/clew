@@ -20,6 +20,8 @@ Semantic code search tool with hybrid retrieval and MCP integration for Claude C
 
 **Phase 6 (Offline Provider Support) is complete.** 56 source modules, 52 test files, 853 tests passing at 87% coverage. Ollama embedding provider (qwen3-embedding default), reranker ABC extraction, local rerankers (FlashRank + Noop), conditional API key validation, dimension mismatch detection, `clew doctor` Ollama check. Zero API keys required for fully offline operation.
 
+**Inline Enrichment Pipeline is complete.** 58 source modules, 54 test files, 896 tests passing. LLM enrichment runs inline during `clew index` with configurable providers: Anthropic API, any OpenAI-compatible API (OpenAI, OpenRouter, DeepSeek, Together, Groq), local Ollama, or none. Single-pass indexing replaces the old index→enrich→reembed workflow.
+
 ## Module Inventory
 
 ```
@@ -32,6 +34,8 @@ clew/
 ├── clients/            # External service abstractions
 │   ├── base.py         # EmbeddingProvider ABC (embed, embed_query, dimensions, model_name)
 │   ├── description.py  # DescriptionProvider ABC + AnthropicDescriptionProvider — NL descriptions for code
+│   ├── description_ollama.py # OllamaDescriptionProvider — Ollama /api/chat enrichment (qwen3:8b default)
+│   ├── description_openai.py # OpenAIDescriptionProvider — OpenAI-compatible chat completions (works with any provider)
 │   ├── ollama.py       # OllamaEmbeddingProvider — httpx async client for local Ollama embeddings (qwen3-embedding default)
 │   ├── qdrant.py       # QdrantManager — collection CRUD, hybrid query with RRF fusion, delete by file_path, dimension mismatch detection
 │   └── voyage.py       # VoyageEmbeddingProvider — httpx async client for Voyage AI
@@ -49,7 +53,7 @@ clew/
 │   ├── git_tracker.py  # GitChangeTracker — git diff --name-status change detection (A/M/D/R parsing)
 │   ├── ignore.py       # IgnorePatternLoader — .gitignore + .clewignore + defaults
 │   ├── metadata.py     # detect_app_name, classify_layer, extract_signature, build_chunk_id
-│   ├── pipeline.py     # IndexingPipeline — file -> chunk -> metadata -> embed -> upsert + relationship extraction
+│   ├── pipeline.py     # IndexingPipeline — file -> chunk -> metadata -> enrich (inline) -> embed -> upsert + relationship extraction
 │   └── relationships.py # Relationship dataclass — entity-relationship-entity with confidence
 ├── search/             # Search pipeline: enhance -> classify -> hybrid search -> rerank -> confidence (informational)
 │   ├── engine.py       # SearchEngine — top-level orchestrator, explicit exhaustive mode only (no auto-escalation)
@@ -63,10 +67,10 @@ clew/
 │   ├── rerank_local.py # NoopRerankProvider (zero-dep fallback) + FlashRankRerankProvider (ONNX cross-encoder)
 │   └── tokenize.py     # BM25 tokenization — camelCase/snake_case splitting, raw term count sparse vectors
 ├── cli.py              # Typer app — index, search, status, trace, serve commands (fully wired)
-├── config.py           # Environment class — env var loading with defaults (OLLAMA_URL, conditional VOYAGE_API_KEY validation)
+├── config.py           # Environment class — env var loading with defaults (OLLAMA_URL, ENRICHMENT_API_KEY, conditional VOYAGE_API_KEY validation)
 ├── discovery.py        # discover_files() — centralized file discovery using IgnorePatternLoader + SafetyChecker
 ├── exceptions.py       # Exception hierarchy with user-facing fix suggestions (incl. Ollama*, DimensionMismatchError)
-├── factory.py          # Component factory — centralized wiring, _create_reranker() dispatch, create_components()
+├── factory.py          # Component factory — centralized wiring, _create_reranker()/_create_enrichment_provider() dispatch, create_components()
 ├── mcp_server.py       # FastMCP server — 5 tools: search, get_context, explain, index_status, trace
 ├── models.py           # Pydantic v2 models — ProjectConfig, SearchConfig, CollectionConfig, SafetyConfig, etc.
 └── safety.py           # SafetyChecker — file size, chunk count, collection limits
@@ -95,7 +99,7 @@ mypy clew/              # Type check
 # CLI commands
 clew index [PROJECT_ROOT] --full    # Full reindex
 clew index [PROJECT_ROOT]           # Incremental (change detection)
-clew index [PROJECT_ROOT] --nl-descriptions  # Generate NL descriptions (requires ANTHROPIC_API_KEY)
+clew index [PROJECT_ROOT] --skip-enrichment  # Skip inline LLM enrichment even if configured
 clew search "query" --raw           # Search with JSON output
 clew trace "entity::name"           # Trace code relationships (BFS graph traversal)
 clew trace "entity" --direction outbound --depth 3  # Directed trace with depth limit

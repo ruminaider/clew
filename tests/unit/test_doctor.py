@@ -12,6 +12,7 @@ from clew.doctor import (
     CheckResult,
     DoctorReport,
     check_cache_dir,
+    check_enrichment,
     check_index,
     check_mcp_server,
     check_qdrant,
@@ -159,6 +160,55 @@ class TestCheckIndex:
         assert "cache error" in result.detail
 
 
+class TestCheckEnrichment:
+    def test_none_provider_passes_with_hint(self) -> None:
+        result = check_enrichment("none", "", "", "", "")
+        assert result.passed is True
+        assert "not configured" in result.detail
+        assert result.fix_hint  # has suggestion
+
+    def test_anthropic_with_key_passes(self) -> None:
+        result = check_enrichment("anthropic", "claude-haiku-4-5-20251001", "test-key", "", "")
+        assert result.passed is True
+        assert "anthropic" in result.detail
+
+    def test_anthropic_no_key_fails(self) -> None:
+        result = check_enrichment("anthropic", "", "", "", "")
+        assert result.passed is False
+        assert "ANTHROPIC_API_KEY" in result.fix_hint
+
+    def test_openai_with_key_passes(self) -> None:
+        result = check_enrichment("openai", "gpt-4o-mini", "", "test-key", "")
+        assert result.passed is True
+        assert "openai" in result.detail
+
+    def test_openai_no_key_fails(self) -> None:
+        result = check_enrichment("openai", "", "", "", "")
+        assert result.passed is False
+        assert "ENRICHMENT_API_KEY" in result.fix_hint
+
+    @patch("clew.doctor.check_ollama")
+    def test_ollama_passes_when_reachable(self, mock_check: Mock) -> None:
+        mock_check.return_value = CheckResult(name="Ollama", passed=True, detail="connected")
+        result = check_enrichment("ollama", "qwen3:8b", "", "", "http://localhost:11434")
+        assert result.passed is True
+        assert "ollama" in result.detail
+
+    @patch("clew.doctor.check_ollama")
+    def test_ollama_fails_when_unreachable(self, mock_check: Mock) -> None:
+        mock_check.return_value = CheckResult(
+            name="Ollama", passed=False, detail="unreachable", fix_hint="ollama serve"
+        )
+        result = check_enrichment("ollama", "qwen3:8b", "", "", "http://localhost:11434")
+        assert result.passed is False
+        assert "unreachable" in result.detail
+
+    def test_unknown_provider_fails(self) -> None:
+        result = check_enrichment("unknown", "", "", "", "")
+        assert result.passed is False
+        assert "unknown" in result.detail
+
+
 class TestCheckMcpServer:
     def test_mcp_server_importable(self) -> None:
         result = check_mcp_server()
@@ -208,6 +258,7 @@ class TestDoctorReport:
 
 class TestRunDoctor:
     @patch("clew.doctor.check_mcp_server")
+    @patch("clew.doctor.check_enrichment")
     @patch("clew.doctor.check_index")
     @patch("clew.doctor.check_cache_dir")
     @patch("clew.doctor.check_voyage")
@@ -218,19 +269,22 @@ class TestRunDoctor:
         mock_voyage: Mock,
         mock_cache: Mock,
         mock_index: Mock,
+        mock_enrichment: Mock,
         mock_mcp: Mock,
     ) -> None:
         mock_qdrant.return_value = CheckResult(name="Qdrant", passed=True, detail="ok")
         mock_voyage.return_value = CheckResult(name="Voyage API", passed=True, detail="ok")
         mock_cache.return_value = CheckResult(name="Cache dir", passed=True, detail="ok")
         mock_index.return_value = CheckResult(name="Index", passed=True, detail="ok")
+        mock_enrichment.return_value = CheckResult(name="Enrichment", passed=True, detail="ok")
         mock_mcp.return_value = CheckResult(name="MCP server", passed=True, detail="ok")
 
         report = run_doctor()
         assert report.all_passed is True
-        assert len(report.checks) == 5
+        assert len(report.checks) == 6
 
     @patch("clew.doctor.check_mcp_server")
+    @patch("clew.doctor.check_enrichment")
     @patch("clew.doctor.check_index")
     @patch("clew.doctor.check_cache_dir")
     @patch("clew.doctor.check_voyage")
@@ -241,6 +295,7 @@ class TestRunDoctor:
         mock_voyage: Mock,
         mock_cache: Mock,
         mock_index: Mock,
+        mock_enrichment: Mock,
         mock_mcp: Mock,
     ) -> None:
         mock_qdrant.return_value = CheckResult(
@@ -249,6 +304,7 @@ class TestRunDoctor:
         mock_voyage.return_value = CheckResult(name="Voyage API", passed=True, detail="ok")
         mock_cache.return_value = CheckResult(name="Cache dir", passed=True, detail="ok")
         mock_index.return_value = CheckResult(name="Index", passed=True, detail="ok")
+        mock_enrichment.return_value = CheckResult(name="Enrichment", passed=True, detail="ok")
         mock_mcp.return_value = CheckResult(name="MCP server", passed=True, detail="ok")
 
         report = run_doctor()
