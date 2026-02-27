@@ -81,12 +81,10 @@ if n == 0:
     strategy, worker_count = "done", 0
 elif n < 200:
     strategy, worker_count = "single", 1
-elif n < 1000:
-    strategy, worker_count = "parallel", 3
-elif n < 5000:
-    strategy, worker_count = "parallel", 4
 else:
-    strategy, worker_count = "parallel", 5
+    # Dynamic scaling: 1 worker per ~400 chunks, min 3, max 8
+    strategy = "parallel"
+    worker_count = max(3, min(n // 400, 8))
 
 conn.close()
 print(json.dumps({
@@ -271,7 +269,7 @@ Report completion: total chunks enriched.
 
 ## Parallel Path
 
-For >= 200 unenriched chunks. Spawns a team of parallel workers.
+For >= 200 unenriched chunks. Spawns a dynamically-sized team (3-8 workers, ~1 per 400 chunks).
 
 ### Step 3b: Partition Chunks
 
