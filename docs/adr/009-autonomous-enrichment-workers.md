@@ -1,6 +1,6 @@
 # ADR-009: Autonomous Enrichment Workers — Teams with Bypass Permissions Over Background Subagents
 
-**Status:** Revised (see Addendum)
+**Status:** Accepted (resolved — see Addendum)
 **Date:** 2026-02-26
 **Deciders:** Engineering team
 **Related:** [ADR-006](./006-agent-tool-design-boundary.md) (tool-level intelligence), [ADR-008](./008-remove-autonomous-escalation.md) (autonomous escalation removal)
@@ -113,16 +113,19 @@ No user input flows through the worker prompt. All file paths are hardcoded by t
 
 **Finding:** Tested on the clew codebase (3,921 chunks, 4 workers). Workers spawned with `mode: "bypassPermissions"` still prompted the user for every bash command. The `bypassPermissions` mode does not suppress Claude Code's built-in bash command approval prompts for team workers.
 
-**Evidence:** Workers produced enrichments, but only because the user manually approved each bash command. Output file growth correlated exactly with manual approvals, not autonomous execution.
+**Root cause:** `bypassPermissions` tries to override the permission system, but the effective permission for child agents is computed as `min(mode_param, lead_session_mode)`. When the lead runs in `acceptEdits` mode (the default), `bypassPermissions` on children gets capped to `acceptEdits`, which still prompts for bash commands.
 
-**Impact:** The core premise of this ADR — that `bypassPermissions` enables zero-approval worker execution — is incorrect. The team orchestration model (mailbox buffering, worker isolation) remains sound, but the permission bypass does not work as expected for bash commands.
+## Resolution: `dontAsk` Mode (2026-02-27)
 
-**Revised approach (TODO):** Investigate alternatives:
-1. **Hookify auto-approve rules** — Auto-approve `python3 /tmp/clew-enrich-*` bash patterns. Originally rejected as fragile, but may be the only viable path since `bypassPermissions` doesn't work.
-2. **`dontAsk` mode** — Test whether `mode: "dontAsk"` behaves differently from `bypassPermissions` for bash commands.
-3. **Claude Code bug report** — If `bypassPermissions` is intended to bypass bash prompts, this is a bug worth reporting.
+**Fix:** Replace `mode: "bypassPermissions"` with `mode: "dontAsk"` on worker Task spawns.
 
-The SKILL.md retains `mode: "bypassPermissions"` pending resolution. It provides no harm (team orchestration still works) and will become effective if the underlying behavior is fixed.
+**Why it works:** `dontAsk` has fundamentally different semantics. Instead of trying to override the permission system (which gets capped), it works *within* it — auto-denying tools not in the user's `permissions.allow` list and auto-approving those that are. Since `Bash(python3 *)` is already in `permissions.allow`, worker bash commands are approved without prompting. The bash-validator PreToolUse hook also fires, providing its safety validation layer.
+
+**Tested:** Spawned a team worker with `mode: "dontAsk"` that ran `python3 -c "print(...)"` and `echo "..."`. Both executed without prompting.
+
+**Prerequisite:** The user's `~/.claude/settings.json` must include `Bash(python3 *)` in `permissions.allow`. This is standard for development environments but worth noting as a dependency.
+
+**SKILL.md updated** to use `mode: "dontAsk"` with explanation of why `bypassPermissions` doesn't work.
 
 ---
 

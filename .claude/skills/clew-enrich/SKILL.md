@@ -399,7 +399,7 @@ print(f"Exported relationships for {len(rels)} entities to {output_path}")
    - `subagent_type: "general-purpose"`
    - `team_name: "clew-enrich"`
    - `name: "worker-{i}"`
-   - `mode: "bypassPermissions"`
+   - `mode: "dontAsk"`
    - `prompt:` Fill in the **Worker Instructions** template below, replacing these placeholders:
      - `{WORKER_ID}` → worker index (0, 1, 2, ...)
      - `{PARTITION_FILE}` → `/tmp/clew-enrich-partition-{i}.json`
@@ -407,7 +407,7 @@ print(f"Exported relationships for {len(rels)} entities to {output_path}")
      - `{CACHE_DIR}` → the `cache_dir` value from the inventory output
      - `{TASK_ID}` → the task ID from `TaskCreate` for this worker
 
-**Design Note:** Workers use teams (not background subagents) because teams buffer notifications via a disk-backed mailbox, keeping the lead's context stable. Background subagents inject completion results directly into the orchestrator's context, causing bloat at scale. Workers run with `bypassPermissions` because they only execute deterministic Python scripts against `/tmp` files and `cache.db` — bounded blast radius with no user input flowing through. **Workers write enrichments directly to SQLite after each batch** (`INSERT OR REPLACE` with `timeout=30` for concurrent write safety). No `/tmp` accumulation — enrichments survive OS cleanup and session interruptions. See [ADR-009](../../docs/adr/009-autonomous-enrichment-workers.md).
+**Design Note:** Workers use teams (not background subagents) because teams buffer notifications via a disk-backed mailbox, keeping the lead's context stable. Background subagents inject completion results directly into the orchestrator's context, causing bloat at scale. Workers run with `dontAsk` mode, which auto-approves bash commands matching the user's `permissions.allow` rules (e.g., `Bash(python3 *)`) without prompting. `bypassPermissions` does NOT work — it gets capped by the lead session's mode ceiling. **Workers write enrichments directly to SQLite after each batch** (`INSERT OR REPLACE` with `timeout=30` for concurrent write safety). No `/tmp` accumulation — enrichments survive OS cleanup and session interruptions. See [ADR-009](../../docs/adr/009-autonomous-enrichment-workers.md).
 
 ### Step 6b: Monitor Workers
 
