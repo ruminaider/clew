@@ -1,6 +1,6 @@
 [project]
 name = "clewdex"
-version = "0.1.0"
+version = "0.1.1b1"
 description = "Semantic code search with hybrid retrieval and MCP integration"
 readme = "README.md"
 license = {text = "MIT"}
