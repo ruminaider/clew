@@ -405,55 +405,23 @@ print(f"Exported relationships for {len(rels)} entities to {output_path}")
    - `prompt:` Fill in the **Worker Instructions** template below, replacing these placeholders:
      - `{WORKER_ID}` → worker index (0, 1, 2, ...)
      - `{PARTITION_FILE}` → `/tmp/clew-enrich-partition-{i}.json`
-     - `{OUTPUT_FILE}` → `/tmp/clew-enrich-output-{i}.json`
      - `{CHUNK_COUNT}` → number of chunks from the partition script's `sizes` array
      - `{CACHE_DIR}` → the `cache_dir` value from the inventory output
      - `{TASK_ID}` → the task ID from `TaskCreate` for this worker
 
-**Design Note:** Workers use teams (not background subagents) because teams buffer notifications via a disk-backed mailbox, keeping the lead's context stable. Background subagents inject completion results directly into the orchestrator's context, causing bloat at scale. Workers run with `bypassPermissions` because they only execute deterministic Python scripts against `/tmp` files and `cache.db` — bounded blast radius with no user input flowing through. See [ADR-009](../../docs/adr/009-autonomous-enrichment-workers.md).
+**Design Note:** Workers use teams (not background subagents) because teams buffer notifications via a disk-backed mailbox, keeping the lead's context stable. Background subagents inject completion results directly into the orchestrator's context, causing bloat at scale. Workers run with `bypassPermissions` because they only execute deterministic Python scripts against `/tmp` files and `cache.db` — bounded blast radius with no user input flowing through. **Workers write enrichments directly to SQLite after each batch** (`INSERT OR REPLACE` with `timeout=30` for concurrent write safety). No `/tmp` accumulation — enrichments survive OS cleanup and session interruptions. See [ADR-009](../../docs/adr/009-autonomous-enrichment-workers.md).
 
 ### Step 6b: Monitor Workers
 
-Workers mark their tasks complete via `TaskUpdate` when finished. The system automatically sends idle notifications.
+Workers mark their tasks complete via `TaskUpdate` when finished. The system automatically sends idle notifications. Workers write enrichments directly to SQLite after each batch, so progress is durable — no data loss if a worker crashes or `/tmp` is cleaned.
 
-Check `TaskList` to track progress. When all worker tasks show `completed`, proceed to merge.
+Check `TaskList` to track progress. When all worker tasks show `completed`, proceed to re-embed.
 
-If a worker encounters an error, note it and continue. Partial enrichment is fine — the skill is idempotent.
+If a worker encounters an error, note it and continue. Partial enrichment is fine — the skill is idempotent and already-saved enrichments persist in SQLite.
 
-### Step 7b: Merge Worker Results
+### Step 7b: Re-embed + Cleanup
 
-After all workers complete, run: `python3 /tmp/clew-enrich-merge.py <cache_dir> <worker_count>`
-
-```python
-import sqlite3, json, os, sys, time
-
-cache_dir = sys.argv[1]
-worker_count = int(sys.argv[2])
-
-conn = sqlite3.connect(os.path.join(cache_dir, "cache.db"))
-now = time.time()
-total = 0
-for i in range(worker_count):
-    path = f"/tmp/clew-enrich-output-{i}.json"
-    if not os.path.exists(path):
-        print(f"Worker {i}: no output file (skipped or failed)")
-        continue
-    with open(path) as f:
-        enrichments = json.load(f)
-    for e in enrichments:
-        conn.execute(
-            "INSERT OR REPLACE INTO enrichment_cache "
-            "(chunk_id, description, keywords, enriched_at) VALUES (?, ?, ?, ?)",
-            (e["chunk_id"], e["description"], e["keywords"], now),
-        )
-    conn.commit()
-    total += len(enrichments)
-    print(f"Worker {i}: merged {len(enrichments)} enrichments")
-conn.close()
-print(f"Total merged: {total} enrichments")
-```
-
-### Step 8b: Re-embed + Cleanup
+After all workers complete (no merge step needed — enrichments are already in SQLite):
 
 ```bash
 clew reembed .
@@ -461,12 +429,12 @@ clew reembed .
 
 Clean up temporary files:
 ```bash
-rm -f /tmp/clew-enrich-partition-*.json /tmp/clew-enrich-output-*.json /tmp/clew-enrich-relationships.json /tmp/clew-enrich-inventory.py /tmp/clew-enrich-load.py /tmp/clew-enrich-partition.py /tmp/clew-enrich-export-rels.py /tmp/clew-enrich-merge.py
+rm -f /tmp/clew-enrich-partition-*.json /tmp/clew-enrich-relationships.json /tmp/clew-enrich-inventory.py /tmp/clew-enrich-load.py /tmp/clew-enrich-partition.py /tmp/clew-enrich-export-rels.py /tmp/clew-enrich-worker-load-*.py
 ```
 
 Shut down workers: Use `SendMessage` with `type: "shutdown_request"` for each worker. After all confirm shutdown, use `TeamDelete` to clean up.
 
-Report completion: total enrichments merged, per-worker counts.
+Report completion: total enrichments in cache (query `SELECT COUNT(*) FROM enrichment_cache`).
 
 ---
 
@@ -483,7 +451,6 @@ You are a clew enrichment worker. Generate descriptions and keywords for code ch
 - Partition: {PARTITION_FILE} ({CHUNK_COUNT} chunks)
 - Relationships: /tmp/clew-enrich-relationships.json
 - Cache DB: {CACHE_DIR}/cache.db
-- Output file: {OUTPUT_FILE}
 - Task ID: {TASK_ID}
 
 ## Process
@@ -492,8 +459,8 @@ Repeat this loop until all chunks are processed:
 
 ### 1. Load sub-batch of 30 chunks
 
-Write this script to /tmp/clew-enrich-worker-load.py and run:
-python3 /tmp/clew-enrich-worker-load.py {PARTITION_FILE} OFFSET {CACHE_DIR}
+Write this script to /tmp/clew-enrich-worker-load-{WORKER_ID}.py and run:
+python3 /tmp/clew-enrich-worker-load-{WORKER_ID}.py {PARTITION_FILE} OFFSET {CACHE_DIR}
 
 (Replace OFFSET with current position — start at 0, increment by 30 each iteration)
 
@@ -578,6 +545,8 @@ Description: <2-3 sentences: what the code does, why it exists, what domain conc
 Keywords: <8-15 space-separated terms a developer might search for>
 ```
 
+**IMPORTANT:** Keywords MUST be a single space-separated string (e.g., `"auth login JWT token"`), NOT a list/array.
+
 Use the chunk's metadata (entity_type, file_path, layer, app_name, callers, callees, imports) and its code content to produce high-quality enrichments.
 
 Quality guidelines:
@@ -587,28 +556,35 @@ Quality guidelines:
 - For tests, mention what is being tested and testing patterns
 - For API endpoints, mention HTTP methods, URL patterns, purpose
 
-### 3. Save enrichments to output file
+### 3. Save enrichments directly to SQLite
 
-Construct a Python script with the generated enrichments embedded as data and run it. The script reads the existing output file (if any), appends the new enrichments, and writes back:
+**CRITICAL:** Write enrichments directly to SQLite after EVERY batch. Do NOT accumulate in `/tmp` files — they can be cleaned by the OS, losing all work.
+
+Construct a Python script with the generated enrichments embedded as data and run it:
 
 ```python
-import json
+import sqlite3, time
 
+cache_dir = "{CACHE_DIR}"
 enrichments = [
     # Fill with your generated enrichments:
-    # {"chunk_id": "...", "description": "...", "keywords": "..."},
+    # ("chunk_id", "description text", "keyword1 keyword2 ..."),
 ]
-output_file = "{OUTPUT_FILE}"
-try:
-    with open(output_file) as f:
-        existing = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    existing = []
-existing.extend(enrichments)
-with open(output_file, "w") as f:
-    json.dump(existing, f)
-print(f"Saved {len(enrichments)} enrichments (total: {len(existing)})")
+
+conn = sqlite3.connect(f"{cache_dir}/cache.db", timeout=30)
+now = time.time()
+for chunk_id, description, keywords in enrichments:
+    conn.execute(
+        "INSERT OR REPLACE INTO enrichment_cache "
+        "(chunk_id, description, keywords, enriched_at) VALUES (?, ?, ?, ?)",
+        (chunk_id, description, keywords, now),
+    )
+conn.commit()
+conn.close()
+print(f"Saved {len(enrichments)} enrichments to SQLite")
 ```
+
+The `timeout=30` handles concurrent writes from other workers — SQLite will retry for up to 30 seconds if the database is locked.
 
 ### 4. Repeat
 
@@ -652,7 +628,7 @@ Keywords: shopify order processing webhook fulfillment ecommerce cart purchase p
 ## Notes
 
 - **Idempotent:** Running `/clew-enrich` again skips already-enriched chunks. Safe to re-run after interruption.
-- **Resume-friendly:** Partial enrichment is preserved. Re-running picks up where the previous run left off.
+- **Resume-friendly:** Partial enrichment is preserved in SQLite. Re-running picks up where the previous run left off. Workers write directly to `enrichment_cache` after each batch — no `/tmp` accumulation that could be lost to OS cleanup.
 - **Shared cache:** The `enrichment_cache` is shared between all enrichment paths. Chunks enriched via this skill are reused by `clew index` (no redundant LLM calls).
 - **Re-embed required:** After enrichment, `clew reembed .` updates the search index. The skill runs this automatically.
 - **To re-enrich:** Clear the cache first: `sqlite3 {cache_dir}/cache.db "DELETE FROM enrichment_cache"`, then run `/clew-enrich`.
