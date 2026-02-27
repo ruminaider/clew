@@ -401,6 +401,7 @@ print(f"Exported relationships for {len(rels)} entities to {output_path}")
    - `subagent_type: "general-purpose"`
    - `team_name: "clew-enrich"`
    - `name: "worker-{i}"`
+   - `mode: "bypassPermissions"`
    - `prompt:` Fill in the **Worker Instructions** template below, replacing these placeholders:
      - `{WORKER_ID}` → worker index (0, 1, 2, ...)
      - `{PARTITION_FILE}` → `/tmp/clew-enrich-partition-{i}.json`
@@ -408,6 +409,8 @@ print(f"Exported relationships for {len(rels)} entities to {output_path}")
      - `{CHUNK_COUNT}` → number of chunks from the partition script's `sizes` array
      - `{CACHE_DIR}` → the `cache_dir` value from the inventory output
      - `{TASK_ID}` → the task ID from `TaskCreate` for this worker
+
+**Design Note:** Workers use teams (not background subagents) because teams buffer notifications via a disk-backed mailbox, keeping the lead's context stable. Background subagents inject completion results directly into the orchestrator's context, causing bloat at scale. Workers run with `bypassPermissions` because they only execute deterministic Python scripts against `/tmp` files and `cache.db` — bounded blast radius with no user input flowing through. See [ADR-009](../../docs/adr/009-autonomous-enrichment-workers.md).
 
 ### Step 6b: Monitor Workers
 
